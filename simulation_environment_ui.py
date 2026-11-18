@@ -26,7 +26,7 @@ MESH_PROFILES = {'coarse': '粗网格', 'standard': '标准网格', 'fine': '细
 class EnvironmentPanel(ttk.Frame):
     """Reusable settings panel; all Tcl calls remain in the Tk thread."""
 
-    def __init__(self, parent, config, initial=None):
+    def __init__(self, parent, config, initial=None, *, field_enabled=True):
         super().__init__(parent)
         import simulation_environment as environment
         self._config = copy.deepcopy(config)
@@ -40,38 +40,47 @@ class EnvironmentPanel(ttk.Frame):
         self._values = {}
         self._vectors = {}
         self._source = {}
+        self.field_enabled = field_enabled
         self.columnconfigure(0, weight=1)
-        title = ttk.Label(self, text='提取内核已随设计软件携带，无需另外安装变压器提取程序。',
+        title = ttk.Label(self, text='本机求解软件与磁芯来源' if field_enabled else '本机求解软件',
                           font='TkHeadingFont', wraplength=800, justify='left')
         title.grid(row=0, column=0, sticky='ew', padx=10, pady=(10, 3))
         self._labels.append(title)
-        note = ttk.Label(self, text='首次在本机指定 Elmer 和 LTspice；磁芯模型可保存或导出为配置包。'
-                         '匝数、线径、层序、材料和接线从当前设计生成，“提取设置 JSON”由程序自动建立。',
+        note = ttk.Label(self, text=('已检测到的 Elmer 和 LTspice 自动带入。电磁仿真先用当前工程与磁芯库，'
+                         '需要指定实物 CAD 时再登记磁芯模型。' if field_enabled
+                         else '单元电路仿真和系统启停沿用这里的 LTspice 路径。'),
                          wraplength=800, justify='left')
         note.grid(row=1, column=0, sticky='ew', padx=10, pady=(0, 10))
         self._labels.append(note)
 
-        machine = self._section(2, '01  本机求解软件')
-        self._path_row(machine, 0, 'Elmer 安装目录', 'elmer_home', self.pick_elmer)
+        machine = self._section(2, '本机求解软件')
+        if field_enabled:
+            self._path_row(machine, 0, 'Elmer 安装目录', 'elmer_home', self.pick_elmer)
         self._path_row(machine, 1, 'LTspice 可执行程序', 'ltspice', self.pick_spice)
         self.executable = self._values['ltspice']
-        self._hint(machine, 2, 'Elmer 目录应含 bin/ElmerSolver.exe 和 bin/ElmerGrid.exe。'
-                   '更换电脑后重新定位这两个软件；CAD 与模型配置可直接携带。')
+        self._hint(machine, 2, ('检测不到时选择安装目录。Elmer 使用完整安装包，包含 Solver、Grid 与运行库。'
+                                if field_enabled else '浏览选择本机 LTspice.exe 或 XVIIx64.exe。'))
 
-        model = self._section(3, '02  当前磁芯模型')
+        model = self._section(3, '磁芯模型来源')
         self.model_label = ttk.Label(model, font='TkHeadingFont', wraplength=700)
         self.model_label.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 5))
         self._labels.append(self.model_label)
-        self._path_row(model, 1, '磁芯实体 STEP / BREP', 'core_path', self.pick_core)
-        self._choice_row(model, 2, '磁芯装配方式', 'core_mode', CORE_MODES.values())
-        self._choice_row(model, 3, 'BREP 文件单位', 'brep_unit', ('mm', 'm'))
-        self._number_row(model, 4, '中柱半径 / mm', 'center_leg_radius_m')
-        self._number_row(model, 5, '气隙中心 Z / mm', 'gap_center_z_m')
-        self._text_row(model, 6, 'CAD / 装配依据', 'core_source')
-        self._hint(model, 7, 'STEP 使用文件内单位；BREP 使用所选单位。单半芯必须按 Z 方向及镜像面建模；'
-                   '中柱磨隙模式需填写中柱半径。不能把任意姿态的 STEP 当作已校准模型。')
+        self.advanced = tk.BooleanVar(self)
+        ttk.Checkbutton(model, text='自定义磁芯 CAD、定位和求解参数', variable=self.advanced,
+                        command=self._show_advanced).grid(row=1, column=0, columnspan=3, sticky='w')
+        custom = ttk.Frame(model)
+        custom.columnconfigure(1, weight=1)
+        custom.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+        self._path_row(custom, 1, '磁芯实体 STEP / BREP', 'core_path', self.pick_core)
+        self._choice_row(custom, 2, '磁芯装配方式', 'core_mode', CORE_MODES.values())
+        self._choice_row(custom, 3, 'BREP 文件单位', 'brep_unit', ('mm', 'm'))
+        self._number_row(custom, 4, '中柱半径 / mm', 'center_leg_radius_m')
+        self._number_row(custom, 5, '气隙中心 Z / mm', 'gap_center_z_m')
+        self._text_row(custom, 6, 'CAD / 装配依据', 'core_source')
+        self._hint(custom, 7, 'STEP 使用文件内单位。半芯按 Z 轴和镜像面登记，中柱磨隙填写中柱半径。')
 
-        geometry = self._section(4, '03  坐标与求解设置')
+        geometry = self._section(4, '坐标与求解设置')
+        self.advanced_frames = (custom, geometry)
         self._number_row(geometry, 0, '绕组内侧基准 r0 / mm', 'r0_m')
         self._number_row(geometry, 1, '绕组轴向起点 z0 / mm', 'z0_m')
         self._vector_row(geometry, 2, 'CAD 平移 X / Y / Z · mm', 'translation_mm')
@@ -85,17 +94,22 @@ class EnvironmentPanel(ttk.Frame):
         actions = ttk.Frame(self)
         actions.grid(row=5, column=0, sticky='ew', padx=10, pady=(5, 7))
         self._action_widgets = []
-        self.check_button = self._button(actions, '检查运行环境', self.check)
-        self._button(actions, '保存本机与模型配置', self.save)
-        self._button(actions, '导入模型配置包…', self.import_model)
-        self._button(actions, '导出模型配置包…', self.export_model)
-        self._button(actions, '导入旧提取设置…', self.import_legacy)
-        self.status = tk.StringVar(self, '配置未检查。检查通过后可在上一页开始仿真。')
+        self.check_button = self._button(actions, '检查运行环境', lambda: self.check(require_spice=not field_enabled))
+        self._button(actions, '保存配置', self.save)
+        if field_enabled:
+            self._button(actions, '导入模型配置包…', self.import_model)
+            self._button(actions, '导出模型配置包…', self.export_model)
+            self._button(actions, '导入旧提取设置…', self.import_legacy)
+        else:
+            model.grid_remove()
+        self.status = tk.StringVar(self, '可直接使用已检测到的程序路径。')
         self.status_label = ttk.Label(self, textvariable=self.status, wraplength=800, justify='left')
         self.status_label.grid(row=6, column=0, sticky='ew', padx=10, pady=(0, 8))
         self._labels.append(self.status_label)
         self._actions = actions
-        self._set_values(initial if initial is not None else environment.load_environment(config))
+        default = environment.load_environment(config) if field_enabled else {'ltspice': environment.load_spice_path()}
+        self._set_values(initial if initial is not None else default)
+        self._show_advanced()
         self.bind('<Configure>', self._schedule_layout, add='+')
         self.bind('<Destroy>', self._destroyed, add='+')
         self._schedule_layout()
@@ -105,6 +119,13 @@ class EnvironmentPanel(ttk.Frame):
         box.grid(row=row, column=0, sticky='ew', padx=10, pady=(0, 10))
         box.columnconfigure(1, weight=1)
         return box
+
+    def _show_advanced(self):
+        for frame in self.advanced_frames:
+            if self.field_enabled and self.advanced.get():
+                frame.grid()
+            else:
+                frame.grid_remove()
 
     def _label(self, frame, row, text):
         label = ttk.Label(frame, text=text, wraplength=220, justify='left')
@@ -203,15 +224,36 @@ class EnvironmentPanel(ttk.Frame):
             for i, variable in enumerate(variables):
                 variable.set(str(vector[i]) if i < len(vector) else '')
         import simulation_environment as environment
-        self.model_label.configure(text='当前磁芯：' + environment.core_name(self._config))
+        name = environment.core_name(self._config)
+        source = ('已登记 CAD，可按当前绕组自动准备' if values.get('core_path')
+                  else '自动检查磁芯库、绕组路径和工程几何')
+        self.model_label.configure(text=f'{name or "当前设计"} · {source}')
 
     def set_config(self, config):
         import simulation_environment as environment
         old = environment.core_name(self._config)
+        prior_frame = ((self._config.get('winding_config') or {}).get('model_3d') or {}).get('frame') or {}
+        frame = ((config.get('winding_config') or {}).get('model_3d') or {}).get('frame') or {}
         self._config = copy.deepcopy(config)
         if environment.core_name(config) != old:
+            machine = {key: variable.get() for key, variable in self._values.items() if key in ('elmer_home', 'ltspice')}
             self._set_values(environment.load_environment(config))
+            for key, value in machine.items():
+                self._values[key].set(value)
             self.status.set('当前磁芯已切换，请检查对应 CAD 模型和装配设置。')
+        elif self.field_enabled:
+            for target, origin in (('r0_m','r0_m_if_circular'), ('z0_m','z0_m')):
+                if prior_frame.get(origin) != frame.get(origin):
+                    current = self._values[target].get().strip()
+                    old_value = self._source.get(target)
+                    from_source = '' if old_value is None else f'{float(old_value) * 1000:.10g}'
+                    if current != from_source:
+                        continue
+                    next_value = frame.get(origin)
+                    if next_value is None:
+                        next_value = environment.load_environment(config).get(target)
+                    self._source[target] = next_value
+                    self._values[target].set('' if next_value is None else f'{float(next_value) * 1000:.10g}')
 
     @staticmethod
     def _number(text, label, *, optional=False):
@@ -231,6 +273,8 @@ class EnvironmentPanel(ttk.Frame):
         result = copy.deepcopy(self._source)
         for key, variable in self._values.items():
             result[key] = variable.get().strip()
+        if not self.field_enabled:
+            return dict(ltspice=self.spice_path() if require_spice else result['ltspice'])
         if result['core_path'] != self._source.get('core_path'):
             result.pop('core_sha256', None)
             result.pop('cad_verified', None)
@@ -256,6 +300,12 @@ class EnvironmentPanel(ttk.Frame):
         if require_spice and not result['ltspice']:
             raise ValueError('请选择本机 LTspice 可执行程序。')
         return result
+
+    def spice_path(self):
+        path = self.executable.get().strip()
+        if not path or not Path(path).is_file():
+            raise ValueError('请在「设备与模型」选择本机 LTspice 可执行程序。')
+        return path
 
     def pick_elmer(self):
         path = filedialog.askdirectory(parent=self.winfo_toplevel(), title='选择含 bin 的 Elmer 安装目录')
@@ -283,10 +333,17 @@ class EnvironmentPanel(ttk.Frame):
         import simulation_environment as environment
         try:
             values = self.snapshot(require_spice=False)
-            saved = environment.save_environment(self._config, values)
+            if not self.field_enabled:
+                from spice_runtime import set_ltspice
+                set_ltspice(self.spice_path())
+                saved = values
+            elif values.get('core_path') and self.advanced.get():
+                saved = environment.save_environment(self._config, values)
+            else:
+                saved = environment.save_machine_settings(values)
             if isinstance(saved, dict):
                 self._set_values(saved)
-            self.status.set('已保存本机路径和当前磁芯模型配置。换电脑时导出模型配置包，并重新定位求解软件。')
+            self.status.set('本机仿真配置已保存。')
             return saved
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.status.set('配置未保存：' + str(exc))
@@ -294,6 +351,12 @@ class EnvironmentPanel(ttk.Frame):
 
     def check(self, require_spice=True):
         if self._checking or self._closed:
+            return
+        if not self.field_enabled:
+            try:
+                self.status.set('已找到 LTspice · ' + self.spice_path())
+            except ValueError as exc:
+                self.status.set(str(exc))
             return
         try:
             values = self.snapshot(require_spice=require_spice)
@@ -304,10 +367,17 @@ class EnvironmentPanel(ttk.Frame):
         self.check_button.state(['disabled'])
         self.status.set('正在检查本机求解软件与内置运行库…')
         mailbox = self._mailbox
+        config = copy.deepcopy(self._config)
         def work():
             try:
                 import simulation_environment as environment
-                result = environment.check_environment(values, require_spice=require_spice, probe=True)
+                from portable_transformer_project import automatic_field_inputs
+                result = environment.check_environment(values, require_spice=require_spice,
+                                                       probe=True, validate_cad=False)
+                readiness = automatic_field_inputs(config, values)
+                result['checks'].append(dict(name='场仿真输入', ok=readiness['ready'],
+                    message='；'.join(readiness['missing']) or readiness['summary']))
+                result['ok'] = bool(result['ok'] and readiness['ready'])
                 mailbox.put(('result', result))
             except Exception as exc:
                 mailbox.put(('error', str(exc) or type(exc).__name__))
@@ -346,6 +416,8 @@ class EnvironmentPanel(ttk.Frame):
             # A model pack does not overwrite this computer's executable paths.
             values = dict(self.snapshot(require_spice=False), **values)
             self._set_values(values)
+            self.advanced.set(True)
+            self._show_advanced()
             self.status.set('模型配置包已导入；请核对当前磁芯和坐标，然后保存配置。')
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.status.set('模型配置包未导入：' + str(exc))
@@ -381,6 +453,8 @@ class EnvironmentPanel(ttk.Frame):
             if values.get('core_model') and values['core_model'] != expected:
                 raise ValueError('旧设置磁芯型号与当前设计不一致。')
             self._set_values(values)
+            self.advanced.set(True)
+            self._show_advanced()
             self.status.set('旧设置已迁移；仅保留磁芯与求解配置。绕组、磁材及接线仍以当前设计为准。')
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.status.set('旧设置未导入：' + str(exc))

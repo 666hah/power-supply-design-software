@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-from docx_layout import paragraph, table, _font
+from docx_layout import paragraph, set_a4_page, table, table_gap, _font
 
 CASE_COLORS = {'Vinmin': '2068A0', 'Vinmax': 'A46118'}
 MODULES = OrderedDict([
@@ -42,6 +42,74 @@ CHAPTERS = (
 _CAPTURE_WIDTH = ContextVar('report_comparison_chart_width', default=None)
 
 
+def report_cases(bundle):
+    """Return only the distinct design cases needed for the printed report."""
+    endpoints = bundle.get('cases', [])
+    by_id = {case['id']: case for case in endpoints}
+    if len(endpoints) != 2 or set(by_id) != {'Vinmin', 'Vinmax'}:
+        raise ValueError('输入范围报告必须包含 Vinmin 与 Vinmax 两个具名工况')
+    left, right = by_id['Vinmin'], by_id['Vinmax']
+    a, b = left.get('result'), right.get('result')
+    if (left['voltage'] == right['voltage'] and a and b and
+            not (left.get('error') or right.get('error')) and
+            left.get('loop_error') == right.get('loop_error')):
+        from mos_manual import distinct_endpoints
+        # The solver reuses the same result or relabels just the manual MOS
+        # event. Keep separate snapshots if a caller supplied different data.
+        shared = a is b or (a.get('op') is not None and a['op'] is b.get('op') and
+                             a.get('wf') is not None and a['wf'] is b.get('wf'))
+        if shared and not distinct_endpoints(bundle.get('base_spec') or {}):
+            return [left]
+    return [left, right]
+
+
+def case_heading(case, count):
+    label = '固定输入' if count == 1 else case['id']
+    return f"{label}  {case['voltage']:.8g} V"
+
+
+def review_findings(cases):
+    """Lead with limit violations and group the same item across endpoints."""
+    from report_docx import value
+    exceeded, pending = OrderedDict(), set()
+    for case in cases:
+        result = case.get('result') or {}
+        if case.get('error') or not result:
+            continue
+        for item in case.get('checks') or result.get('checks') or []:
+            key = item['id']
+            if item['state'] == 'undefined':
+                pending.add(key)
+            if item['state'] != 'review':
+                continue
+            actual, limit = item.get('value'), item.get('limit')
+            if limit is None and not key.startswith('magnetics') and key != 'loop':
+                continue
+            name, observations = exceeded.setdefault(key, (item['name'], []))
+            if limit is None:
+                detail = item.get('note') or '请核对计算条件'
+            else:
+                unit = item.get('unit', '')
+                detail = (f"{value(actual, unit)}，要求 {item['comparison']} "
+                          f"{value(limit, unit)}")
+            if len(cases) > 1:
+                detail = case['id']+' '+detail
+            observations.append(detail)
+    return [(name, '\n'.join(details)) for name, details in exceeded.values()], len(pending)
+
+
+def conclusion_line(doc, text, state):
+    lead = paragraph(doc, text)
+    color = {'review': 'A12D24', 'undefined': '8C5D16', 'pass': '29633B'}.get(state, '000000')
+    for run in lead.runs:
+        _font(run, 12, True, color)
+    return lead
+
+
+def shared_report_images(left, right):
+    return bool(left and right and left['images'] == right['images'])
+
+
 def module_key(title):
     """Stable mapping of the complete legacy author's section headings."""
     if title.startswith('1.4'): return 'bom'
@@ -63,10 +131,10 @@ def available_width(doc):
     return (sec.page_width-sec.left_margin-sec.right_margin)/914400
 
 
-def module_section(doc, title, *, level=1, new_page=True):
+def module_section(doc, title, *, level=1, size=None, new_page=True):
     p = doc.add_heading(title, level)
     p.paragraph_format.page_break_before = bool(new_page)
-    for run in p.runs: _font(run, 17 if level == 1 else 13, True)
+    for run in p.runs: _font(run, size or {1:17,2:13}.get(level,11), True, heading=True)
     return p
 
 
@@ -168,20 +236,15 @@ def comparison_rows(headers, left_rows, right_rows):
             for key in dict.fromkeys([*left, *right])]
 
 
-def add_comparison_table(doc, headers, left_rows, right_rows, *, title=None,
-                         left_label='Vinmin', right_label='Vinmax'):
-    if title: module_section(doc, title, level=2, new_page=False)
+def paired_table_data(headers, left_rows, right_rows, left_label='Vinmin', right_label='Vinmax'):
     if headers[0]=='角点 / Vin' and len(headers)>=4:
         # IDs are global across Vin; the physical comparison key is the same
         # declared load vector. Retain each original ID/Vin as endpoint data.
         headers=[headers[1],headers[0],*headers[2:]]
         left_rows=[(row[1],row[0],*row[2:]) for row in left_rows]
         right_rows=[(row[1],row[0],*row[2:]) for row in right_rows]
-    width = available_width(doc)
     rows = comparison_rows(headers, left_rows, right_rows)
     output_headers=[headers[0],left_label,right_label]
-    widths=[width*.24,width*.38,width*.38]
-    endpoint_columns=(1,2)
     # Long thresholds/ratings are common hardware or model conditions. Give
     # them one readable column instead of repeating them in both endpoint cells.
     if headers[0] in ('核查项','位号 / 检查项') and len(headers) in (4,6):
@@ -203,14 +266,36 @@ def add_comparison_table(doc, headers, left_rows, right_rows, *, title=None,
                     for k in (0,1):cells[k].append(str(headers[j])+' '+values[k])
             rows.append((key[0],'\n'.join(shared) or '两端条件分别列示',*['\n'.join(c) for c in cells]))
         output_headers=[headers[0],'共同阈值与额定条件',left_label,right_label]
-        widths=[width*.22,width*.32,width*.23,width*.23];endpoint_columns=(2,3)
+    return output_headers, rows
+
+
+def add_comparison_table(doc, headers, left_rows, right_rows, *, title=None,
+                         left_label='Vinmin', right_label='Vinmax'):
+    if title:
+        module_section(doc, title, level=2, new_page=False)
+    output_headers, rows = paired_table_data(headers, left_rows, right_rows, left_label, right_label)
+    width = available_width(doc)
+    widths = [width*f for f in ((.22,.32,.23,.23) if len(output_headers)==4 else (.24,.38,.38))]
+    endpoint_columns = (len(output_headers)-2, len(output_headers)-1)
     result = table(doc, output_headers, rows, widths)
     # Endpoint colours belong to the comparison header, not document headings.
     for index,label in zip(endpoint_columns,('Vinmin','Vinmax')):
         for run in result.rows[0].cells[index].paragraphs[0].runs:
-            _font(run, 10, True, 'FFFFFF')
+            _font(run, 10, True, 'FFFFFF', heading=True)
         shade=result.rows[0].cells[index]._tc.get_or_add_tcPr().find(qn('w:shd'))
         if shade is not None: shade.set(qn('w:fill'), CASE_COLORS[label])
+    if headers[-1] == '结论':
+        for row in result.rows[1:]:
+            for index in endpoint_columns:
+                cell = row.cells[index]
+                for line in cell.text.splitlines():
+                    if line.startswith('结论 '):
+                        from docx_layout import status_color
+                        color = status_color(line.removeprefix('结论 '))
+                        if color:
+                            for run in cell.paragraphs[0].runs:
+                                _font(run, 10, True, color)
+                        break
     return result
 
 
@@ -219,13 +304,12 @@ def add_paired_figure(doc, left_blob, right_blob, caption, *,
     """Compare figures at readable physical scale and show missing evidence.
 
     Uses the current section width. On request, temporarily uses landscape
-    Letter. Both supplied images are retained; no endpoint borrows the other.
+    A4. Both supplied images are retained; no endpoint borrows the other.
     """
-    from docx.enum.section import WD_SECTION_START, WD_ORIENT
+    from docx.enum.section import WD_SECTION_START
     if landscape:
         sec=doc.add_section(WD_SECTION_START.NEW_PAGE)
-        sec.orientation=WD_ORIENT.LANDSCAPE
-        sec.page_width,sec.page_height=Inches(11),Inches(8.5)
+        set_a4_page(sec, landscape=True)
     width=available_width(doc); each=width/2-.16
     grid=table(doc,[left_label,right_label],[['','']],[width/2,width/2])
     # docx_layout.table inserts a five-point spacer. The image row must stay
@@ -234,7 +318,10 @@ def add_paired_figure(doc, left_blob, right_blob, caption, *,
     if spacer is not None and spacer.tag==qn('w:p'):
         spacer.get_or_add_pPr().append(OxmlElement('w:keepNext'))
     for index,label in enumerate(('Vinmin','Vinmax')):
-        shade=grid.rows[0].cells[index]._tc.get_or_add_tcPr().find(qn('w:shd'))
+        cell=grid.rows[0].cells[index]
+        for run in cell.paragraphs[0].runs:
+            _font(run, 10, True, 'FFFFFF', heading=True)
+        shade=cell._tc.get_or_add_tcPr().find(qn('w:shd'))
         if shade is not None:shade.set(qn('w:fill'),CASE_COLORS[label])
     for i,(blob,label) in enumerate(((left_blob,left_label),(right_blob,right_label))):
         p=grid.rows[1].cells[i].paragraphs[0]
@@ -250,8 +337,7 @@ def add_paired_figure(doc, left_blob, right_blob, caption, *,
     p=doc.add_paragraph(caption,'Caption');p.alignment=WD_ALIGN_PARAGRAPH.CENTER
     if landscape:
         sec=doc.add_section(WD_SECTION_START.NEW_PAGE)
-        sec.orientation=WD_ORIENT.PORTRAIT
-        sec.page_width,sec.page_height=Inches(8.5),Inches(11)
+        set_a4_page(sec)
     return p
 
 
@@ -264,7 +350,6 @@ def acceptance_snapshot(p, bundle=None, *, joint_record=None, spice_evidence=Non
 
 
 def acceptance_rows(snapshot):
-    from engineering_acceptance import STATE_LABELS
     rows=[]
     compact={'pass':'满足','review':'需整改','undefined':'待补目标或证据','stale':'证据已失效','na':'不适用'}
     from report_docx import value as engineering_value
@@ -296,58 +381,105 @@ def acceptance_rows(snapshot):
                 elif source=='measurement' and cell.get('delta_measurement') is not None:
                     detail+='  偏差 '+_cell_text(cell['delta_measurement'])+'%'
                 parts.append(detail)
-            if cell.get('simulation') is None and cell.get('measurement') is None:parts.append('仿真 —   实测 —')
-            elif cell.get('simulation') is None:parts.append('仿真 —')
-            elif cell.get('measurement') is None:parts.append('实测 —')
             parts.append('结论 '+compact.get(cell.get('status'),'未评估'))
             if cell.get('margin') is not None:parts.append('最小裕量 '+number(cell['margin']))
-            if cell.get('reason'):parts.append(str(cell['reason']))
+            reasons = str(cell.get('reason') or '').split('；')
+            parts.extend(reason for reason in reasons if reason and not reason.startswith((
+                '同电压且MOS事件相同，复用 ', '同电压、同 MOS 事件，沿用 ')) and reason != '未重新仿真')
             values.append('\n'.join(parts))
         rows.append((str(item.get('name') or item.get('metric') or item.get('id')),criterion,*values))
     return rows
 
 
+def missing_evidence_note(snapshot):
+    evidence = [cell for row in snapshot.get('rows', []) for cell in (row.get('cases') or {}).values()]
+    return '，'.join(label+'待补' for source,label in (('simulation','仿真'),('measurement','实测'))
+                     if evidence and all(cell.get(source) is None for cell in evidence))
+
+
+def acceptance_columns(snapshot, bundle, parameters=None):
+    """Keep distinct evidence even for one calculated operating point."""
+    rows = acceptance_rows(snapshot)
+    endpoints = (bundle or {}).get('cases') or []
+    if len(endpoints) == 2:
+        same_case = len(report_cases(bundle)) == 1
+    elif not endpoints and parameters:
+        from input_voltage_range import normalize_input_voltage_spec
+        from mos_manual import distinct_endpoints
+        try:
+            spec = normalize_input_voltage_spec(parameters)
+        except ValueError:
+            same_case = False
+        else:
+            same_case = spec['V_in_min'] == spec['V_in_max'] and not distinct_endpoints(spec)
+    else:
+        same_case = False
+    if same_case and all(row[2] == row[3] for row in rows):
+        for item in snapshot.get('rows', []):
+            a = (item.get('cases') or {}).get('Vinmin') or {}
+            b = (item.get('cases') or {}).get('Vinmax') or {}
+            if (a.get('measurement_record') or b.get('measurement_record')) and (
+                    a.get('measurement_record') != b.get('measurement_record')):
+                break
+            if any(a.get(key) != b.get(key) for key in ('calculation', 'simulation', 'measurement')):
+                break
+        else:
+            return ['固定输入'], [row[:3] for row in rows]
+    return ['Vinmin', 'Vinmax'], rows
+
+
 def add_acceptance_report(doc,p,bundle=None,*,joint_record=None,spice_evidence=None,
-                          title='工程验收',short_summary=False):
-    snapshot=acceptance_snapshot(p,bundle,joint_record=joint_record,spice_evidence=spice_evidence)
+                          title='工程验收',short_summary=False,snapshot=None):
+    if snapshot is None:
+        snapshot=acceptance_snapshot(p,bundle,joint_record=joint_record,spice_evidence=spice_evidence)
     module_section(doc,title,level=1,new_page=False)
     summary=snapshot.get('summary') or {}
-    paragraph(doc,'验收按需求阈值逐项对照设计计算、仿真与实测。缺少阈值或证据的项目保留未评估，'
-              '不将仅完成计算写成整机验收通过。')
+    labels, rows = acceptance_columns(snapshot, bundle, p)
     if summary:
         from engineering_acceptance import STATE_LABELS
         counts=summary.get('counts') or {}
-        lead=paragraph(doc,'当前结论  '+str(summary.get('label') or '待评估')+'；'+
-            '，'.join(STATE_LABELS.get(k,k)+' '+str(v)+' 项' for k,v in counts.items())+
-            '；未闭合问题 '+str(summary.get('unresolved_issues',0))+' 项。')
-        color={'review':'A12D24','undefined':'8C5D16','stale':'8C5D16','pass':'29633B'}.get(summary.get('state'),'000000')
-        for run in lead.runs:_font(run,11,True,color)
-        if summary.get('scope'):paragraph(doc,str(summary['scope']),True)
-    for note in snapshot.get('evidence_notes') or []:paragraph(doc,str(note),True)
+        if len(labels) == 1:
+            counts = {state: sum((row.get('cases') or {}).get('Vinmin', {}).get('status') == state
+                                 for row in snapshot.get('rows', [])) for state in counts}
+        pieces = [str(summary.get('label') or '待评估')]
+        pieces.extend(f"{STATE_LABELS.get(k,k)} {v} 项" for k,v in counts.items() if v and k != 'na')
+        if summary.get('unresolved_issues'):
+            pieces.append(f"未闭合问题 {summary['unresolved_issues']} 项")
+        lead = conclusion_line(doc, '，'.join(pieces), summary.get('state'))
+        lead.paragraph_format.keep_with_next = True
+    missing = missing_evidence_note(snapshot)
+    if missing:
+        note = paragraph(doc, missing, True)
+        note.paragraph_format.keep_with_next = True
+    for note in snapshot.get('evidence_notes') or []:
+        paragraph(doc,str(note),True)
     if short_summary:
         reviews=[]
         conditions={row[0]:row[1] for row in acceptance_rows(snapshot)}
         from report_docx import value
         for item in snapshot.get('rows',[]):
-            pair=[(item.get('cases') or {}).get(k) or {} for k in ('Vinmin','Vinmax')]
+            case_ids = ('Vinmin',) if len(labels) == 1 else ('Vinmin','Vinmax')
+            pair=[(item.get('cases') or {}).get(k) or {} for k in case_ids]
             if not any(cell.get('status')=='review' for cell in pair):continue
             cells=[]
             for cell in pair:
                 bad=[source for source in ('calculation','simulation','measurement')
                      if (cell.get('states') or {}).get(source)=='review']
-                cells.append('；'.join(source+' '+value(cell.get(source),item.get('unit','')) for source in bad) or '该端未超限')
+                source_labels = {'calculation': '计算', 'simulation': '仿真', 'measurement': '实测'}
+                cells.append('，'.join(source_labels[source]+' '+value(cell.get(source),item.get('unit',''))
+                                      for source in bad) or '满足')
             name=item.get('name') or item.get('metric') or item.get('id')
             reviews.append((name,*cells,conditions.get(name,'待补目标')))
         if reviews:
             width=available_width(doc)
-            table(doc,['已知超限项目','Vinmin','Vinmax','需求阈值'],reviews,[width*.29,width*.25,width*.25,width*.21])
+            table(doc,['已知超限项目',*labels,'需求阈值'],reviews,
+                  [width*.29,*([width*.5/len(labels)]*len(labels)),width*.21])
     if not short_summary:
         width=available_width(doc)
-        rows=acceptance_rows(snapshot)
         if rows:
-            table(doc,['验收指标与证据','需求阈值','Vinmin','Vinmax'],rows,
-                  [width*.28,width*.18,width*.27,width*.27])
-        else:paragraph(doc,'尚未配置工程验收指标。请先补充允许范围与测量条件；现有设计核查不等同整机验收。')
+            table(doc,['验收指标与证据','需求阈值',*labels],rows,
+                  [width*.28,width*.18,*([width*.54/len(labels)]*len(labels))])
+        else:paragraph(doc,'待配置验收阈值与测量条件。')
         issues=snapshot.get('issues') or []
         if issues:
             module_section(doc,'未闭合问题',level=2,new_page=False)
@@ -419,6 +551,10 @@ def _append_native(doc,block):
                     new,_=doc.part.get_or_add_image(BytesIO(rel.target_part.blob))
                 else:continue
                 element.set(attr,new)
+    pictures = node.xpath('.//wp:docPr')
+    if pictures:
+        for number, prop in enumerate(pictures, start=doc.part.next_id):
+            prop.set('id', str(number))
     # Most captured pages become flowing module sections. The QR RCD review
     # is an intentional subsection: keep its explanation and corner table on
     # a fresh page instead of leaving one final row isolated on the next page.
@@ -435,28 +571,40 @@ def _append_native(doc,block):
         tabs=OxmlElement('w:tabs');stop=OxmlElement('w:tab')
         stop.set(qn('w:val'),'right');stop.set(qn('w:pos'),str(round((available_width(doc)-.1)*1440)))
         tabs.append(stop);ppr.append(tabs)
-    doc.element.body.insert(len(doc.element.body)-1,node)
+    body = doc.element.body
+    if node.tag == qn('w:tbl') and len(body) > 1 and body[-2].tag == qn('w:tbl'):
+        # Adjacent Word tables may merge and repeat the wrong header after a page break.
+        table_gap(doc).paragraph_format.keep_with_next = True
+    body.insert(len(body)-1, node)
 
 
-def write_paired_modules(doc,contents,cases,*,chapter_start=2):
+def write_paired_modules(doc,contents,cases,*,chapter_start=2,chapter_prefix='',chapter_level=1):
     """Same module first, then both endpoints; common prose/equations once."""
-    if not any(contents[s][m] for s in (0,1) for m in MODULES):
+    if not any(content[module] for content in contents for module in MODULES):
         return dict(paired_tables=0,paired_figures=0,chapters=0)
-    from docx.enum.section import WD_SECTION_START, WD_ORIENT
-    sec=doc.add_section(WD_SECTION_START.NEW_PAGE)
-    sec.orientation=WD_ORIENT.LANDSCAPE
-    sec.page_width,sec.page_height=Inches(11),Inches(8.5)
+    single = len(cases) == 1
+    if not single and doc.sections[-1].page_width < doc.sections[-1].page_height:
+        from docx.enum.section import WD_SECTION_START
+        sec=doc.add_section(WD_SECTION_START.NEW_PAGE)
+        set_a4_page(sec, landscape=True)
     pictures=0;tables=0;chapter=chapter_start
     for name,modules in CHAPTERS:
-        if not any(contents[s][m] for s in (0,1) for m in modules):continue
-        module_section(doc,f'{chapter} {name}',new_page=chapter!=chapter_start);chapter+=1
+        if not any(content[module] for content in contents for module in modules):continue
+        module_section(doc,f'{chapter_prefix}{chapter} {name}',level=chapter_level,new_page=False)
+        chapter+=1
         for module in modules:
-            left,right=contents[0][module],contents[1][module]
+            left = contents[0][module]
+            right = {} if single else contents[1][module]
             for heading in dict.fromkeys([*left,*right]):
                 title=re.sub(r'^(?:\d+(?:\.\d+)*\s*|附录\s*[AB]\s*)','',heading).strip()
-                module_section(doc,title,level=2,new_page=False)
+                module_section(doc, title, level=chapter_level+1, size=13, new_page=False)
+                if single:
+                    for block in left[heading]:
+                        _append_native(doc, block)
+                        pictures += len(block.get('images', ()))
+                        tables += block['kind'] == 'table'
+                    continue
                 pairs=list(block_pairs(left.get(heading,[]),right.get(heading,[])))
-                pending_caption=None
                 for index,(a,b) in enumerate(pairs):
                     sample=a or b;kind=sample['kind']
                     if kind=='caption':continue
@@ -464,6 +612,12 @@ def write_paired_modules(doc,contents,cases,*,chapter_start=2):
                         caption=next(((x or y).get('text','') for x,y in pairs[index+1:index+2]
                                       if (x or y)['kind']=='caption'),'两端点图像对照')
                         n=max(len(a['images']) if a else 0,len(b['images']) if b else 0)
+                        if shared_report_images(a, b):
+                            from docx_layout import figure
+                            for blob in a['images']:
+                                figure(doc, blob, caption, width=7.1 if caption.startswith('图 0-1') else 4.72)
+                                pictures += 1
+                            continue
                         for j in range(n):
                             if caption.startswith('图 0-1'):
                                 # Dense circuit designators need one full-width
@@ -483,7 +637,7 @@ def write_paired_modules(doc,contents,cases,*,chapter_start=2):
                                 b['images'][j] if b and j<len(b['images']) else None,
                                 caption,left_label=cases[0]['id']+' '+str(cases[0]['voltage'])+' V',
                                 right_label=cases[1]['id']+' '+str(cases[1]['voltage'])+' V')
-                            pictures+=int(bool(a))+int(bool(b))
+                            pictures += int(bool(a and j < len(a['images']))) + int(bool(b and j < len(b['images'])))
                     elif kind=='table':
                         if a and b and a['rows']==b['rows']:
                             width=available_width(doc);cols=len(a['rows'][0])

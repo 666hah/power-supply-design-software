@@ -630,7 +630,7 @@ class OutputParameterPanel:
             self._inline_custom_core_editors[index]=editor
             self._inline_output_widgets[index,'custom_core_L']=[editor.frame]
             active=lambda n=index:self._inline_output_visible(n,'core_choice_L') and is_custom(self._inline_output_vars[n]['core_choice_L'].get())
-            self._inline_extra(frame,[editor.frame],f'OUT{index+1} 自定义 非标准 磁芯 Ae Ve Wa MLT mm cm custom_core_L',active)
+            self._inline_extra(frame,[editor.frame],f'OUT{index+1} 自定义 非标准 磁芯 Ae Ve Wa mm cm custom_core_L',active)
             return row+2
         return row + 1
 
@@ -673,15 +673,21 @@ class OutputParameterPanel:
                 def changed(n=index):
                     self._inline_cap_active[n]=True
                     self._inline_output_dirty=True
+                    if not self._building:
+                        self._cap_model_picker.refresh()
                     self._inline_request_update(False)
-                editor=BankEditor(frame,bank(self._output_template(index=index)),changed)
+                editor=BankEditor(frame,bank(self._output_template(index=index)),changed,rail=index+1)
                 editor.grid(row=row,column=0,columnspan=4,sticky='ew',pady=4)
                 self._inline_cap_editors[index]=editor
-                self._inline_extra(frame,[editor],f'OUT{index+1} 电容数量 C ESR ESL',lambda n=index:self._inline_output_visible(n))
+                self._inline_extra(frame,[editor],f'OUT{index+1} 电容数量 C ESR ESL 阻抗曲线 热阻',lambda n=index:self._inline_output_visible(n))
                 row+=1
             for key in keys:
                 if section=='capacitors' and key in ('C_out','Rc','ESL','cout2_enable','C_out2','Rc2','ESL2'):continue
                 row = self._inline_field(frame, row, index, key)
+            if section == 'device':
+                row = self._build_device_curve_data_button(frame, row, f'OUT{index+1} 整流与续流曲线数据…', 'rectifier', index+1)
+            if section == 'capacitors':
+                row = self._build_device_curve_data_button(frame, row, f'OUT{index+1} 输出防反曲线数据…', 'output', index+1)
             if section == 'mag':
                 row = self._build_transformer_dcr_row(frame, row, index + 1,
                                                      lambda n=index: self._inline_output_visible(n))
@@ -778,7 +784,7 @@ class OutputParameterPanel:
         unit = ttk.Label(frame, text='mΩ', style='Muted.TLabel')
         unit.grid(row=row, column=2, sticky='w', padx=4)
         widgets = [caption, value, unit]
-        Tooltip(value, '自动直流铜阻：Rdc = ρ × MLT × 匝数 / (线圈并绕数 × 单根线股数 × πd²/4)。\nMLT、线径为自动时使用当前磁芯/绕组预设计值；不再读取旧版手工 DCR。')
+        Tooltip(value, '直流铜阻按绕组导线长度与总裸铜截面积自动计算。平均匝长及计算来源见磁件设计报告。')
         self._coupling_widgets['dcr', index] = widgets
         self._inline_extra(frame, widgets, f'{name} 绕组 自动 电阻 DCR MLT 线径 并绕', predicate)
         return row + 1

@@ -4,6 +4,7 @@ import { fmt } from "./types";
 import { ref, computed } from "vue";
 const props = defineProps<{
   bank?: Spec | null;
+  voltageRipple?: Spec | null;
   title: string;
   prefix: string;
 }>();
@@ -13,21 +14,39 @@ const chosen = computed(
   () =>
     props.bank?.caps?.[Math.min(selected.value, props.bank.caps.length - 1)],
 );
+const showDissipation = computed(() =>
+  props.bank?.caps?.some((cap: Spec) => cap.loss_W != null),
+);
+function modelLabel(cap: Spec) {
+  return cap.impedance_model === 'curve'
+    ? `曲线 · ${fmt(cap.curve_coverage_fraction == null ? null : 100 * cap.curve_coverage_fraction, '%', 4)}`
+    : '固定 RLC';
+}
 </script>
 <template>
   <section v-if="bank" class="card">
     <div class="card-heading">
       <h3>{{ title }}</h3>
     </div>
+    <p v-if="voltageRipple" class="card-note">
+      曲线总纹波 {{ fmt(voltageRipple.curve * 1e3, 'mVpp', 5) }} ·
+      标称 C/ESR 纹波 {{ fmt(voltageRipple.reference * 1e3, 'mVpp', 5) }}
+    </p>
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
             <th>电容</th>
             <th>容量</th>
-            <th>ESR</th>
-            <th>ESL</th>
+            <th>标称 ESR</th>
+            <th>标称 ESL</th>
             <th>交流 RMS</th>
+            <template v-if="showDissipation">
+              <th>模型 · 曲线覆盖</th>
+              <th>等效 ESR</th>
+              <th>损耗</th>
+              <th>估算温升</th>
+            </template>
           </tr>
         </thead>
         <tbody>
@@ -37,10 +56,17 @@ const chosen = computed(
             <td>{{ fmt(cap.ESR * 1e3, "mΩ", 5) }}</td>
             <td>{{ fmt(cap.ESL * 1e9, "nH", 5) }}</td>
             <td>{{ fmt(cap.total, "A", 5) }}</td>
+            <template v-if="showDissipation">
+              <td>{{ modelLabel(cap) }}</td>
+              <td>{{ fmt(cap.equivalent_esr_ohm == null ? null : cap.equivalent_esr_ohm * 1e3, "mΩ", 5) }}</td>
+              <td>{{ fmt(cap.loss_W, "W", 5) }}</td>
+              <td>{{ fmt(cap.temperature_rise_K, "K", 5) }}</td>
+            </template>
           </tr>
           <tr>
             <th colspan="4">电容组总交流 RMS（不等于各颗 RMS 直接相加）</th>
             <td>{{ fmt(bank.total_bank, "A", 5) }}</td>
+            <td v-if="showDissipation" colspan="4"></td>
           </tr>
         </tbody>
       </table>
@@ -49,6 +75,9 @@ const chosen = computed(
       频谱方法：{{
         bank.spectrum_method
       }}。频带分量见对应图表；这里读取同一份已算结果，不重复求解。
+    </p>
+    <p v-if="showDissipation" class="card-note">
+      曲线覆盖按各颗电容的 RMS² 加权，频段外使用标称 RLC。设定热阻后按损耗乘以热阻估算温升。
     </p>
     <details @toggle="showBands = ($event.target as HTMLDetailsElement).open">
       <summary>查看逐颗电容完整频带 RMS（含 1–20 次开关谐波）</summary>

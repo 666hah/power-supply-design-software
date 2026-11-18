@@ -9,12 +9,16 @@ field_data = [(str(ROOT/'transformer_field_runtime'/name), 'transformer_field_ru
               for name in ('report_style.css', 'report_template.html', 'vendor-provenance.json',
                            'SOURCE_MANIFEST.json', 'README.md')]
 field_data += collect_data_files('jsonschema_specifications')
-field_data += copy_metadata('gmsh') + copy_metadata('meshio')
+field_data += copy_metadata('gmsh') + copy_metadata('meshio') + copy_metadata('pywebview')
+field_data += [(str(ROOT/'resources/transformer_preview'), 'resources/transformer_preview')]
+field_data += [(str(ROOT/'resources/core_shapes'), 'resources/core_shapes')]
 field_data += [(str(ROOT/'transformer_field_runtime/THIRD_PARTY'), 'transformer_field_runtime/THIRD_PARTY')]
 a = Analysis([str(ROOT/'desktop_entry.py')],pathex=[str(ROOT)],
-    binaries=[(str(gmsh.libpath), '.')],datas=DATA+field_data,
+    binaries=[(str(gmsh.libpath), '.')],datas=DATA+field_data+[
+        (str(ROOT/'resources/help/operations'), 'resources/help/operations')],
     hiddenimports=['matplotlib.backends.backend_tkagg','matplotlib.backends.backend_agg','matplotlib.backends.backend_svg',
-                   'scipy.signal','control','docx','field_worker',
+                   'scipy.signal','control','docx','field_worker','transformer_preview_host','cot_ui_schema',
+                   'webview.platforms.winforms','webview.platforms.edgechromium',
                    'transformer_field_runtime.pipeline', 'transformer_field_runtime.meshing',
                    'transformer_field_runtime.solving', 'transformer_field_runtime.reporting'],
     excludes=EXCLUDES,hookspath=[],runtime_hooks=[],noarchive=False)

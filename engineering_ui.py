@@ -121,14 +121,22 @@ class EngineeringUI:
         self._work_poll = None
 
     def _build_param_filters(self, parent):
-        frame = ttk.Frame(parent, padding=6); frame.pack(fill='x')
-        ttk.Label(frame, text='参数搜索').pack(anchor='w')
+        frame = ttk.Frame(parent, style='WorkspaceToolbar.TFrame', padding=(4, 3, 4, 4))
+        frame.pack(fill='x')
+        frame.columnconfigure(0, weight=1)
+        ttk.Label(frame, text='设计参数', style='WorkspaceHeading.TLabel').grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 8))
         self.param_search = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.param_search).pack(fill='x', pady=4)
+        search = ttk.Entry(frame, textvariable=self.param_search, width=8)
+        search.grid(row=1, column=0, sticky='ew', padx=(0, 6))
+        Tooltip(search, '参数搜索。可输入中文名称、符号或字段名。')
         # Compatibility handle for older integrations/tests only. There is no
         # basic/advanced switch and this value no longer filters any inputs.
         self.advanced_params = tk.BooleanVar(value=True)
-        ttk.Button(frame, text='展开全部', command=self._expand_params).pack(side='right')
+        ttk.Button(frame, text='展开全部', command=self._expand_params).grid(
+            row=1, column=1, sticky='ew')
+        ttk.Label(frame, text='搜索名称或符号', style='WorkspaceHint.TLabel').grid(
+            row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
         self.param_search.trace_add('write', lambda *_: self._filter_params())
 
     def _expand_params(self):
@@ -154,11 +162,25 @@ class EngineeringUI:
             # a nested idle loop here: that also draws every pending figure and
             # starves input/timer events during a multi-output reflow.
             canvas=self.left_canvas
+            if not self._parameter_pane_visible or not canvas.winfo_ismapped():
+                return
             width=max(1,canvas.winfo_width())
+            min_width = round(337 * self._font_k)
+            content_width = max(width, min_width)
+            self._resize_parameter_fields(content_width)
+            if int(float(canvas.itemcget(self._param_canvas_window, 'width'))) != content_width:
+                canvas.itemconfigure(self._param_canvas_window, width=content_width)
+            hscroll = self._parameter_hscroll
+            if content_width > width:
+                if not hscroll.winfo_manager():
+                    hscroll.pack(side='bottom', fill='x', before=canvas)
+            elif hscroll.winfo_manager():
+                hscroll.pack_forget()
+                canvas.xview_moveto(0)
             height=max(self.left_inner.winfo_reqheight(),canvas.winfo_height())
             # A scroll region shorter than the viewport lets Tk retain a
             # negative origin after folding: the inputs then sit below a gap.
-            canvas.configure(scrollregion=(0,0,width,height))
+            canvas.configure(scrollregion=(0,0,content_width,height))
             if self.left_inner.winfo_reqheight()<=canvas.winfo_height() or canvas.canvasy(0)<0:
                 canvas.yview_moveto(0)
 
@@ -168,9 +190,9 @@ class EngineeringUI:
             # an offscreen Canvas window then emits no Configure notification.
             self._param_layout_job=self.root.after(16,self._sync_parameter_scrollregion)
 
-    def _tree(self, frame, columns, labels, widths=None):
+    def _tree(self, frame, columns, labels, widths=None, *, height=10):
         box = ttk.Frame(frame); box.pack(fill='both', expand=True, padx=6, pady=4)
-        tree = ttk.Treeview(box, columns=columns, show='headings', height=10)
+        tree = ttk.Treeview(box, columns=columns, show='headings', height=height)
         for col,label,width in zip(columns,labels,widths or [120]*len(columns)):
             tree.heading(col,text=label)
             tree.column(col,width=width,minwidth=70,anchor='w')
@@ -199,6 +221,10 @@ class EngineeringUI:
         check_frame, corner_frame, compare_frame = [ttk.Frame(nb) for _ in range(3)]
         for f,label in [(check_frame,'统一设计检查'),(corner_frame,'固定硬件角点'),(compare_frame,'方案 A / B 对比')]:
             nb.add(f,text=label)
+        from tolerance_ui import TolerancePanel
+        self._tolerance_panel = TolerancePanel(nb, get_spec=self._current_spec, start=self._run_tolerances,
+                                              cancel=self._work_cancel.set, make_tree=self._tree)
+        nb.insert(3, self._tolerance_panel, text='最坏工况与容差')
         self.review_summary = tk.StringVar(value='等待首轮计算…')
         ttk.Label(check_frame,textvariable=self.review_summary,wraplength=1100,
                   padding=8,style='Margin.TLabel').pack(fill='x')
@@ -289,6 +315,8 @@ class EngineeringUI:
             scan_range = (self.corner_lo.get(), self.corner_hi.get())
         except Exception:
             current, scan_range = None, None
+        if hasattr(self, '_tolerance_panel'):
+            self._tolerance_panel.invalidate(current)
         if self._corner_result is not None and (
                 self._corner_result['base_spec'] != current or tuple(self._corner_result['v_in']) != scan_range):
             self.corner_status.set('当前输入已变化；上次角点结果已失效，请重新分析。')
@@ -350,11 +378,24 @@ class EngineeringUI:
                 state,data = self._work_queue.get_nowait()
                 if state=='progress':
                     done,total,label = data
-                    self.corner_progress.configure(maximum=total,value=done)
-                    self.corner_status.set(f'正在分析 {label} · {done}/{total}，界面可继续操作。')
+                    if kind == 'tolerances':
+                        self._tolerance_panel.progress(done, total, label)
+                    else:
+                        self.corner_progress.configure(maximum=total,value=done)
+                        self.corner_status.set(f'正在分析 {label} · {done}/{total}，界面可继续操作。')
                     continue
                 self._work_running = False
                 self.corner_button.configure(state='normal')
+                if kind == 'tolerances':
+                    try:
+                        current = self._current_spec()
+                    except Exception:
+                        current = None
+                    self._tolerance_panel.invalidate(current)
+                    self._tolerance_panel.finished(result=data if state == 'done' else None,
+                                                   error=data if state == 'error' else None,
+                                                   cancelled=self._work_cancel.is_set())
+                    return
                 if state=='done' and kind=='corners' and self._work_cancel.is_set():
                     self.corner_status.set('角点分析已取消；不保留不完整结果。'); return
                 if state=='error':
@@ -371,6 +412,31 @@ class EngineeringUI:
                 callback(data); return
             self._work_poll = self.root.after(80,poll)
         self._work_poll = self.root.after(80,poll)
+
+    def _run_tolerances(self, spec, variables, settings):
+        if self._work_running:
+            messagebox.showinfo('最坏工况校核', '已有工程分析正在运行。')
+            return
+        from time import monotonic
+        from tolerance_analysis import analyze
+
+        spec = copy.deepcopy(spec)
+        self._tolerance_panel.started(spec)
+        queue, cancelled = self._work_queue, self._work_cancel.is_set
+
+        def calculate():
+            last_update = -1.
+
+            def report(done, total, label):
+                nonlocal last_update
+                now = monotonic()
+                if done in (0, total) or now - last_update >= .08:
+                    queue.put(('progress', (done, total, label)))
+                    last_update = now
+
+            return analyze(spec, variables, **settings, progress=report, cancelled=cancelled)
+
+        self._start_work('tolerances', spec, calculate, None)
 
     def _run_corners_ui(self):
         try:

@@ -83,7 +83,11 @@ def linearize(p, op, *, measured=None):
     m=measured or {}
     L=float(p['L']);N=float(p['N']);gain=float(p['A_sense'])*float(p['Rs'])
     vout=float(m.get('vout',op['V_out']));vcap=float(m.get('vcap',op.get('V_out_cap',vout+output_drop(p))))
-    vin=float(m.get('vin_bus',op.get('V_in',float(p['V_in'])) if not measured else op.get('V_in_bus',float(p['V_in'])-input_drop(p))))
+    # A solved winding circuit uses the bus after the input blocking diode.
+    # Retain the legacy equivalent-burden voltage for nominal design points.
+    bus_point=bool(measured or op.get('qr_coupled_model'))
+    vin=float(m.get('vin_bus',op.get('V_in_bus',float(p['V_in'])-input_drop(p))
+                    if bus_point else op.get('V_in',float(p['V_in']))))
     ipk=float(m.get('ipk',op['I_sw_pk']));period=float(m.get('period',op['Ts']))
     iload=float(multi['equivalent_current'] if multi else m.get('iout',float(op['P_out'])/float(op['V_out'])))
     if min(L,N,gain,vout,vcap,vin,ipk,period,iload)<=0:

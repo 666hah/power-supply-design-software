@@ -8,7 +8,7 @@ import secrets
 import threading
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -256,6 +256,14 @@ def create_app(*, testing=False, pcs_root=None):
         from .curves import apply_curve
         from design_engine.contracts import json_value
         return json_value(await asyncio.to_thread(apply_curve,**body.model_dump()))
+
+    @app.post('/api/capacitors/impedance')
+    async def capacitor_impedance(request: Request, filename: str = Query(min_length=1, max_length=250)):
+        from capacitor_curve_io import MAX_BYTES, parse_curve
+        content = await request.body()
+        if len(content) > MAX_BYTES:
+            raise HTTPException(413, '电容阻抗曲线文件不能超过 2 MB')
+        return await asyncio.to_thread(parse_curve, content, name=filename)
 
     @app.post('/api/jobs',status_code=202)
     async def submit(body: DesignRequest,request: Request):

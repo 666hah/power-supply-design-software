@@ -23,10 +23,15 @@ def pin_hardware(p, res):
         if dev and dev.get('ok'):
             keys = (('core', 'core_geometry', 'MLT', 'MLT_source', 'N', 'd_wire') if kind == 'inductor' else
                     ('core', 'core_geometry', 'MLT', 'MLT_source', 'Np', 'Ns', 'd_wire_p', 'd_wire_s',
-                     'n_strand_p', 'n_strand_s', 'parallel_wires_p','parallel_wires_s'))
+                     'n_strand_p', 'n_strand_s', 'parallel_wires_p','parallel_wires_s', 'winding_lengths'))
             from inductor_selection import hardware
             fixed['_fixed_'+kind] = copy.deepcopy(hardware(dev) if kind == 'inductor' else
                 {k: dev.get(k,1) if k.startswith('parallel_wires_') else dev[k] for k in keys})
+            if kind=='inductor' and res['op'].get('cot') and dev.get('design_enabled') is False:
+                # The representative displayed inductor already carries PH1's
+                # manufacturing multiplier. Freeze the nominal part once;
+                # retain the independent phase multipliers in cot_config.
+                fixed['_fixed_inductor'].update(L=p['L'],inductor_dcr=res['op']['cot']['phase_dcr_ohm'])
     coupled_hardware = (res['op'].get('coupled_model') or res['op'].get('acf_model') or {}).get('transformer_hardware')
     if coupled_hardware:
         # The numerical circuit used the predesign geometry, including every
@@ -36,7 +41,8 @@ def pin_hardware(p, res):
     elif md.get('transformer', {}).get('windings'):
         fixed['_fixed_transformer']['windings'] = [
             {key: winding.get(key,1) if key=='parallel_wires_s' else winding[key]
-             for key in ('id', 'Ns', 'd_wire_s', 'n_strand_s', 'parallel_wires_s','R_dc')}
+             for key in ('id', 'Ns', 'd_wire_s', 'n_strand_s', 'parallel_wires_s','R_dc',
+                         'MLT', 'MLT_source', 'copper_length_m')}
             for winding in md['transformer']['windings']]
     if res.get('outputs'):
         from isolated_outputs import output_specs

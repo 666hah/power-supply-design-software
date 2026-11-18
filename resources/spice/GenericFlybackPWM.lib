@@ -92,9 +92,9 @@ Xcore COMP cs_filtered active VCC GATE RAMP ilim COM GPWM_CORE2 FSW={FSW} MODE={
 .ends GFLY_CTRL2
 
 * Visible power-stage building blocks. ACT=0 bypasses a diode with 1 uOhm.
-.subckt GPWR_DIODE A K params: VF=0.7 ACT=1 CJ=20e-12
+.subckt GPWR_DIODE A K params: VF=0.7 ACT=1 CJ=20e-12 EPS=0
 Dmain A K DM
-.model DM D(Ron=0.001 Roff=1e10 Vfwd={VF})
+.model DM D(Ron=0.001 Roff=1e10 Vfwd={VF} epsilon={EPS})
 Rbypass A K {if(ACT>0.5,1e12,1e-6)}
 Cj A K {CJ} Rser=0.1 m={ACT}
 .ends GPWR_DIODE

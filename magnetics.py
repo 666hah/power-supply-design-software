@@ -23,6 +23,7 @@ Core data below are *typical* published values — verify with the
 manufacturer datasheet for a real design.
 """
 
+import copy
 import numpy as np
 from custom_cores import CUSTOM_CORE, is_custom, validate_geometry, geometry_snapshot
 
@@ -390,20 +391,18 @@ def resolve_core(p, ap_required, fixed=None):
     return select_core(ap_required,shape if shape in CORE_SHAPES else None)
 
 
+def estimated_core_mlt(name, core):
+    """Core reference when an actual conductor path is unavailable."""
+    if core.get('MLT'):
+        source = '旧非标准磁芯参考值（估算）' if is_custom(name) else '标准磁芯目录（估算）'
+        return float(core['MLT']), source
+    return 4. * math.sqrt(core['Ae']), '按有效截面积等效方形估算（无骨架尺寸）'
+
+
 def resolve_mlt(p, name, core, fixed=None):
-    """Custom geometry owns its MLT; legacy standard overrides remain valid."""
+    """Primary predesign reference prior to locating the actual winding path."""
     fixed = fixed or {}
-    if fixed.get('MLT'):
-        return float(fixed['MLT'])
-    if is_custom(name):
-        return float(core['MLT'])
-    override = p.get('MLT', 0.) or 0.
-    return float(override if override > 0 else core['MLT'])
-
-
-def mlt_source(p, name, fixed=None):
-    return (fixed or {}).get('MLT_source') or ('非标准磁芯尺寸输入' if is_custom(name) else
-            '用户指定平均匝长' if (p.get('MLT', 0.) or 0.) > 0 else '标准磁芯数据库')
+    return float(fixed['MLT']) if fixed.get('MLT') else estimated_core_mlt(name, core)[0]
 
 
 def design_inductor(op, p, I_rms=None, B_pk_ratio=1.0):
@@ -416,8 +415,6 @@ def design_inductor(op, p, I_rms=None, B_pk_ratio=1.0):
     if purchased(p):
         return design(op if I_rms is None else dict(op, I_L_rms=I_rms), p)
     fixed = p.get('_fixed_inductor') or {}
-    if fixed:
-        p = dict(p, core_choice=fixed['core'], MLT=fixed['MLT'])
     f = op['f_sw']
     L = op['L']
     I_pk = op['I_L_pk']
@@ -435,7 +432,7 @@ def design_inductor(op, p, I_rms=None, B_pk_ratio=1.0):
 
                     ap=ap, L=L, I_pk=I_pk, I_rms=I_rms)
     Ae, Ve, Wa = core['Ae'], core['Ve'], core['Wa']
-    MLT = resolve_mlt(p, name, core, fixed)
+    MLT, source = estimated_core_mlt(name, core)
 
     # turns so B_peak = Bmax at I_pk
     N = int(fixed.get('N') or np.ceil(L * I_pk / (Bmax * Ae)))
@@ -464,8 +461,8 @@ def design_inductor(op, p, I_rms=None, B_pk_ratio=1.0):
     dT = P_total / (h * A_surf)                     # temp. rise, K (Erickson ch.11)
     fill = N * A_wire / max(Wa, 1e-30)
     return dict(ok=True, core=name, core_geometry=geometry_snapshot(core),
-                core_label=core.get('name') or name, MLT_source=mlt_source(p, name, fixed),
-                Ae=Ae, Ve=Ve, Wa=Wa, MLT=MLT,
+                core_label=core.get('name') or name, MLT_source=source,
+                Ae=Ae, Ve=Ve, Wa=Wa, MLT=MLT, copper_length_m=MLT * N,
                 ap=ap, N=N, gap=lg, d_wire=d_wire, A_wire=A_wire,
                 R_dc=R_dc, Fr=Fr, P_cu=P_cu, P_core=P_core, P_total=P_total,
                 B_pk=B_pk, dB=dB,
@@ -487,40 +484,19 @@ def transformer_temperature(P_total, p):
                 dT=float(P_total)*resistance)
 
 
-def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None,
-                       Ns=None):
-    """Design a two-winding transformer (flyback or active-clamp forward).
-
-    Np is derived from the volt-second / Bmax budget (or given explicitly),
-    Ns from the turns ratio n_ratio = Np/Ns (or given).  Computes winding
-    wires, window fill, copper loss and core loss.
-
-    Np = Vin*D*Ts/(Bmax*Ae),  dB = Vin*D*Ts/(Np*Ae)  (triangular flux).
-    """
+def transformer_conductors(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None, Ns=None):
+    """Shared core, turns and conductor selection before winding placement."""
     fixed = p.get('_fixed_transformer') or {}
     if fixed:
-        p = dict(p, core_choice=fixed['core'], MLT=fixed['MLT'],
-                 **{k: fixed[k] for k in ('Np', 'Ns', 'd_wire_p', 'd_wire_s',
-                                          'n_strand_p', 'n_strand_s')},
-                 **{k: fixed.get(k,p.get(k,1)) for k in ('parallel_wires_p','parallel_wires_s')})
-    f = op['f_sw']
-    Bmax, J, Ku, rho = p['Bmax'], p['J'], p['Ku'], p['rho']
-    k, a, b = p['k_core'], p['a_core'], p['b_core']
+        p = dict(p, **{key: fixed[key] for key in ('Np', 'Ns', 'd_wire_p', 'd_wire_s',
+            'n_strand_p', 'n_strand_s', 'parallel_wires_p', 'parallel_wires_s') if key in fixed})
+    Bmax, J, Ku = p['Bmax'], p['J'], p['Ku']
 
-    ap = max(2.0 * op['P_out'] * 1.0 / (Bmax * J * Ku * f), 1e-30)
+    ap = max(2.0 * op['P_out'] / (Bmax * J * Ku * op['f_sw']), 1e-30)
     name, core = resolve_core(p, ap, fixed)
     if core is None:
-
         return dict(ok=False, reason='no core large enough', ap=ap)
-    Ae, Ve, Wa = core['Ae'], core['Ve'], core['Wa']
-    MLT = resolve_mlt(p, name, core, fixed)
 
-    # winding parameters may be entered by the user (0 / None -> auto):
-    #   Np / Ns  turns, d_wire_p / d_wire_s  wire diameter (m), and the
-    #   parallel strand count (并绕数) n_strand_p / n_strand_s.  The primary /
-    #   secondary RMS current is shared equally among the strands, the DC
-    #   resistance is divided by the strand count, and the window fill uses
-    #   the total conductor area.
     Np_u = int(p.get('Np', 0) or 0)
     Ns_u = int(p.get('Ns', 0) or 0)
     strp = max(1, int(p.get('n_strand_p', 1) or 1))
@@ -534,7 +510,7 @@ def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None,
     if Np_u > 0:
         Np = Np_u
     elif Np is None:
-        Np = int(np.ceil(op['V_in'] * op['D'] * op['Ts'] / (Bmax * Ae)))
+        Np = int(np.ceil(op['V_in'] * op['D'] * op['Ts'] / (Bmax * core['Ae'])))
     Np = max(1, Np)
     if Ns_u > 0:
         Ns = Ns_u
@@ -544,10 +520,73 @@ def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None,
 
     dw_p = dwp_u if dwp_u > 0 else wire_diameter(I_p_rms / total_p, J)
     dw_s = dws_u if dws_u > 0 else wire_diameter(I_s_rms / total_s, J)
+    return dict(ok=True, core=name, core_geometry=geometry_snapshot(core), ap=ap, Np=Np, Ns=Ns,
+                d_wire_p=dw_p, d_wire_s=dw_s, n_strand_p=strp, n_strand_s=strs,
+                parallel_wires_p=copies_p, parallel_wires_s=copies_s)
+
+
+def psr_auxiliary_conductor(p, op, transformer):
+    """Resolve the feedback winding before placing all conductors in the window."""
+    from mp6005 import design_psr
+    psr = design_psr(p, op, transformer)
+    if not psr:
+        return None
+    current = psr['Vaux'] / (psr['RfbH'] + psr['RfbL'])
+    rms = current * op['I_d_rms'] / max(op['I_out'], 1e-30)
+    frozen = p.get('_fixed_auxiliary') or {}
+    diameter = frozen.get('d_wire') or max(50e-6, wire_diameter(rms, p['J']))
+    return dict(id='AUX', name='PSR 辅助绕组', turns=psr['Na'], strands=1,
+                parallel_wires=1, bare_diameter=diameter)
+
+
+def transformer_winding_lengths(p, op, hardware, secondary):
+    """Use one placement shared by the loss model, coupled solver and export."""
+    from winding_length import resolve_winding_lengths
+    fixed = p.get('_fixed_transformer') or {}
+    rows = [dict(id='P', name='原边 P', turns=hardware['Np'], strands=hardware['n_strand_p'],
+                 parallel_wires=hardware['parallel_wires_p'], bare_diameter=hardware['d_wire_p'])]
+    rows.extend(dict(id=f"OUT{w['id']}", name=f"OUT{w['id']}", turns=w['Ns'], strands=w['n_strand_s'],
+                     parallel_wires=w['parallel_wires_s'], bare_diameter=w['d_wire_s']) for w in secondary)
+    aux = psr_auxiliary_conductor(p, op, hardware)
+    if aux:
+        rows.append(aux)
+    stored = fixed.get('winding_lengths')
+    if stored and {r['id']: r['turns'] for r in rows} == {
+            key: value['turns'] for key, value in stored['windings'].items()}:
+        return copy.deepcopy(stored)
+    core_name, core = hardware['core'], hardware['core_geometry']
+    mlt, source = estimated_core_mlt(core_name, core)
+    return resolve_winding_lengths(core_name, dict(core, MLT=mlt, MLT_source=source), rows,
+                                   p.get('winding_config'))
+
+
+def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None, Ns=None):
+    """Winding geometry, window fill, copper loss and core loss for the selected rail."""
+    hardware = transformer_conductors(op, p, I_p_rms, I_s_rms, n_ratio, Np, Ns)
+    if not hardware['ok']:
+        return hardware
+    name, core = hardware['core'], hardware['core_geometry']
+    Ae, Ve, Wa = core['Ae'], core['Ve'], core['Wa']
+    Np, Ns = hardware['Np'], hardware['Ns']
+    dw_p, dw_s = hardware['d_wire_p'], hardware['d_wire_s']
+    strp, strs = hardware['n_strand_p'], hardware['n_strand_s']
+    copies_p, copies_s = hardware['parallel_wires_p'], hardware['parallel_wires_s']
+    total_p, total_s = strp * copies_p, strs * copies_s
+    f, rho = op['f_sw'], p['rho']
+    k, a, b = p['k_core'], p['a_core'], p['b_core']
+
+    lengths = (p.get('_fixed_transformer') or {}).get('winding_lengths')
+    selected_id = f"OUT{int(op.get('feedback_output', p.get('feedback_output', 1)))}"
+    if not lengths:
+        lengths = transformer_winding_lengths(p, op, hardware, [dict(id=1,Ns=Ns,d_wire_s=dw_s,
+                        n_strand_s=strs,parallel_wires_s=copies_s)])
+    else:
+        lengths = copy.deepcopy(lengths)
+    primary, secondary = lengths['windings']['P'], lengths['windings'][selected_id]
     A_p = np.pi * dw_p ** 2 / 4.0
     A_s = np.pi * dw_s ** 2 / 4.0
-    R_p = rho * MLT * Np / (total_p * A_p)
-    R_s = rho * MLT * Ns / (total_s * A_s)
+    R_p = rho * primary['length_m'] / (total_p * A_p)
+    R_s = rho * secondary['length_m'] / (total_s * A_s)
     Fr_p = ac_factor(dw_p, f, rho)
     Fr_s = ac_factor(dw_s, f, rho)
     P_cu = Fr_p * R_p * I_p_rms ** 2 + Fr_s * R_s * I_s_rms ** 2
@@ -571,8 +610,10 @@ def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None,
     from transformer_gap import estimate
     gap_design = estimate(p, core, Np)
     return dict(ok=True, core=name, core_geometry=geometry_snapshot(core),
-                core_label=core.get('name') or name, MLT_source=mlt_source(p, name, fixed),
-                Ae=Ae, Ve=Ve, Wa=Wa, MLT=MLT, ap=ap,
+                core_label=core.get('name') or name, MLT_source=primary['source'],
+                Ae=Ae, Ve=Ve, Wa=Wa, MLT=primary['mlt_m'], ap=hardware['ap'],
+                copper_length_m=primary['length_m'], MLT_s=secondary['mlt_m'],
+                copper_length_s_m=secondary['length_m'], winding_lengths=lengths,
                 Np=Np, Ns=Ns, n_actual=Np / Ns, d_wire_p=dw_p, d_wire_s=dw_s,
                 n_strand_p=strp, n_strand_s=strs, A_strand_p=A_p, A_strand_s=A_s,
                 parallel_wires_p=copies_p, parallel_wires_s=copies_s,

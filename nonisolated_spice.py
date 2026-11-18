@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-MODEL_VERSION='GenericBuckBoostPWM-1.0'
+MODEL_VERSION='GenericBuckBoostPWM-1.3'
 
 def project_files(parameters,*,bundle=None):
     from app_resources import resource_path
@@ -28,6 +28,8 @@ def project_files(parameters,*,bundle=None):
     vmin=min(c['voltage'] for c in cases);vmax=max(c['voltage'] for c in cases)
     if vmin<d['vmin'] or vmax>d['vmax']:raise ValueError(f'{d["name"]} 输入电压超出本原型范围 {d["vmin"]:g}–{d["vmax"]:g} V')
     fs=settings['frequency_hz'] or q['f_sw'];s=slope(q)
+    # Resolved metadata for the same finite-reset definition in GNISO_CORE.
+    age_reset=min(1e-9,.001/fs,(1-settings['duty_max'])/(2*fs))
     if settings['duty_max']/fs<=max(settings['blanking_ns'],settings['min_on_ns'])*1e-9+settings['delay_ns']*1e-9:raise ValueError('消隐和最小导通时间过长')
     block=q['Vf_dout'] if q.get('d_out_enable') else 0.;h=d['ref']/(q['V_out']+block)
     limit=settings['cs_limit'] or (1.4*max(c['result']['op']['I_sw_pk'] for c in cases)*q['Rs'])
@@ -53,7 +55,7 @@ def project_files(parameters,*,bundle=None):
     values['SSCHI']=max(0.,settings['ss_comp_end_v']-d['offset'])*d['scale']
     params={}
     def add(k,v):params[k]=float(v);return '{'+k+'}'
-    def diode(ref,a,b,v,en=1):return f'X{ref} {a} {b} GPWR_DIODE VF={add(ref+"_VF",v)} ACT={add(ref+"_EN",en)} CJ={{DIODE_CJ}}'
+    def diode(ref,a,b,v,en=1):return f'X{ref} {a} {b} GPWR_DIODE VF={add(ref+"_VF",v)} ACT={add(ref+"_EN",en)} CJ={{DIODE_CJ}} EPS=1u'
     def cap(ref,a,b,c,r,l,en=1):return f'X{ref} {a} {b} GPWR_CAP C={add(ref+"_C",c)} ESR={add(ref+"_ESR",r)} ESL={add(ref+"_ESL",l if settings["include_cap_esl"] else 0)} ACT={add(ref+"_EN",en)}'
     body=['VIN_SOURCE input 0 {VIN}','VCC_SOURCE vcc 0 {VG}',
         'VEN en 0 PULSE(0 1 1e-6 10e-9 10e-9 {2*TSTOP} {3*TSTOP})','V_SECONDARY_REFERENCE sgnd 0 0',
@@ -118,6 +120,9 @@ def project_files(parameters,*,bundle=None):
     extra=resource_path('resources/spice/GenericBuckBoostPWM.lib').read_bytes()
     extra=extra.replace(b'GNISO_CTRL_FULL' if settings['short_mode'] else b'GNISO_CTRL_FAST',b'GNISO_CTRL')
     notes=[d['name']+'：原创可配置行为模型；未包含或验证独立原厂模型。',
+        '通用MOS使用有限连续电导过渡：中心VG/2、半宽0.2×VG（Vh为负）；与反激通用MOS一致。此为换流数值连续性近似，不代表器件实际栅荷、米勒平台或动态开关损耗；未改变PWM/采样/保护门限及用户硬件参数。',
+        'Buck/Boost功率及体二极管使用1µV转折区连续化，Vf、Ron、Roff不变；不是实测结电容或反向恢复模型。其他拓扑的通用二极管EPS仍默认为0。电源树示例的外部源电容属于独立配置假设，不由此库隐式增加。',
+        '振荡器age在有效PWM窗口严格按时间1:1增长，周期仍为1/fs；末尾有限回零时间取min(1ns,0.001/fs,(1-Dmax)/(2fs))，完全处于关断区。它替代原1ps复位造成的数值刚性，不改变调制斜率、频率或控制器门限。',
         '反馈在输出防反管前，输出在防反管后；电感 DCR 来自同一冻结几何或显式覆盖。两颗电容分别保留 ESR。',
         '补偿器为二／三型行为网络，CS 等效域与 COMP/ITH 管脚域分开显示；不宣称真实误差放大器输出阻抗、gm、温漂或全部芯片保护。',
         ('电流及环路计算使用无边沿寄生的周期解；SPICE 保留常数 Coss/Cj、门电容、延迟及消隐，因此高频极值可能不同。' if settings['niso_edge_model'] else '快速闭环与周期计算共同忽略结电容快边沿；SPICE 仍包含控制延迟和消隐，极值与环路仍可能存在差异。'),
@@ -131,6 +136,13 @@ def project_files(parameters,*,bundle=None):
         notes.append('当前使用外购成品电感：L 和主界面的 DCR 同时用于计算与导出，控制器窗口的自制 DCR 覆盖不生效。用户附加损耗仅进入设计损耗汇总，不伪造对应的 SPICE 磁芯/交流损耗；未验证 L(I)、饱和或温升。')
     hardware=dict(kind='single-inductor',inductor=m['inductor'],L=q['L'],R_dc_p=m['dcr'],windings=[dict(id=1,Ns=0,R_dc=0,role='output-no-transformer')])
     meta=dict(schema='powerdesign-ltspice-1',model_version=MODEL_VERSION,topology=q['topology'],niso=d,
+        mos_transition=dict(kind='generic-continuous-conductance',center_Vg_ratio=.5,half_width_Vg_ratio=.2,
+            actual_gate_charge_model=False,switching_loss_validation=False),
+        diode_transition=dict(kind='quadratic-continuous-knee',epsilon_V=1e-6,
+            nominal_Vf_Ron_Roff_unchanged=True,reverse_recovery_model=False),
+        oscillator_age=dict(kind='unit-slope-finite-reset',period_s=1/fs,reset_s=age_reset,
+            rise_s=1/fs-age_reset,peak_s=1/fs-age_reset,active_slope=1.,
+            reset_inside_off_window=True),
         controller_mode=q['control_mode'],feedback_output=1,settings=settings,resolved_controller=values,hardware=hardware,
         slope=dict(design=q.get('ma_slope',0)*q['Rs'],recommended=s,resolved=s),voltages=sorted(set(c['voltage'] for c in cases)),
         library_sha256=hashlib.sha256(library+extra).hexdigest(),approximation_notes=notes,

@@ -83,9 +83,6 @@ class IsolatedUI(CrossRegulationUI,OutputParameterPanel):
         book.add(diagram,text='拓扑与器件位号'); book.add(results,text='各路输出与绕组'); book.add(psr,text='MP6005 PSR 核算')
         self._isolated_result_book=book
         self._isolated_result_pages=(diagram,results,psr)
-        self._cross_page=ttk.Frame(book)
-        book.add(self._cross_page,text='交叉调整率与电压范围')
-        self._build_cross_regulation(self._cross_page)
         self.output_note=tk.StringVar()
         ttk.Label(results,textvariable=self.output_note,wraplength=1050,justify='left').pack(fill='x',padx=8,pady=8)
         columns=('rail','spec','actual','mode','current','ripple','rect','cap','turns','cu')
@@ -106,8 +103,7 @@ class IsolatedUI(CrossRegulationUI,OutputParameterPanel):
         book=self._isolated_result_book
         diagram,results,psr=self._isolated_result_pages
         allowed=((diagram,True),(results,self._inline_multiple_active() or (self._coupling_supported() and self.coupling_enabled.get())),
-                 (psr,self._topo_key()=='FLYBACK' and self.feedback_mode.get()=='PSR-MP6005'),
-                 (self._cross_page,self._inline_multiple_active() and self._topo_key() in ('FLYBACK','QR-FLYBACK','ACF-FORWARD') and self._effective_feedback_mode()=='SSR'))
+                 (psr,self._topo_key()=='FLYBACK' and self.feedback_mode.get()=='PSR-MP6005'))
         selected=book.select()
         if any(str(page)==selected and not show for page,show in allowed):
             book.select(diagram)
@@ -116,6 +112,7 @@ class IsolatedUI(CrossRegulationUI,OutputParameterPanel):
             if show and state=='hidden': book.add(page)
             elif not show and state!='hidden': book.hide(page)
         if not book.select() or str(book.tab(book.select(),'state'))=='hidden': book.select(diagram)
+        self._sync_cross_regulation_page()
 
     def _toggle_outputs(self):
         if self._topo_key() not in ISOLATED:

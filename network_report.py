@@ -71,15 +71,21 @@ def export_network(project,destination,*,cancelled=lambda:False,progress=lambda 
     from system_workspace import normalize_project, checks, all_nodes
     from design_engine.service import calculate,export_report
     from calculation_scheduler import CalculationCancelled
-    from docx_layout import new_document,paragraph,table,figure
+    from docx_layout import new_document,paragraph,table,figure,finalize_book_report
     from design_theme import select,report_name
     from openpyxl import Workbook
     from openpyxl.styles import Font,PatternFill,Alignment
     p=normalize_project(project);review=checks(p)
+    capacity_issues=[row['port'] for row in review['capacity'] if not row['ok']]
+    interface_issues=[row['unit'] for row in review['interfaces'] if not row['ok']]
     select('default')
     target=Path(destination);work=target.parent/('network-units-'+target.stem);work.mkdir(exist_ok=True)
     doc=new_document('辅源供电网络与设计总览',p['title']+' 修订 '+p['revision'],'系统架构与各模块计算报告')
-    paragraph(doc,'本报告记录输入源、变换器、二极管竞争供电与终端负载的连接关系。开关电源沿用独立设计参数；启用“跟随上游”的 LDO 按连接关系同步输入范围。系统层检查容量、电压及备用供电。')
+    doc.add_heading('关键结论',1)
+    paragraph(doc,f"容量待复核 {len(capacity_issues)} 处，输入接口待复核 {len(interface_issues)} 处。").runs[0].bold=True
+    if capacity_issues:paragraph(doc,'容量待复核端口：'+'、'.join(capacity_issues))
+    if interface_issues:paragraph(doc,'输入待复核节点：'+'、'.join(interface_issues))
+    if not review['coverage_complete']:paragraph(doc,'部分竞争供电组合待检查。').runs[0].bold=True
     png,svg=architecture(p);figure(doc,png,'辅源供电网络  二极管符号表示隔离竞争支路，箭头为供电方向')
     doc.add_heading('节点与负载',1)
     nrows=[]
@@ -96,9 +102,8 @@ def export_network(project,destination,*,cancelled=lambda:False,progress=lambda 
     doc.add_heading('正常与备用供电功率预算',1)
     brows=[(r['port'],f"{r['normal']:.5g}",f"{r['allocated']:.5g}",f"{r['capacity']:.5g}",'未超容量' if r['ok'] else '待检查',r['worst_case']) for r in review['capacity']]
     table(doc,['端口','正常 / W','最坏 / W','容量 / W','检查','最坏工况'],brows,[1.2,.85,.85,.85,.85,2])
-    paragraph(doc,'开关电源按配置额定输出功率/预设效率预算；LDO 按该工况实际输入电压及最大负载、分压、Iq 预算。终端负载和后级模块输入占用上游端口额定容量，不再次叠加到上游模块输入。竞争支路逐工况选择，备用源不重复计为同时承担同一负载。',True)
+    paragraph(doc,'开关电源按额定输出功率除以预设效率预算。LDO 按工况输入电压、满载、分压和静态电流预算。每个竞争工况选取对应供电支路。',True)
     paragraph(doc,review['method'],True)
-    if not review['coverage_complete']:paragraph(doc,'分支组合超过枚举限额，预算覆盖不完整，不判为通过。',True)
     doc.add_heading('输入电压与失电检查',1)
     irows=[(r['unit'],r['name'],'无供电' if r['source_min'] is None else f"{r['source_min']:.5g}–{r['source_max']:.5g}",
             f"{r['design_min']:.5g}–{r['design_max']:.5g}",r['note'],'电压覆盖' if r['ok'] else '待检查') for r in review['interfaces']]
@@ -106,7 +111,7 @@ def export_network(project,destination,*,cancelled=lambda:False,progress=lambda 
     doc.add_heading('竞争二极管导通损耗估算',1)
     drows=[(r['connection'],r['source'],r['target'],f"{r['vf']:.5g}",f"{r['loss']:.5g}") for r in review['diode_losses'] if r['vf']]
     table(doc,['连接','上游','下游','Vf / V','最大损耗 / W'],drows,[1,1.7,1.7,1,1.4])
-    paragraph(doc,'二极管采用用户填写的固定 Vf，损耗按支路电流×Vf。未包含动态切换、尖峰、反向漏电、温度变化或真实均流；同压支路按各支路独占供电枚举。',True)
+    paragraph(doc,'导通损耗按支路电流乘固定 Vf 估算。同压支路分别按独占供电计算。',True)
     linear_rows=[(r['unit'],fmt(r['max_loss']),fmt(r['max_Tj']),'满足' if r['dropout_ok'] else '压差不足','满足' if r['thermal_ok'] else '热设计需核对') for r in review.get('ldo',[])]
     if linear_rows:
         doc.add_heading('LDO 静态损耗与热设计',1)
@@ -138,10 +143,15 @@ def export_network(project,destination,*,cancelled=lambda:False,progress=lambda 
         except Exception as exc:outcomes.append(dict(id=u['id'],name=u['name'],status='计算或报告失败',error=str(exc)))
         progress(i+1,len(p['units']),u['id']+' '+outcomes[-1]['status'])
     doc.add_heading('独立单元交付状态',1)
-    table(doc,['模块','名称','状态','说明'],[(r['id'],r['name'],r['status'],r.get('error','按单元设计参数计算两端输入；架构停用不删除独立设计')) for r in outcomes],[.8,1.8,1.1,3.3])
+    table(doc,['模块','名称','状态','说明'],[(r['id'],r['name'],r['status'],r.get('error','详见单元报告')) for r in outcomes],[.8,1.8,1.1,3.3])
+    finalize_book_report(doc)
     overview=work/'00_辅源供电网络与设计总览.docx';doc.save(overview);files.insert(0,overview)
     workbook=Workbook();workbook.remove(workbook.active)
-    sheets=[('节点与负载',['节点','名称','类型','配置','状态'],nrows),('供电连接',['连接','上游','下游','方式','Vf/V','状态'],erows),
+    sheets=[('关键结论',['检查','待复核','涉及节点'],[
+                ('容量',len(capacity_issues),'、'.join(capacity_issues)),
+                ('输入接口',len(interface_issues),'、'.join(interface_issues)),
+                ('工况覆盖','完整' if review['coverage_complete'] else '部分组合待检查','')]),
+            ('节点与负载',['节点','名称','类型','配置','状态'],nrows),('供电连接',['连接','上游','下游','方式','Vf/V','状态'],erows),
             ('功率预算',['端口','正常W','最坏W','容量W','检查','最坏工况'],brows),('输入与失电',['节点','名称','可用V','设计V','供电状态','检查'],irows),
             ('二极管估算',['连接','上游','下游','Vf/V','最大损耗W'],drows),
             ('竞争供电工况',['工况','正常','各端口分配W','选中支路','失电节点'],[(c['name'],c['normal'],json.dumps(c['allocated'],ensure_ascii=False),json.dumps(c['routes'],ensure_ascii=False),'、'.join(c['unavailable'])) for c in review['cases']])]

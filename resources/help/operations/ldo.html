@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>核算 LDO 压差 损耗和结温 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>03  核算 LDO 压差 损耗和结温</h1>
+<p>LDO 采用正电压、共地、单路输出的静态模型。用输入下限和上限分别配轻载与满载，计算四个角点的稳压余量、芯片耗散和结温。</p>
+<p class='entry'>系统画布 → 增加 LDO → 连接上游与负载 → 双击 LDO。</p>
+<h2>操作步骤</h2><ol>
+<li><strong>建立输入范围</strong> 保持“跟随上游输入范围”时，重开单元会同步已连接的上游，包含 OR 二极管后的压降。需固定设计边界时取消勾选，再填写输入下限和上限。</li>
+<li><strong>填写器件和稳压要求</strong> 选固定或可调输出，填写电压、轻载、满载及数据手册条件。未知的推荐范围、额定输出电流与电容要求留空。可调型填基准电压和上分压电阻，软件求下分压电阻。</li>
+<li><strong>设置散热和外围</strong> 按实际环境温度、PCB 条件填写有效结至环境热阻，实际条件核对完成后再勾选相应选项。输入电容、输出电容和 ESR 按工作条件的有效数值填写。</li>
+<li><strong>计算并回存</strong> 点“计算 LDO”。在“检查与降额”核对压差、额定值和结温，在“器件BOM资料”补齐器件身份与电容耐压等资料。使用底部按钮导出，或点“返回系统架构并保存”。</li>
+</ol>
+<figure><a href="screens/ldo.jpg" target="_blank" aria-label="查看原图 LDO 参数与四角点结果"><img src="screens/ldo.jpg" alt="LDO 参数与四角点结果"></a><figcaption>图 3-1　LDO 参数与四角点结果</figcaption><p>左侧滚动填写器件条件，右侧对照压差裕量、芯片功耗与结温。资料状态在检查页查看。</p></figure>
+<h2>输入字段</h2><div class="table"><table><caption>表 3-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">输入下限 / 上限，输出电压</th><td>V</td><td>输入取 LDO 端子处实际电压。输出为标称稳压设定值。</td></tr>
+<tr><th scope="row">最小 / 最大负载，输出精度</th><td>mA、%</td><td>轻载与满载电流。输出精度上限参与最低输入电压的稳压余量检查。</td></tr>
+<tr><th scope="row">最大压差，最大接地静态电流 Iq</th><td>mV、µA</td><td>压差取所用负载及温度下的最坏条件。Iq 为芯片到地电流，参与输入电流和功耗计算。</td></tr>
+<tr><th scope="row">推荐工作输入上下限，额定输出电流</th><td>V、mA</td><td>用于规格校核。可调型额定电流检查包含外部分压电流。</td></tr>
+<tr><th scope="row">最高环境温度，有效结至环境热阻，设计结温上限</th><td>°C、K/W、°C</td><td>用板级有效热阻估算芯片温升，与指定的设计结温上限对照。</td></tr>
+<tr><th scope="row">输入和输出电容，输出 ESR</th><td>µF、mΩ</td><td>填写有效容量及串联电阻。对照手册给出的最小容量或 ESR 区间。</td></tr>
+<tr><th scope="row">可调型基准电压、上分压电阻 R1</th><td>V、kΩ</td><td>决定下分压电阻和分压电流。固定输出时该组隐藏。</td></tr>
+<tr><th scope="row">EN、PG、反向电流保护</th><td>选项</td><td>记录芯片的使能、输出就绪和反灌保护能力。实际引脚条件查所选器件资料。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>低输入满载先看压差裕量。小于零表示当前角点无法维持设定电压，表中对应的结温和效率为未定义。</p>
+<p>高输入满载通常值得重点检查芯片功耗与结温。热阻或额定资料待补时，结论保留待复核。</p>
+<p>外围检查只比较所填的规格边界。设计需要验证噪声、PSRR、瞬态或反灌时，使用针对所选器件的验证方法。</p>
+<div class="paging"><a href="tree.html">上一章　建立供电网络并检查系统预算</a> <a href="needs.html">下一章　填写开关电源的需求与工况</a></div></main>
+</body>
+</html>

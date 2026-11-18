@@ -5,22 +5,34 @@ import multiprocessing
 import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from app_resources import resource_path
 from network_layout import diode_point, scene_bounds
+from project_identity import GITHUB_LABEL, add_github_menu_item, open_github
 
 import system_workspace as model
 from config_io import decode_config
 
-BG, INK, BLUE, MUTED = '#f2f5fa', '#172c46', '#226de0', '#6b7e94'
+BG, INK, BLUE, MUTED = '#f1f5f9', '#102238', '#1469d8', '#526987'
 NAMES = {'FLYBACK': 'CCM 反激', 'QR-FLYBACK': '准谐振反激', 'BUCK': 'Buck 降压',
          'BOOST': 'Boost 升压', 'BUCK-BOOST': '反相升降压', 'ACF-FORWARD': '有源钳位正激'}
+ARCHITECTURE_EXAMPLES = (
+    ('分阶段电源树 · 联合启停', 'SYSTEM_STAGED_STARTUP.json'),
+)
+LOCAL_ARCHITECTURE = 'SYSTEM_PCS_DAB_AUX.json'
 
 
 class SystemWorkspace:
     def __init__(self, root, *, recovery=True):
         self.root, self.use_recovery = root, recovery
         self.project = model.fresh_project()
+        self._project_baseline = None
         self.path, self.selected, self.link, self.drag, self.removal = None, None, None, None, None
         self.calculator = None
+        self._editor = None
+        self._opening_unit = None
+        self._unit_page_states = {}
+        self._unit_detached = set()
+        self._system_simulation_return = None
         self.report_process = None
         self.initialized = False
         self.zoom=1.0
@@ -32,45 +44,96 @@ class SystemWorkspace:
         self._inspector_vars=[]
         self._panning=False
         self._toolbar_layout_job=None
-        root.title('开关电源系统设计 · 自由画布工作区')
+        self._sequence_dialog=None
+        root.title('开关电源设计 · 系统工作台')
         root.geometry(f'{min(1560, root.winfo_screenwidth()-50)}x{min(960, root.winfo_screenheight()-90)}')
-        root.minsize(1080, 700)
+        root.minsize(1000, 600)
         root.configure(bg=BG)
+        from software_architecture_ui import add_architecture_menu
+
+        menubar = tk.Menu(root)
+        filemenu = tk.Menu(menubar, tearoff=False)
+        filemenu.add_command(label='新建工程', command=self.new)
+        filemenu.add_command(label='打开工程 / 原配置', command=self.open_file)
+        filemenu.add_command(label='保存工程', command=self.save, accelerator='Ctrl+S')
+        filemenu.add_command(label='另存为…', command=lambda: self.save(save_as=True))
+        menubar.add_cascade(label='文件', menu=filemenu)
+        add_architecture_menu(menubar, root)
+        examples = tk.Menu(menubar, tearoff=False)
+        alternate = (('本机工程 · 双源辅电', LOCAL_ARCHITECTURE)
+                     if resource_path('examples/' + LOCAL_ARCHITECTURE).is_file()
+                     else ('二极管 OR · 双源辅电', 'SYSTEM_AUX_ORING.json'))
+        for label, filename in (*ARCHITECTURE_EXAMPLES, alternate):
+            examples.add_command(label=label, command=lambda name=filename: self._load_architecture_example(name))
+        menubar.add_cascade(label='架构示例', menu=examples)
+        help_menu = tk.Menu(menubar, tearoff=False)
+        add_github_menu_item(help_menu, root)
+        menubar.add_cascade(label='帮助', menu=help_menu)
+        self._architecture_menu = menubar
+        ldo_menu = self._ldo_menu = tk.Menu(root)
+        ldo_file = tk.Menu(ldo_menu, tearoff=False)
+        ldo_file.add_command(label='保存工程', command=self.save, accelerator='Ctrl+S')
+        ldo_file.add_command(label='另存为…', command=lambda: self.save(save_as=True))
+        ldo_file.add_command(label='导出设计报告…', command=self.export_current_report)
+        ldo_file.add_separator()
+        ldo_file.add_command(label='返回系统架构', command=self.back_to_architecture)
+        ldo_menu.add_cascade(label='文件', menu=ldo_file)
+        add_architecture_menu(ldo_menu, root)
+        ldo_help = tk.Menu(ldo_menu, tearoff=False)
+        add_github_menu_item(ldo_help, root)
+        ldo_menu.add_cascade(label='帮助', menu=ldo_help)
+        root.configure(menu=menubar)
         style = ttk.Style(root)
-        style.theme_use('clam')
+        if style.theme_use() != 'clam':
+            style.theme_use('clam')
         style.configure('System.TFrame', background=BG)
         style.configure('System.TLabel', background=BG, foreground=INK, font=('Microsoft YaHei UI', -14))
-        style.configure('System.TButton', padding=(13, 8), font=('Microsoft YaHei UI', -13),background='white',foreground=INK,bordercolor='#dce5f0',lightcolor='white',darkcolor='#dce5f0',relief='flat')
-        style.map('System.TButton',background=[('active','#eaf1fc')])
-        style.configure('SystemToolbar.TButton', padding=(18,12), font=('Microsoft YaHei UI',-14), background='white',foreground=INK,bordercolor='#dce5f0',lightcolor='white',darkcolor='#dce5f0',relief='flat')
-        style.map('SystemToolbar.TButton',background=[('active','#eaf1fc')])
-        style.configure('SystemPrimary.TButton',padding=(14,8),font=('Microsoft YaHei UI',-13,'bold'),background=BLUE,foreground='white',bordercolor=BLUE)
-        style.map('SystemPrimary.TButton',background=[('active','#185bc3')])
+        for name, padding in [('System.TButton', (12, 7)), ('SystemToolbar.TButton', (12, 8)),
+                              ('SystemMini.TButton', (8, 4))]:
+            style.configure(name, padding=padding, font=('Microsoft YaHei UI', -13),
+                            background='white', foreground=INK, bordercolor='#cedbea',
+                            lightcolor='white', darkcolor='white', relief='flat')
+            style.map(name, background=[('active', '#e7f0ff')],
+                      bordercolor=[('focus', BLUE), ('active', '#9bbdeb')])
+        style.configure('SystemPrimary.TButton', padding=(12, 8), font=('Microsoft YaHei UI', -13, 'bold'),
+                        background=BLUE, foreground='white', bordercolor=BLUE,
+                        lightcolor=BLUE, darkcolor=BLUE, relief='flat')
+        style.map('SystemPrimary.TButton', background=[('disabled', '#e6eef8'), ('active', '#0c53b5')],
+                  foreground=[('disabled', MUTED)], bordercolor=[('disabled', '#e6eef8'), ('focus', '#82b7fc')])
         style.configure('SystemCard.TFrame',background='white')
         style.configure('System.TEntry',padding=7,fieldbackground='white',bordercolor='#d8e3ef',font=('Microsoft YaHei UI',-14))
-        style.configure('SystemMini.TButton',padding=(9,5),font=('Microsoft YaHei UI',-12),background='white',foreground=INK,bordercolor='#dce5f0')
         style.configure('System.TCheckbutton',background='white',foreground=INK,font=('Microsoft YaHei UI',-13))
         style.configure('System.TCombobox',padding=7,fieldbackground='white',bordercolor='#d8e3ef')
-        head = tk.Frame(root, bg='#10243b', padx=24, pady=15)
-        head.pack(fill='x')
-        brand=tk.Frame(head,bg='#10243b');brand.pack(side='left')
-        tk.Label(brand,text='POWER DESIGN  /  SYSTEM STUDIO',bg='#10243b',fg='#67bdcf',font=('Segoe UI',-10,'bold')).pack(anchor='w')
-        tk.Label(brand, text='辅源架构设计工作区', bg='#10243b', fg='white', font=('Microsoft YaHei UI', -26, 'bold')).pack(anchor='w')
-        tk.Label(head, text='01  架构配置     02  单元设计     03  工程交付', bg='#10243b', fg='#a9c2da', font=('Microsoft YaHei UI', -13)).pack(side='right')
-        bar = ttk.Frame(root, style='System.TFrame', padding=(18, 12))
+        self._build_workbench_header()
+        self._views = ttk.Frame(root, style='System.TFrame')
+        self._views.pack(fill='both', expand=True)
+        self._views.columnconfigure(0, weight=1)
+        self._views.rowconfigure(0, weight=1)
+        self._architecture = ttk.Frame(self._views, style='System.TFrame')
+        self._architecture.grid(row=0, column=0, sticky='nsew')
+        self._opening_view = ttk.Frame(self._views, style='System.TFrame', padding=24)
+        ttk.Label(self._opening_view, text='正在打开电源设计…', style='System.TLabel').place(relx=.5, rely=.43, anchor='center')
+        bar = ttk.Frame(self._architecture, style='System.TFrame', padding=(20, 12, 20, 6))
         bar.pack(fill='x')
-        filebar=ttk.Frame(bar,style='System.TFrame');filebar.grid(row=0,column=0,sticky='w')
-        for i,(text, command) in enumerate([('新建工程', self.new), ('打开工程 / 原配置', self.open_file), ('保存系统工程', self.save)]):
-            filebar.columnconfigure(i,weight=1,uniform='project-actions')
-            ttk.Button(filebar, text=text, command=command, style='SystemToolbar.TButton').grid(row=0,column=i,sticky='ew',padx=(0,10))
+        filebar = ttk.Frame(bar, style='System.TFrame')
+        filebar.grid(row=0, column=0, sticky='w')
+        for i, (text, command) in enumerate([('新建工程', self.new), ('打开工程 / 原配置', self.open_file),
+                                             ('查看系统预算', self.show_checks)]):
+            ttk.Button(filebar, text=text, command=command, style='SystemToolbar.TButton').grid(
+                row=0, column=i, sticky='ew', padx=(0, 8))
         self.metrics=tk.StringVar(value='本机工作区 · 架构编辑不触发电气求解')
-        utilities=ttk.Frame(bar,style='System.TFrame');utilities.grid(row=0,column=1,sticky='e')
-        ttk.Label(utilities, textvariable=self.metrics, style='System.TLabel').pack(anchor='e')
-        from ui_preferences import font_control
-        self._font_choice=font_control(utilities,self.choose_font)
+        utilities = ttk.Frame(bar, style='System.TFrame')
+        utilities.grid(row=0, column=1, sticky='e')
+        self.title = tk.StringVar(value=self.project['title'])
+        ttk.Label(utilities, text='工程名称', style='System.TLabel').pack(side='left', padx=(0, 8))
+        entry = ttk.Entry(utilities, textvariable=self.title, width=23, style='System.TEntry',
+                          font=('Microsoft YaHei UI', -14))
+        entry.pack(side='left', fill='x', expand=True)
+        entry.bind('<FocusOut>', lambda e: self.rename_project())
+        entry.bind('<Return>', lambda e: self.rename_project())
         self._projectbar=bar;self._project_filebar=filebar;self._project_utilities=utilities;self._project_toolbar_rows=None
         bar.columnconfigure(0,weight=1);bar.bind('<Configure>',self.layout_project_toolbar)
-        nodebar = ttk.Frame(root, style='System.TFrame', padding=(18, 0, 18, 12))
+        nodebar = ttk.Frame(self._architecture, style='System.TFrame', padding=(20, 0, 20, 10))
         nodebar.pack(fill='x')
         self._nodebar=nodebar;self._node_buttons=[];self._node_columns=0
         for text, command in [('增加输入源', self.add_bus), ('增加电源模块', self.add_unit),
@@ -80,23 +143,18 @@ class SystemWorkspace:
             self._node_buttons.append(ttk.Button(nodebar, text=text, command=command, style='SystemToolbar.TButton'))
         nodebar.bind('<Configure>',self.layout_node_toolbar)
         self.layout_node_toolbar()
-        self.title = tk.StringVar(value=self.project['title'])
-        titlebar = ttk.Frame(root, style='System.TFrame', padding=(24, 0, 24, 10))
-        titlebar.pack(fill='x')
-        ttk.Label(titlebar, text='工程名称', style='System.TLabel').pack(side='left')
-        entry = ttk.Entry(titlebar, textvariable=self.title, width=37,style='System.TEntry', font=('Microsoft YaHei UI', -14))
-        entry.pack(side='left', padx=10)
-        entry.bind('<FocusOut>', lambda e: self.rename_project())
-        entry.bind('<Return>', lambda e: self.rename_project())
-        self.report_button = ttk.Button(titlebar, text='生成系统报告包', command=self.export_report, style='SystemPrimary.TButton')
-        self.report_button.pack(side='right', padx=8)
-        ttk.Button(titlebar,text='查看系统预算',command=self.show_checks,style='System.TButton').pack(side='right',padx=8)
-        split = ttk.Panedwindow(root, orient='horizontal')
+        split = ttk.Panedwindow(self._architecture, orient='horizontal')
         split.pack(fill='both', expand=True, padx=22)
         board = ttk.Frame(split,style='SystemCard.TFrame')
         split.add(board, weight=4)
-        tools=tk.Frame(board,bg='white',padx=12,pady=10);tools.grid(row=0,column=0,columnspan=2,sticky='ew')
-        tk.Label(tools,text='供电网络画布',bg='white',fg=INK,font=('Microsoft YaHei UI',-15,'bold')).pack(side='left')
+        tools = tk.Frame(board, bg='white', padx=14, pady=10)
+        tools.grid(row=0, column=0, columnspan=2, sticky='ew')
+        board_title = tk.Frame(tools, bg='white')
+        board_title.pack(side='left', fill='x', expand=True)
+        tk.Label(board_title, text='供电网络', bg='white', fg=INK, font=('Microsoft YaHei UI', -16, 'bold'),
+                 anchor='w').pack(fill='x')
+        tk.Label(board_title, textvariable=self.metrics, bg='white', fg=MUTED, font=('Microsoft YaHei UI', -12),
+                 anchor='w').pack(fill='x')
         for text,command in [('适应画布',self.fit_canvas),('＋',lambda:self.set_zoom(self.zoom*1.2)),('－',lambda:self.set_zoom(self.zoom/1.2))]:
             ttk.Button(tools,text=text,command=command,style='SystemMini.TButton').pack(side='right',padx=3)
         self.zoom_text=tk.StringVar(value='100%')
@@ -112,22 +170,31 @@ class SystemWorkspace:
         board.columnconfigure(0, weight=1)
         side = ttk.Frame(split, width=340,style='SystemCard.TFrame')
         split.add(side, weight=1)
-        tk.Label(side,text='属性检查器',bg='white',fg=INK,font=('Microsoft YaHei UI',-16,'bold'),anchor='w',padx=18,pady=15).pack(fill='x')
+        tk.Label(side,text='属性检查器',bg='white',fg=INK,font=('Microsoft YaHei UI',-16,'bold'),anchor='w',padx=16,pady=12).pack(fill='x')
+        ttk.Separator(side).pack(fill='x')
         footer=ttk.Frame(side,style='SystemCard.TFrame',padding=12);footer.pack(side='bottom',fill='x')
         self.edit_state=tk.StringVar(value='选择节点或支路后编辑')
         self.inspector_save=ttk.Button(footer,text='保存节点修改',style='SystemPrimary.TButton',command=self.save_inspector,state='disabled')
         self.inspector_save.pack(fill='x')
-        ttk.Label(footer,textvariable=self.edit_state,wraplength=290,font=('Microsoft YaHei UI',-12),background='white',foreground=MUTED).pack(fill='x',pady=(8,0))
+        edit_hint = ttk.Label(footer, textvariable=self.edit_state, font=('Microsoft YaHei UI', -12),
+                              background='white', foreground=MUTED)
+        edit_hint.pack(fill='x', pady=(8, 0))
+        footer.bind('<Configure>', lambda event: edit_hint.configure(wraplength=max(100, event.width-24)))
         scroll = tk.Canvas(side, highlightthickness=0, bg='white', width=320)
         self.inspector_scroll=scroll
         vs = ttk.Scrollbar(side, orient='vertical', command=scroll.yview)
         scroll.configure(yscrollcommand=vs.set)
         vs.pack(side='right', fill='y')
         scroll.pack(side='left', fill='both', expand=True)
-        self.inspector = ttk.Frame(scroll, padding=18,style='SystemCard.TFrame')
+        self.inspector = ttk.Frame(scroll, padding=(16, 12), style='SystemCard.TFrame')
         inner = scroll.create_window((0, 0), window=self.inspector, anchor='nw')
         self.inspector.bind('<Configure>', lambda e: scroll.configure(scrollregion=scroll.bbox('all')))
-        scroll.bind('<Configure>', lambda e: scroll.itemconfigure(inner, width=e.width))
+        def resize_inspector(event):
+            scroll.itemconfigure(inner, width=event.width)
+            for child in self.inspector.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.configure(wraplength=max(120, event.width-32))
+        scroll.bind('<Configure>', resize_inspector)
         self.canvas.bind('<ButtonPress-1>', self.press)
         self.canvas.bind('<B1-Motion>', self.motion)
         self.canvas.bind('<ButtonRelease-1>', self.release)
@@ -140,19 +207,107 @@ class SystemWorkspace:
         self.canvas.bind('<ButtonRelease-2>',self.end_pan)
         self.canvas.bind('<Motion>',self.hover)
         self.status = tk.StringVar(value='正在准备架构…')
-        ttk.Label(root, textvariable=self.status, style='System.TLabel', padding=(24, 9)).pack(fill='x')
+        ttk.Label(self._architecture, textvariable=self.status, style='System.TLabel', padding=(24, 9)).pack(fill='x')
         root.protocol('WM_DELETE_WINDOW', self.close)
-        root.bind('<Control-Return>',lambda e:self.save_inspector())
+        root.bind('<Control-Return>', lambda _event: self.save_inspector() if not self.calculator else None)
+        root.bind('<Control-s>', lambda _event: self.save())
+        root.bind('<Control-o>', lambda _event: self.open_current_config())
+        root.bind('<Control-e>', lambda _event: self.export_current_report())
         root.bind('<Destroy>',self.cancel_toolbar_layout,add='+')
         root.after(30, self.initialize)
+
+    def _build_workbench_header(self):
+        from ui_preferences import font_control, font_size
+
+        style = ttk.Style(self.root)
+        style.configure('Workbench.TFrame', background=INK)
+        style.configure('WorkbenchTitle.TLabel', background=INK, foreground='white')
+        style.configure('WorkbenchMeta.TLabel', background=INK, foreground='#b5c8df')
+        style.configure('Workbench.TButton', background='#203952', foreground='white',
+                        bordercolor='#35536f', lightcolor='#203952', darkcolor='#203952', padding=(10, 6))
+        style.map('Workbench.TButton', background=[('active', '#2d4d6d')])
+        style.configure('WorkbenchLink.TButton', background=INK, foreground='#b5d5f8',
+                        bordercolor=INK, lightcolor=INK, darkcolor=INK, padding=(9, 6))
+        style.map('WorkbenchLink.TButton', background=[('active', '#203952')], foreground=[('active', 'white')])
+        for name in ('WorkbenchPrimary.TButton', 'Workbench.TMenubutton'):
+            style.configure(name, background=BLUE, foreground='white', bordercolor=BLUE,
+                            lightcolor=BLUE, darkcolor=BLUE, padding=(11, 6))
+            style.map(name, background=[('active', '#0e58b7')])
+
+        head = self._header = ttk.Frame(self.root, style='Workbench.TFrame', padding=(18, 10))
+        head.pack(fill='x')
+        head.columnconfigure(0, weight=1)
+        location = self._header_location = ttk.Frame(head, style='Workbench.TFrame')
+        location.grid(row=0, column=0, sticky='ew')
+        self._back_button = ttk.Button(location, text='← 系统架构', style='Workbench.TButton',
+                                       command=self.back_to_architecture)
+        labels = ttk.Frame(location, style='Workbench.TFrame')
+        labels.pack(side='left', fill='x', expand=True)
+        self._context_title = tk.StringVar(value='系统架构')
+        self._save_state = tk.StringVar(value='开关电源设计工作台')
+        self._header_title = ttk.Label(labels, textvariable=self._context_title, style='WorkbenchTitle.TLabel')
+        self._header_title.pack(anchor='w', fill='x')
+        self._header_status = ttk.Label(labels, textvariable=self._save_state, style='WorkbenchMeta.TLabel')
+        self._header_status.pack(anchor='w', fill='x', pady=(2, 0))
+
+        actions = self._header_actions = ttk.Frame(head, style='Workbench.TFrame')
+        actions.grid(row=0, column=1, sticky='e')
+        self._header_stacked = False
+        self.report_button = ttk.Button(actions, text='导出系统报告', command=self.export_report,
+                                        style='WorkbenchPrimary.TButton')
+        self.report_button.grid(row=0, column=4, sticky='ew')
+        self._unit_report_button = ttk.Menubutton(actions, text='导出报告', style='Workbench.TMenubutton')
+        self._simulation_button = ttk.Button(actions, text='仿真配置', style='Workbench.TButton',
+                                             command=self.open_current_simulation)
+        self._simulation_button.grid(row=0, column=3, padx=(0, 8), sticky='ew')
+        self._calculate_button = ttk.Button(actions, text='重新计算', style='Workbench.TButton',
+                                            command=self.calculate_current)
+        ttk.Button(actions, text='保存工程', style='Workbench.TButton', command=self.save).grid(
+            row=0, column=1, padx=(0, 8), sticky='ew')
+        font_slot = ttk.Frame(actions, style='Workbench.TFrame')
+        font_slot.grid(row=0, column=0)
+        self._font_choice = font_control(font_slot, self.choose_font, style='Workbench')
+        self._github_button = ttk.Button(actions, text=GITHUB_LABEL, style='WorkbenchLink.TButton',
+                                         command=lambda: open_github(self.root))
+        self._github_button.grid(row=0, column=5, padx=(8, 0), sticky='ew')
+        self._style_workbench_font(font_size())
+        head.bind('<Configure>', self._layout_workbench_header)
+        location.bind('<Configure>', self._wrap_workbench_location)
+
+    def _style_workbench_font(self, value):
+        style = ttk.Style(self.root)
+        size = min(value, 22)
+        family = 'Microsoft YaHei UI'
+        style.configure('WorkbenchTitle.TLabel', font=(family, -min(value + 5, 28), 'bold'))
+        style.configure('WorkbenchMeta.TLabel', font=(family, -size))
+        for name in ('Workbench.TButton', 'WorkbenchPrimary.TButton', 'Workbench.TMenubutton'):
+            style.configure(name, font=(family, -size, 'bold'))
+        style.configure('WorkbenchLink.TButton', font=(family, -min(size, 17)))
+
+    def _wrap_workbench_location(self, event):
+        back_width = self._back_button.winfo_reqwidth() + 12 if self._back_button.winfo_manager() else 0
+        wrap = max(130, event.width - back_width - 12)
+        self._header_title.configure(wraplength=wrap)
+        self._header_status.configure(wraplength=wrap)
+
+    def _layout_workbench_header(self, _event=None):
+        stacked = self._header_actions.winfo_reqwidth() + 400 > self._header.winfo_width()
+        if stacked == self._header_stacked:
+            return
+        self._header_stacked = stacked
+        self._header_location.grid_configure(columnspan=2 if stacked else 1)
+        self._header_actions.grid_configure(row=int(stacked), column=0 if stacked else 1,
+                                            columnspan=2 if stacked else 1, pady=(7, 0) if stacked else 0)
 
     def initialize(self):
         if self.initialized:
             return
         self.initialized = True
+        restored = False
         try:
             if self.use_recovery and model.recovery_path().is_file():
                 self.project = model.load_project(model.recovery_path())
+                restored = True
                 self.status.set('已恢复上次系统工程。保存系统工程可生成独立 JSON 文件。')
             else:
                 self.project = model.normalize_project(self.project)
@@ -162,9 +317,16 @@ class SystemWorkspace:
             self.status.set('上次工程未能恢复，已显示默认示例：' + str(error))
         self.title.set(self.project['title'])
         self.render()
+        from ui_preferences import apply_studio_fonts
+        apply_studio_fonts(self._architecture, int(self._font_choice.get()))
+        if not restored:
+            self._project_baseline = copy.deepcopy(self.project)
         self.root.after_idle(self.fit_canvas)
 
     def changed(self, note='架构已更新；各模块计算参数独立保存。'):
+        if self._opening_unit is None:
+            self._save_state.set('已应用到当前工程 · 待保存文件' if self.project != self._project_baseline
+                                 else '系统工程')
         if self.use_recovery:
             try:
                 model.save_project(self.project, model.recovery_path())
@@ -174,8 +336,9 @@ class SystemWorkspace:
         self.status.set(note)
 
     def rename_project(self):
-        if self.title.get().strip():
-            self.project['title'] = self.title.get().strip()[:120]
+        title = self.title.get().strip()[:120]
+        if title and title != self.project['title']:
+            self.project['title'] = title
             self.changed()
 
     def render(self):
@@ -203,8 +366,15 @@ class SystemWorkspace:
         draw_network(self)
 
     def choose_font(self,value):
-        from ui_preferences import save_font_size,apply_studio_fonts
-        value=save_font_size(value);self._font_choice.set(str(value));apply_studio_fonts(self.root,value)
+        from ui_preferences import apply_studio_fonts, save_font_size
+        value = save_font_size(value)
+        self._font_choice.set(str(value))
+        self._style_workbench_font(value)
+        apply_studio_fonts(self._architecture, value)
+        self._layout_workbench_header()
+        if self.calculator is not None:
+            self.calculator.set_font_size(value)
+            self._editor['font_size'] = value
         if self._toolbar_layout_job:self.root.after_cancel(self._toolbar_layout_job)
         def layout():
             self._toolbar_layout_job=None
@@ -214,20 +384,21 @@ class SystemWorkspace:
 
     def layout_node_toolbar(self,event=None):
         minimum=max(140,max(b.winfo_reqwidth() for b in self._node_buttons))
-        columns=next((n for n in (7,5,3,2) if self._nodebar.winfo_width()>=n*(minimum+10)+36),1)
+        columns=next((n for n in (len(self._node_buttons),4,3,2) if self._nodebar.winfo_width()>=n*(minimum+8)+40),1)
         if columns==self._node_columns:return
         self._node_columns=columns
-        for column in range(7):self._nodebar.columnconfigure(column,weight=1 if column<columns else 0,minsize=0,uniform='node-actions' if column<columns else '')
-        for i,button in enumerate(self._node_buttons):button.grid(row=i//columns,column=i%columns,sticky='ew',padx=5,pady=5)
+        for column in range(len(self._node_buttons)):self._nodebar.columnconfigure(column,weight=1 if column<columns else 0,minsize=0,uniform='node-actions' if column<columns else '')
+        for i,button in enumerate(self._node_buttons):button.grid(row=i//columns,column=i%columns,sticky='ew',padx=(0,8) if i%columns<columns-1 else 0,pady=4)
 
     def layout_project_toolbar(self,event=None):
         width=self._projectbar.winfo_width()
         if width<100:return
-        split=self._project_filebar.winfo_reqwidth()+self._project_utilities.winfo_reqwidth()+50>width
+        split=self._project_filebar.winfo_reqwidth()+self._project_utilities.winfo_reqwidth()+40>width
         if split==self._project_toolbar_rows:return
         self._project_toolbar_rows=split
         self._project_filebar.grid(columnspan=2 if split else 1,sticky='ew' if split else 'w')
-        self._project_utilities.grid(row=1 if split else 0,column=0 if split else 1,columnspan=2 if split else 1,sticky='e',pady=(8,0) if split else 0)
+        self._project_utilities.grid(row=1 if split else 0,column=0 if split else 1,columnspan=2 if split else 1,
+                                     sticky='ew' if split else 'e',pady=(8,0) if split else 0)
 
     def cancel_toolbar_layout(self,event):
         if event.widget is self.root and self._toolbar_layout_job:
@@ -325,7 +496,7 @@ class SystemWorkspace:
             self.selected = tuple(identity.split(':', 1))
             self.delete_selected()
         elif kind == 'open':
-            self.open_unit(identity)
+            self.schedule_open_unit(identity)
         elif kind == 'output':
             self.link = identity
             self.status.set('点击或拖到目标模块的 IN 端口；Esc 取消连线。')
@@ -380,7 +551,7 @@ class SystemWorkspace:
         hit = self.hit(e)
         if hit and hit[0] == 'unit':
             self.drag = None
-            self.open_unit(hit[1])
+            self.schedule_open_unit(hit[1])
         else:
             # Tk replaces the single-press binding on the second click. Keep
             # non-calculator objects draggable even after a rapid double-click.
@@ -403,30 +574,60 @@ class SystemWorkspace:
     def show_inspector(self):
         self._edit_dirty=False;self._commit_edit=None;self._inspector_vars=[]
         self.inspector_save.configure(state='disabled',text='保存支路修改' if self.selected and self.selected[0]=='edge' else '保存节点修改')
-        self.edit_state.set('已保存到当前工程；顶部“保存系统工程”导出 JSON。' if self.selected else '选择节点或支路后编辑')
+        self.edit_state.set('已应用到当前工程。使用顶部“保存工程”写入文件。' if self.selected else '选择节点或支路后编辑')
         for w in self.inspector.winfo_children():
             w.destroy()
-        def label(text):
-            tk.Label(self.inspector, text=text, bg='white',fg=INK,wraplength=280,justify='left', font=('Microsoft YaHei UI', -13)).pack(anchor='w', pady=(0, 10))
+        def label(text, *, heading=False):
+            tk.Label(self.inspector, text=text, bg='white', fg=INK if heading else MUTED,
+                     wraplength=max(120, self.inspector_scroll.winfo_width()-32), justify='left',
+                     anchor='w', font=('Microsoft YaHei UI', -15 if heading else -13, 'bold' if heading else 'normal')).pack(
+                         fill='x', pady=(0, 10))
+
+        def make_form():
+            form = ttk.Frame(self.inspector, style='SystemCard.TFrame')
+            form.columnconfigure(0, weight=2, uniform='field')
+            form.columnconfigure(1, weight=3, uniform='field')
+            form.pack(fill='x', pady=(0, 6))
+            labels = []
+            def resize(event):
+                for item in labels:
+                    item.configure(wraplength=max(64, int((event.width-30)*.37)))
+            form.bind('<Configure>', resize)
+            return form, labels
+
+        def field(form, labels, row, text, variable, unit='', *, choices=None):
+            title = tk.Label(form, text=text, bg='white', fg=INK, justify='left', anchor='w',
+                             wraplength=108, font=('Microsoft YaHei UI', -13))
+            title.grid(row=row, column=0, sticky='ew', padx=(0, 8), pady=4)
+            labels.append(title)
+            if choices:
+                control = ttk.Combobox(form, textvariable=variable, values=choices, state='readonly',
+                                       width=8, style='System.TCombobox', font=('Microsoft YaHei UI', -14))
+            else:
+                control = ttk.Entry(form, textvariable=variable, width=8, style='System.TEntry',
+                                    font=('Microsoft YaHei UI', -14))
+            control.grid(row=row, column=1, columnspan=1 if unit else 2, sticky='ew', pady=4)
+            if unit:
+                tk.Label(form, text=unit, bg='white', fg=MUTED, font=('Segoe UI', -13)).grid(
+                    row=row, column=2, sticky='w', padx=(8, 0))
+
         self.inspector_scroll.yview_moveto(0)
         if not self.selected:
-            label('选择对象，编辑设计属性')
-            label('输入源、电源模块、OR 汇流节点、负载均可从卡片标题或空白区域拖动。')
-            label('竞争二极管也可独立拖动。连线自动跟随，位置随工程保存。')
-            label('从输出端口拖到输入端口建立供电关系；双击电源模块进入详细计算。')
+            label('选择节点或支路', heading=True)
+            label('拖动卡片调整位置，从输出端口拖到输入端口建立供电关系。')
+            label('双击电源模块进入设计。')
         if self.selected:
             kind, identity = self.selected
             if kind == 'edge':
                 edge = next(e for e in self.project['connections'] if e['id']==identity)
-                label(identity + ' · 供电支路')
-                if edge['mode']=='diode':label('抓住画布中的二极管卡片，可自由调整位置。')
+                label(identity + ' · 供电支路', heading=True)
                 label(f"{edge['source']['id']} / OUT{edge['source']['output']} → {edge['target']}")
                 mode=tk.StringVar(value='二极管隔离 / OR' if edge['mode']=='diode' else '直连')
                 vf=tk.StringVar(value=str(edge['vf']))
                 enabled=tk.BooleanVar(value=edge['enabled'])
-                ttk.Combobox(self.inspector,textvariable=mode,values=['直连','二极管隔离 / OR'],state='readonly').pack(fill='x',pady=8)
-                label('二极管压降 Vf / V')
-                ttk.Entry(self.inspector,textvariable=vf).pack(fill='x',pady=6)
+                form, labels = make_form()
+                field(form, labels, 0, '支路类型', mode, choices=['直连', '二极管隔离 / OR'])
+                field(form, labels, 1, '二极管压降 Vf', vf, 'V')
                 ttk.Checkbutton(self.inspector,text='启用此供电支路',variable=enabled).pack(anchor='w',pady=8)
                 def apply_edge():
                     try:
@@ -450,18 +651,22 @@ class SystemWorkspace:
             else:
                 item = next((n for n in self.project[model.COLLECTIONS[kind]] if n['id'] == identity), None)
                 if item:
-                    label(identity + ' · 节点配置')
-                    fields = [('name', '名称')] + ([('min', '最小电压 / V'), ('max', '最大电压 / V'), ('capacity', '输入容量 / W')] if kind == 'bus' else [])
+                    label(identity + ' · 节点配置', heading=True)
+                    fields = [('name', '名称', '')]
+                    if kind == 'bus':
+                        fields += [('min', '最小电压', 'V'), ('max', '最大电压', 'V'), ('capacity', '输入容量', 'W')]
                     if kind=='load':
-                        fields += [('power','负载功耗 / W'),('min','允许输入下限 / V（0=不限）'),('max','允许输入上限 / V（0=不限）')]
+                        fields += [('power', '负载功耗', 'W'), ('min', '允许输入下限', 'V'), ('max', '允许输入上限', 'V')]
                     elif kind=='junction':
-                        fields += [('capacity','OR 母线容量 / W')]
+                        fields += [('capacity', 'OR 母线容量', 'W')]
                     variables = {}
-                    for key, text in fields:
-                        label(text)
+                    form, labels = make_form()
+                    for row, (key, text, unit) in enumerate(fields):
                         v = tk.StringVar(value=str(item[key]))
-                        ttk.Entry(self.inspector, textvariable=v,style='System.TEntry', font=('Microsoft YaHei UI', -14)).pack(fill='x', pady=(0, 10))
+                        field(form, labels, row, text, v, unit)
                         variables[key] = v
+                    if kind == 'load':
+                        label('输入上下限为 0 时，表示该项不限。')
                     enabled=tk.BooleanVar(value=item['enabled'])
                     ttk.Checkbutton(self.inspector,text='启用节点（取消可模拟掉电）',variable=enabled).pack(anchor='w',pady=8)
                     def apply():
@@ -506,7 +711,8 @@ class SystemWorkspace:
                             ttk.Button(self.inspector,text=text+' · 编辑',command=edit_branch).pack(fill='x',pady=4)
                     if kind == 'unit':
                         ttk.Button(self.inspector, text='沿用上游电压', command=lambda: self.sync(identity)).pack(fill='x', pady=6)
-                        ttk.Button(self.inspector, text='进入完整设计 →', command=lambda: self.open_unit(identity)).pack(fill='x', pady=6)
+                        ttk.Button(self.inspector, text='进入电源设计 →', style='SystemPrimary.TButton',
+                                   command=lambda: self.schedule_open_unit(identity)).pack(fill='x', pady=6)
                     ttk.Button(self.inspector, text='删除节点', command=self.delete_selected).pack(fill='x', pady=6)
         ttk.Separator(self.inspector).pack(fill='x',pady=15)
         try:
@@ -518,14 +724,13 @@ class SystemWorkspace:
             label('检查未完成：' + str(error))
         ttk.Button(self.inspector,text='查看完整系统检查',command=self.show_checks,style='System.TButton').pack(fill='x',pady=6)
         for widget in self.inspector.winfo_children():
-            if isinstance(widget,ttk.Button):widget.configure(style='System.TButton')
+            if isinstance(widget,ttk.Button) and not widget.cget('style'):widget.configure(style='System.TButton')
             elif isinstance(widget,ttk.Combobox):widget.configure(style='System.TCombobox',font=('Microsoft YaHei UI',-14))
             elif isinstance(widget,ttk.Entry):widget.configure(style='System.TEntry',font=('Microsoft YaHei UI',-14))
             elif isinstance(widget,ttk.Checkbutton):widget.configure(style='System.TCheckbutton')
         for variable in self._inspector_vars:variable.trace_add('write',self.mark_edit_dirty)
         from ui_preferences import apply_studio_fonts,font_size
-        self._font_choice.set(str(font_size()))
-        apply_studio_fonts(self.root,font_size())
+        apply_studio_fonts(self.inspector, font_size())
 
     def show_checks(self):
         try:check=model.checks(self.project)
@@ -579,9 +784,7 @@ class SystemWorkspace:
         self.project=model.normalize_project(self.project);self.selected=('unit',identity);self.changed('LDO 已增加，连接上游后进入专用线性稳压设计。');self.render()
 
     def load_ldo_example(self):
-        self._geometry_origin=None
-        from app_resources import resource_path
-        self.project=model.load_project(resource_path('examples/SYSTEM_LDO.json'));self.selected=None;self.changed('已载入通用 LDO 示例，型号及额定资料待核对。');self.render();self.fit_canvas()
+        self._load_architecture_example('SYSTEM_LDO.json')
 
     def add_node(self,kind):
         collection=model.COLLECTIONS[kind]
@@ -626,21 +829,42 @@ class SystemWorkspace:
         self.render()
 
     def new(self):
+        self._reset_unit_views()
         self._geometry_origin=None
         self.project = model.normalize_project(model.fresh_project())
         self.title.set(self.project['title'])
         self.path, self.selected, self.removal = None, None, None
         self.changed('已创建新系统工程。上次编辑保留在手动保存的 JSON 中。')
         self.render()
+        self._project_baseline = copy.deepcopy(self.project)
 
     def load_example(self):
-        self._geometry_origin=None
-        from pathlib import Path
-        self.project=model.load_project(Path(__file__).parent/'examples/SYSTEM_AUX_ORING.json')
+        self._load_architecture_example('SYSTEM_AUX_ORING.json')
+
+    def _load_architecture_example(self, filename):
+        try:
+            candidate = model.load_project(resource_path('examples/' + filename))
+        except (OSError, ValueError) as error:
+            messagebox.showerror('载入架构示例', str(error), parent=self.root)
+            return
+        if not self.save_inspector():
+            return
+        title = self.title.get().strip()[:120]
+        if title and title != self.project['title']:
+            self.rename_project()
+        if self.project != self._project_baseline:
+            choice = messagebox.askyesnocancel('切换架构示例', '切换前是否保存当前系统工程？', parent=self.root)
+            if choice is None or (choice and not self.save()):
+                return
+        self._reset_unit_views()
+        self._geometry_origin = None
+        self.project = candidate
         self.title.set(self.project['title'])
-        self.path,self.selected,self.removal=None,None,None
-        self.changed('已载入双源 OR 供电、控制电源和三组负载示例。')
+        self.path = self.selected = self.removal = self.link = self.drag = None
+        self._drag_dirty = False
         self.render()
+        self._project_baseline = copy.deepcopy(self.project)
+        self.changed(f"已载入架构示例 · {self.project['title']}")
         self.root.after_idle(self.fit_canvas)
 
     def open_file(self):
@@ -651,7 +875,9 @@ class SystemWorkspace:
             from pathlib import Path
             source=Path(path).read_bytes()
             raw=json.loads(source.decode('utf-8-sig'))
-            self.project = model.load_project_data(raw)
+            candidate = model.load_project_data(raw)
+            self._reset_unit_views()
+            self.project = candidate
             self._geometry_origin=None
             if not raw.get('schema_version') and not raw.get('schema') and len(self.project['units'])==1:
                 self._geometry_origin=(self.project,self.project['units'][0]['id'],(Path(path).name,source))
@@ -660,72 +886,284 @@ class SystemWorkspace:
             self.selected, self.removal = None, None
             self.changed('工程已打开。原电源 JSON 作为一个独立电源模块导入。')
             self.render()
+            self._project_baseline = copy.deepcopy(self.project)
+            self._save_state.set('已打开工程文件' if self.path else '已导入配置 · 待保存工程')
         except Exception as error:
             messagebox.showerror('打开工程', str(error), parent=self.root)
 
-    def save(self):
-        if not self.save_inspector():return
+    def save(self, *, save_as=False):
+        if self.calculator is not None and not self._apply_unit_config(self.calculator):
+            return False
+        if not self.save_inspector():
+            return False
         self.rename_project()
-        path = filedialog.asksaveasfilename(parent=self.root, title='保存完整系统工程', initialfile=self.project['title'] + '.json', defaultextension='.json', filetypes=[('JSON', '*.json')])
+        path = self.path
+        if not path or save_as:
+            path = filedialog.asksaveasfilename(parent=self.root, title='保存完整系统工程',
+                initialfile=self.project['title'] + '.json', defaultextension='.json', filetypes=[('JSON', '*.json')])
         if path:
             try:
                 model.save_project(self.project, path)
                 self.path = path
+                self._project_baseline = copy.deepcopy(self.project)
+                self._save_state.set('已保存到工程文件')
                 self.status.set('系统工程已保存：' + path)
+                return True
             except Exception as error:
                 messagebox.showerror('保存工程', str(error), parent=self.root)
+        return False
+
+    def schedule_open_unit(self, identity):
+        if self._opening_unit is not None or self.calculator is not None:
+            return
+        if self.report_process and self.report_process.is_alive():
+            self.status.set('系统报告正在生成。完成后即可进入单元设计。')
+            return
+        if not self.save_inspector():
+            return
+        project = self.project
+        self._save_state.set('正在打开电源设计…')
+        if self._editor is None or self._editor['id'] != identity:
+            self._opening_view.grid(row=0, column=0, sticky='nsew')
+            self._opening_view.tkraise()
+
+        def open_after_redraw():
+            self._opening_unit = None
+            try:
+                if self.project is project:
+                    self.open_unit(identity)
+                if self.calculator is None:
+                    self._save_state.set('系统工程')
+            finally:
+                self._opening_view.grid_remove()
+
+        self._opening_unit = self.root.after(24, open_after_redraw)
 
     def open_unit(self, identity):
-        if not self.save_inspector():return
-        if self.calculator or (self.report_process and self.report_process.is_alive()):
-            return
+        if self._opening_unit is not None or self.calculator is not None:
+            return None
+        if self.report_process and self.report_process.is_alive():
+            self.status.set('系统报告正在生成。完成后即可进入单元设计。')
+            return None
+        if not self.save_inspector():
+            return None
         self.root.configure(cursor='watch')
-        self.root.update_idletasks()
-        window = None
+        container = None
         try:
             unit = model.prepare_unit(self.project, identity)
             from ldo import is_ldo
-            if is_ldo(unit['spec']):
-                from ldo_ui import LdoDesigner as Designer
+            size = int(self._font_choice.get())
+            if self._editor and self._editor['id'] == identity and self._editor['spec'] == unit['spec']:
+                app = self._editor['app']
+                container = app.container
+                if self._editor['font_size'] != size:
+                    app.set_font_size(size)
+                    self._editor['font_size'] = size
             else:
-                from main import PowerSupplyAnalyzer as Designer
+                self._release_editor()
+                container = ttk.Frame(self._views, style='System.TFrame')
+                if is_ldo(unit['spec']):
+                    from ldo_ui import LdoDesigner as Designer
+                else:
+                    from main import PowerSupplyAnalyzer as Designer
+                app = Designer(self.root, initial_config=copy.deepcopy(unit['spec']), container=container,
+                               on_return=self.back_to_architecture)
+                self._editor = {'id': identity, 'spec': copy.deepcopy(unit['spec']), 'app': app, 'font_size': size}
+                if hasattr(app, 'restore_result_page'):
+                    app.restore_result_page(self._unit_page_states.get(identity))
+            origin = getattr(self, '_geometry_origin', None)
+            if origin and origin[0] is self.project and origin[1] == identity:
+                app._geometry_source = origin[2]
+            self._canvas_view = (self.canvas.xview()[0], self.canvas.yview()[0])
             self.project['activeUnit'] = identity
-            window = tk.Toplevel(self.root)
-            self.calculator = Designer(window, initial_config=copy.deepcopy(unit['spec']), on_return=lambda app: self.return_from_unit(identity, app))
-            origin=getattr(self,'_geometry_origin',None)
-            if origin and origin[0] is self.project and origin[1]==identity:
-                self.calculator._geometry_source=origin[2]
-            window.title(identity + ' · ' + unit['name'] + ' · 完整电源设计')
-            self.root.withdraw()
+            self._unit_detached.clear()
+            self.calculator = app
+            self._architecture.grid_remove()
+            container.grid(row=0, column=0, sticky='nsew')
+            container.tkraise()
+            self._show_unit_header(unit, app)
+            container.focus_set()
+            return app
         except Exception as error:
-            if window:
-                window.destroy()
+            self._release_editor()
+            if container is not None and container.winfo_exists():
+                container.destroy()
             self.calculator = None
+            self._show_architecture_header()
+            self._architecture.grid()
             messagebox.showerror('打开电源设计', str(error), parent=self.root)
         finally:
             self.root.configure(cursor='')
 
-    def return_from_unit(self, identity, app):
+    def _show_unit_header(self, unit, app):
+        self._back_button.pack(side='left', before=self._header_title.master, padx=(0, 12))
+        self._context_title.set(unit['id'] + ' · ' + unit['name'])
+        self._save_state.set('编辑单元参数 · 保存工程可写入文件')
+        self.report_button.grid_remove()
+        self._calculate_button.grid(row=0, column=2, padx=(0, 8), sticky='ew')
+        menu = tk.Menu(self._unit_report_button, tearoff=False)
+        if hasattr(app, '_export_report_ui'):
+            menu.add_command(label='设计报告 · Word / Excel / Markdown', command=app._export_report_ui)
+        else:
+            for kind in ('docx', 'xlsx', 'json'):
+                menu.add_command(label=kind.upper(), command=lambda fmt=kind: app.report(fmt))
+        self._unit_report_button.configure(menu=menu)
+        self._unit_report_button.grid(row=0, column=4, sticky='ew')
+        if hasattr(app, '_open_simulation_center'):
+            self._simulation_button.grid()
+        else:
+            self._simulation_button.grid_remove()
+        self.root.configure(menu=getattr(app, 'workspace_menu', self._ldo_menu))
+        self._layout_workbench_header()
+
+    def _show_architecture_header(self):
+        self._back_button.pack_forget()
+        self._context_title.set('系统架构')
+        self._calculate_button.grid_remove()
+        self._unit_report_button.grid_remove()
+        menu = self._unit_report_button.cget('menu')
+        if menu:
+            self._unit_report_button.configure(menu='')
+            self.root.nametowidget(str(menu)).destroy()
+        self.report_button.grid()
+        self._simulation_button.grid()
+        self.root.configure(menu=self._architecture_menu)
+        self._layout_workbench_header()
+
+    def _apply_unit_config(self, app):
+        identity = self._editor['id']
         try:
             detached = model.set_unit_config(self.project, identity, app._config_dict())
         except Exception as error:
-            messagebox.showerror('请先修正单元参数', '当前参数未能保存到系统工程：\n' + str(error), parent=app.root)
+            self._save_state.set('请修正单元参数')
+            messagebox.showerror('单元参数', '参数未能应用到工程：\n' + str(error), parent=self.root)
+            field = getattr(error, 'input_widget', None)
+            if field is not None and field.winfo_ismapped():
+                field.focus_set()
+                if isinstance(field, ttk.Entry):
+                    field.selection_range(0, 'end')
             return False
-        self.calculator = None
-        self.root.deiconify()
-        self.selected = ('unit', identity)
-        self.changed('单元设计已回存。' + ('输出端口减少，已断开：' + '、'.join(detached) if detached else ''))
-        self.render()
+        self._editor['spec'] = copy.deepcopy(model.unit_by_id(self.project, identity)['spec'])
+        if detached:
+            self._unit_detached.update(detached)
+            self._save_state.set('输出端口减少，已断开：' + '、'.join(detached))
+        elif self.project != self._project_baseline:
+            self._save_state.set('已应用到当前工程 · 待保存文件')
         return True
 
+    def back_to_architecture(self, app=None):
+        app = self.calculator if app is None else app
+        if app is None or app is not self.calculator:
+            return False
+        center = getattr(app, '_simulation_center', None)
+        if center and not center.closed and center.running():
+            self._save_state.set('单元仿真运行中 · 完成或取消后可返回')
+            return False
+        if not self._apply_unit_config(app):
+            return False
+        if center and not center.closed:
+            center.close()
+        identity = self._editor['id']
+        if hasattr(app, 'selected_result_page'):
+            self._unit_page_states[identity] = app.selected_result_page()
+        self.calculator = None
+        app.container.grid_remove()
+        self._architecture.grid()
+        self._show_architecture_header()
+        self.selected = ('unit', identity)
+        note = '单元设计已应用到当前工程。'
+        if self._unit_detached:
+            note += '输出端口减少，已断开：' + '、'.join(sorted(self._unit_detached))
+        self.changed(note)
+        self.render()
+        self.canvas.xview_moveto(self._canvas_view[0])
+        self.canvas.yview_moveto(self._canvas_view[1])
+        self.canvas.focus_set()
+        if self._system_simulation_return:
+            restore, self._system_simulation_return = self._system_simulation_return, None
+            self.root.after_idle(restore)
+        return True
+
+    def _release_editor(self):
+        if self._editor is None:
+            return
+        app = self._editor['app']
+        self._editor = None
+        if hasattr(app, 'dispose'):
+            app.dispose()
+        menu = getattr(app, 'workspace_menu', None)
+        if menu is not None:
+            menu.destroy()
+        app.container.destroy()
+
+    def _reset_unit_views(self):
+        if self._opening_unit is not None:
+            self.root.after_cancel(self._opening_unit)
+            self._opening_unit = None
+            self._opening_view.grid_remove()
+        self._release_editor()
+        self._unit_page_states.clear()
+
+    def calculate_current(self):
+        app = self.calculator
+        if app is None:
+            return
+        if hasattr(app, 'request_update'):
+            app.request_update()
+        else:
+            app.compute()
+
+    def open_current_simulation(self):
+        if self.calculator is None:
+            self.show_sequence()
+        elif hasattr(self.calculator, '_open_simulation_center'):
+            self.calculator._open_simulation_center()
+
+    def open_current_config(self):
+        if self.calculator is None:
+            self.open_file()
+        elif hasattr(self.calculator, 'load_config'):
+            self.calculator.load_config()
+
+    def export_current_report(self):
+        if self.calculator is None:
+            self.export_report()
+        elif hasattr(self.calculator, '_export_report_ui'):
+            self.calculator._export_report_ui()
+        else:
+            self.calculator.report('docx')
+
     def close(self):
+        if self.calculator is not None:
+            center = getattr(self.calculator, '_simulation_center', None)
+            if center and not center.closed and center.running():
+                center.close()
+                self._save_state.set('正在停止仿真，运行日志会保留')
+                self.root.after(150, self.close)
+                return
+            if not self.back_to_architecture():
+                return
         if not self.save_inspector():return
+        if self._sequence_dialog and self._sequence_dialog.job is not None:
+            self._sequence_dialog.close()
+            self.status.set('正在停止联合启停仿真，停止后关闭画布。')
+            self.root.after(150,self.close)
+            return
         if self.report_process and self.report_process.is_alive():
             self.report_stop.set()
             self.report_process.terminate()
             self.report_process.join(timeout=1)
         self.rename_project()
+        self._reset_unit_views()
         self.root.destroy()
+
+    def show_sequence(self):
+        if not self.save_inspector():return
+        try:
+            from simulation_center import show
+            return show(self, 'sequence', system=True)
+        except Exception as error:
+            messagebox.showerror('联合启停仿真',str(error),parent=self.root)
 
     def export_report(self):
         if self.report_process and self.report_process.is_alive():

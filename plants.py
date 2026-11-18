@@ -32,6 +32,19 @@ def uses_dcm_peak_energy(p, op):
 
 def build_loop_models(p, op):
     """One plant factory for GUI, API, reports and corners, using solved op."""
+    models, plant = _build_loop_models(p, op)
+    from capacitor_impedance import bank_uses_curves
+    if any(bank_uses_curves(parameters.get(side + '_capacitors'))
+           for parameters in [p, *(p.get('outputs') or [])] for side in ('input', 'output')):
+        note = '阻抗曲线用于稳态频谱分流、损耗和纹波后处理；环路沿用原功率级的标称电容参数。'
+        plant.model_note = ' '.join(filter(None, (getattr(plant, 'model_note', None), note)))
+    return models, plant
+
+
+def _build_loop_models(p, op):
+    if op.get('cot'):
+        from cot_loop import build_loop
+        return build_loop(p, op)
     if op.get('niso_model'):
         from nonisolated import build_loop
         return build_loop(p,op)
@@ -47,6 +60,12 @@ def build_loop_models(p, op):
         from types import SimpleNamespace
         gvc,detail=qr_plant(p,op)
         gc=make_compensator(p).get_transfer_function()
+        from output_capacitors import build_output_filters
+        caps = dict(output_capacitors=[dict(C=c, ESR=r) for c, r in detail['capacitors']])
+        filt = build_output_filters([caps], [1/detail['output_conductance']], [detail['vcap']])
+        gvc._load_plant = _rc_load_plant(filt, detail['d_iout_d_ipk']/detail['sense_gain'])
+        gvc._load_response_note = ('QR 周期平均模型。多路时沿用环路的刚性匝比折算负载与电容，'
+                                   '仅在所选反馈端口注入电流阶跃。')
         note=('QR/BCM 峰值电流控制的周期平均低频近似：按实际电压、峰值电流及变频线性化；'
               '并联电容分别计入 ESR。Gvc 输入为放大后 CS 等效控制指令；'
               'A_sense 只表示采样增益，不代替真实 COMP 管脚的前馈/电平转换。'
@@ -81,7 +100,10 @@ def build_loop_models(p, op):
         if sense <= 0:
             raise ValueError('定频 DCM 峰值电流环路需要正的有效采样增益')
         z=ct.ss(filt.A,filt.B,filt.C,filt.D)
-        gvc=z*(2*op['I_out']/(op['I_sw_pk']*sense))
+        current_gain=2*op['I_out']/(op['I_sw_pk']*sense)
+        gvc=z*current_gain
+        gvc._load_plant = _rc_load_plant(filt, current_gain)
+        gvc._load_response_note = DCM_PEAK_NOTE
         gc=make_compensator(p).get_transfer_function()
         return (gvc,gc,gvc*gc),SimpleNamespace(mode='DCM',model_note=DCM_PEAK_NOTE)
     cls = {'BUCK': BuckConverter, 'BOOST': BoostConverter,
@@ -120,13 +142,133 @@ def build_loop_models(p, op):
         gvc *= detail['Hfb']*(1-s*op['Ts']/4)/(1+s*op['Ts']/4)
         gc = Compensator2P2Z(detail['KP'],detail['fz'],detail['fp']).get_transfer_function()
         plant.model_note = detail['note']
+        gvc._load_response_unavailable = 'PSR 补偿环路使用辅助绕组反推值，当前模型缺少实际输出端口的负载动态。'
     else:
         gc = make_compensator(p).get_transfer_function()
+        if topo == 'QR-FLYBACK':
+            gvc._load_response_unavailable = '准谐振负载响应需要峰值电流 SSR 的周期平均模型。'
+        else:
+            gvc._load_plant, gvc._load_response_note = _legacy_load_plant(
+                plant, p['control_mode'] == 'Peak Current Mode', op['eta_guess'])
+            if solved.get('outputs'):
+                gvc._load_response_note += ' 多路沿用 Bode 的刚性匝比约化，仅扰动选中反馈端口。'
     if solved.get('outputs'):
         from multi_output_loop import attach_nominal_context
         attach_nominal_context(gvc, source, solved)
     return (gvc, gc, gvc * gc), plant
 
+
+
+def _rc_load_plant(filters, current_gain):
+    """Two inputs: commanded injection current and additional sinking load."""
+    gains = np.array([[current_gain, -1.]])
+    return ct.ss(filters.A, filters.B @ gains, filters.C, filters.D @ gains)
+
+
+def _legacy_load_plant(plant, peak_mode, eta):
+    """State realization of the legacy averaged plant with a real load port.
+
+    i is the averaged inductor current (primary for flyback), v the
+    positive equivalent capacitor-terminal voltage, and d the duty change.
+    The power-stage equations, prior to peak-control substitution, are
+    L·di/dt = a_d·d - k·v and i_injected = k·i + b_d·d.
+    """
+    from output_capacitors import build_output_filters
+
+    buck = isinstance(plant, BuckConverter)
+    boost = isinstance(plant, BoostConverter)
+    flyback = isinstance(plant, FlybackConverter)
+    forward = isinstance(plant, ActiveClampForwardConverter)
+    mode = getattr(plant, 'mode', 'CCM')
+    dcm = mode in ('DCM', 'BCM') and not (forward and not peak_mode and mode == 'BCM')
+    esr = plant.Rc if forward and not peak_mode and not dcm else 0.
+    cap = dict(output_capacitors=[dict(C=plant.C_out, ESR=esr)])
+    if dcm:
+        kind = 'buck' if buck else 'boost' if boost else 'buckboost'
+        ratio = plant.V_out / max(plant.V_in, 1e-9)
+        gain, conductance = _dcm_coefficients(plant.V_out, plant.D_actual, ratio, plant.R, kind)
+        conductance = max(conductance, 1e-9 * plant.C_out)
+        filt = build_output_filters([cap], [1/conductance], [plant.V_out])
+        response = _rc_load_plant(filt, gain*conductance/plant.Vm)
+        note = ('定频 DCM/BCM 单极点平均模型，沿用 Bode 的标称电容与调制近似。'
+                '整个阶跃保持该局部导通模式。')
+        return eta * response, note
+    if boost and peak_mode:
+        return _legacy_peak_boost_load_plant(plant, eta)
+
+    turns = plant.N if flyback else 1.
+    k = 1. if buck else turns*plant.D_prime
+    a_d = plant.V_out if boost else turns*plant.V_out/plant.D
+    b_d = 0. if buck else -plant.V_out/(plant.D_prime*plant.R)
+    if peak_mode:
+        fm = plant.Fm
+        fi = plant.Rs*plant.A_sense
+        if flyback:
+            fv = -plant.D_prime**2 * plant.Ts * fi / (2*plant.L)
+        elif isinstance(plant, BuckBoostConverter):
+            fv = -plant.Fv  # magnitude convention for the negative output
+        else:
+            fv = plant.Fv
+    else:
+        fm, fi, fv = 1/plant.Vm, 0., 0.
+
+    # Substitute d = Fm*(command - Fi*i - Fv*v) in both plant equations.
+    # The extra load current is subtracted after average rectifier injection.
+    filt = build_output_filters([cap], [plant.R], [plant.V_out])
+    injection_state = np.r_[k-b_d*fm*fi, np.zeros(len(filt.A))]
+    injection_input = np.array([b_d*fm, -1.])
+    injection_voltage = -b_d*fm*fv
+    feed = filt.D[0, 0]
+    load_node_factor = 1-feed*injection_voltage
+    voltage_state = (np.r_[0., filt.C[0]]+feed*injection_state)/load_node_factor
+    voltage_input = feed*injection_input/load_node_factor
+    inductor_state = -(k+a_d*fm*fv)*voltage_state
+    inductor_state[0] -= a_d*fm*fi
+    inductor_input = np.array([a_d*fm, 0.])-(k+a_d*fm*fv)*voltage_input
+    filter_state = np.column_stack((np.zeros(len(filt.A)), filt.A))
+    filter_state += np.outer(filt.B[:, 0], injection_state+injection_voltage*voltage_state)
+    filter_input = np.outer(filt.B[:, 0], injection_input+injection_voltage*voltage_input)
+    response = ct.ss(np.vstack((inductor_state/plant.L, filter_state)),
+                     np.vstack((inductor_input/plant.L, filter_input)),
+                     eta*voltage_state[None, :], eta*voltage_input[None, :])
+    note = ('定频 CCM 平均模型，沿用环路的预设效率与输出电容。'
+            + ('保留等效 ESR。' if esr else '当前 Bode 模型采用理想电容，阶跃未计 ESR 瞬时压降。'))
+    if isinstance(plant, BuckBoostConverter):
+        note += ' 反相输出按电压幅值闭环。'
+    return response, note
+
+
+def _legacy_peak_boost_load_plant(plant, eta):
+    """Use the retained peak-Boost damping model for both input channels.
+
+    The published legacy Bode code approximates the current-feedback damping.
+    Use its same second-order poles and the averaged load-port numerator
+    Ls + Vo*Fm*Fi, from the inductor equation at fixed current command.
+    """
+    omega, q_factor, command_gain = plant._peak_current_parameters()
+    k = plant.D_prime
+    current_gain = plant.Fm*plant.V_out
+    direct_command = command_gain*eta*omega**2
+    inverse_rhp_zero = plant.L/(k*k*plant.R)
+    load_gain = direct_command/(k*current_gain)
+    # Observable realization has one common denominator and independent
+    # numerator coefficients for the command and sinking-current inputs.
+    response = ct.ss([[-omega/q_factor, 1.], [-omega**2, 0.]],
+                     [[-direct_command*inverse_rhp_zero, -load_gain*plant.L],
+                      [direct_command, -load_gain*current_gain*plant.Rs*plant.A_sense]],
+                     [[1., 0.]], [[0., 0.]])
+    note = ('定频峰值电流 Boost 的 CCM 平均模型，沿用当前 Bode 阻尼近似与标称电容。'
+            '阶跃未计 ESR 瞬时压降。')
+    return response, note
+
+
+def _dcm_coefficients(V_out, D, M, R, kind):
+    """Duty-to-voltage DC gain and total output incremental conductance."""
+    if kind == 'buck':
+        return 2*V_out/D*(1-M)/(2-M), (2-M)/((1-M)*R)
+    if kind == 'boost':
+        return 2*V_out/D*(M-1)/(2*M-1), (2*M-1)/((M-1)*R)
+    return V_out/D, 2/R
 
 
 def _dcm_gvd(s, V_out, D, M, R, C, kind):
@@ -138,15 +280,8 @@ def _dcm_gvd(s, V_out, D, M, R, C, kind):
     frequency and are ignored for loop analysis.  'kind' in
     {'buck', 'boost', 'buckboost'} (flyback uses the buck-boost form).
     """
-    if kind == 'buck':
-        Gd0 = 2.0 * V_out / D * (1.0 - M) / (2.0 - M)
-        wp = (2.0 - M) / ((1.0 - M) * R * C)
-    elif kind == 'boost':
-        Gd0 = 2.0 * V_out / D * (M - 1.0) / (2.0 * M - 1.0)
-        wp = (2.0 * M - 1.0) / ((M - 1.0) * R * C)
-    else:  # buck-boost / flyback
-        Gd0 = V_out / D
-        wp = 2.0 / (R * C)
+    Gd0, conductance = _dcm_coefficients(V_out, D, M, R, kind)
+    wp = conductance / C
     return Gd0 / (1.0 + s / max(wp, 1e-9))
 
 
@@ -343,6 +478,12 @@ class BoostConverter:
             D = getattr(self, 'D_actual', self.D)
             M = self.V_out / max(self.V_in, 1e-9)
             return _dcm_gvd(self.s, self.V_out, D, M, self.R, self.C_out, 'boost') / self.Vm
+        omega_c, Q_c, G_c0 = self._peak_current_parameters()
+        num = G_c0 * (1 - self.s * self.L / (self.D_prime ** 2 * self.R))
+        den = 1 + self.s / (Q_c * omega_c) + (self.s / omega_c) ** 2
+        return num / den
+
+    def _peak_current_parameters(self):
         Fi = self.Rs * self.A_sense
         term1 = 2 * self.Fm * self.V_out * Fi / (self.D_prime ** 2 * self.R)
         term2 = (self.Fm * self.Fv * self.V_out) / self.D_prime
@@ -356,12 +497,7 @@ class BoostConverter:
                   - self.Fm * self.Fv * self.V_out / self.D_prime))
 
         G_c0 = self.V_out * self.Fm / self.D_prime / (1 + term1 + term2)
-
-        num = G_c0 * (1 - self.s * self.L / (self.D_prime ** 2 * self.R))
-        den = 1 + self.s / (Q_c * omega_c) + (self.s / omega_c) ** 2
-
-        Gvc = num / den
-        return Gvc
+        return omega_c, Q_c, G_c0
 
 
 class BuckBoostConverter:

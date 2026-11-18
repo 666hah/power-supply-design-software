@@ -137,8 +137,9 @@ function field(key: string): Parameter {
           :value="rail[key]"
           @change="update(index, key, $event)"
         />
+        <slot name="rectifier-model-data" :index="index" />
         <h5>输出电容组 C_O{{ index + 1 }}</h5>
-        <CapacitorBank :spec="rail" :value="rail.output_capacitors" @change="update(index,'output_capacitors',$event)" />
+        <CapacitorBank :spec="rail" :rail-index="index" :scalar-fallback="spec" @change="update(index,'output_capacitors',$event)" />
         <FieldInput
           :field="field('d_out_enable')"
           :value="rail.d_out_enable"
@@ -148,7 +149,9 @@ function field(key: string): Parameter {
           :field="field('Vf_dout')"
           :value="rail.Vf_dout"
           @change="update(index, 'Vf_dout', $event)"
-        /><FieldInput
+        />
+        <slot v-if="rail.d_out_enable" name="blocking-model-data" :index="index" />
+        <FieldInput
           :field="field('ripple_target')"
           :value="rail.ripple_target"
           @change="update(index, 'ripple_target', $event)"

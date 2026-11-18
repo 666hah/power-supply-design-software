@@ -1,12 +1,11 @@
 """Reflow an existing real-evidence report; never runs or fabricates simulation.
 
-Prepare charts with the app Python, then pass --reuse-charts under the bundled
-document runtime. Simulator logs and .meas records are copied unchanged.
+Figures are rendered from archived measurements. Simulator logs and .meas
+records are copied unchanged; old images have no reliable test identifiers.
 """
 import argparse
 import json
 from pathlib import Path
-import re
 import sys
 from zipfile import ZipFile,ZIP_DEFLATED
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
@@ -19,11 +18,9 @@ def main():
     charts.add_argument('--redraw-charts',action='store_true',help='Redraw archived evidence without recalculating design overlays.')
     args=parser.parse_args()
     with ZipFile(args.archive) as z:files={name:z.read(name) for name in z.namelist()}
-    evidence=json.loads(files['comparison.json']);path=args.archive.with_suffix('.docx');images=None
+    evidence=json.loads(files['comparison.json']);path=args.archive.with_suffix('.docx')
     if args.reuse_charts:
-        with ZipFile(path) as z:
-            images=[z.read(n) for n in sorted((n for n in z.namelist() if n.startswith('word/media/image')),
-                key=lambda n:int(re.search(r'image(\d+)',n)[1]))]
+        print('旧归档图片没有试验标识；将从归档数据重绘，不按旧图片顺序配图。')
     elif not args.redraw_charts:
         from runtime_resources import configure_numeric_threads
         configure_numeric_threads()
@@ -41,7 +38,7 @@ def main():
             phase=np.mod(np.asarray(record['switching']['time'])-origin,1/frequency)
             record['design_switching']['i_p']=np.interp(phase,wf['t'],wf.get('i_primary',wf['i_sw'])).tolist()
     from spice_comparison_report import write_report
-    write_report(path,evidence,chart_images=images)
+    write_report(path,evidence)
     files[path.name]=path.read_bytes();files['comparison.json']=json.dumps(evidence,ensure_ascii=False,allow_nan=False,indent=2).encode('utf-8')
     pending=args.archive.with_suffix('.pending.zip')
     with ZipFile(pending,'w',ZIP_DEFLATED) as z:

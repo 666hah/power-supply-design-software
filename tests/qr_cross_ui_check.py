@@ -45,16 +45,19 @@ class QRCrossUIChecks(unittest.TestCase):
     def test_qr_matrix_enabled_and_cross_page_available(self):
         self.assertTrue(self.app._coupling_supported())
         self.assertTrue(self.app.coupling_enabled.get())
-        book=self.app._isolated_result_book
-        self.assertNotEqual(book.tab(self.app._cross_page,'state'),'hidden')
+        book=self.app.nb
+        self.assertNotEqual(book.tab(self.app.tab_cross,'state'),'hidden')
+        self.assertEqual(book.index(self.app.tab_cross),book.index(self.app.tab_loop)+1)
+        self.app.restore_result_page('cross')
+        self.assertEqual(self.app.selected_result_page(),'cross')
         self.assertEqual(self.app.cross_cases['columns'],('id','vin','loads','voltages','frequency','state'))
 
     def test_scrollable_layout_keeps_case_table_visible_at_large_font(self):
+        self.root.maxsize(1920, 1080)
         self.root.attributes('-alpha',0);self.root.deiconify()
         self.root.geometry('1440x900')
-        self.app.nb.select(self.app.tab_topology)
-        book=self.app._isolated_result_book
-        book.select(self.app._cross_page)
+        self.app.nb.select(self.app.tab_cross)
+        self.app._cross_summary_book.select(2)
         self.root.update()
         # Give the native window manager its normal configure event after
         # mapping. Layout testing must not read the previous frame's size.
@@ -65,6 +68,7 @@ class QRCrossUIChecks(unittest.TestCase):
         with patch.object(self.app,'_refresh_visible_tab',return_value=None):
             self.app._apply_scale(18/13)
             self.root.update()
+        self.assertGreaterEqual(self.root.winfo_height(), 850, self.root.geometry())
         self.assertGreater(self.app.cross_cases.winfo_width(),400)
         self.assertGreater(self.app.cross_cases.winfo_height(),90)
         self.assertLess(self.app.cross_detail_text.winfo_rooty()+self.app.cross_detail_text.winfo_height(),
@@ -89,9 +93,19 @@ class QRCrossUIChecks(unittest.TestCase):
         self.app._finish_cross_regulation(SimpleNamespace(parameters={'p':p},error=None,value=result['cross_regulation']))
         ids=self.app.cross_cases.get_children()
         self.assertEqual(len(ids),8)
-        self.app.cross_cases.selection_set(ids[0]);self.app._select_cross_case()
+        self.assertEqual(self.app._cross_endpoint_tree['displaycolumns'],('metric','vin1','vin2'))
+        self.app._cross_filter.current(2)
+        self.app._render_cross_cases()
+        self.assertEqual(len(self.app.cross_cases.get_children()),4)
+        self.app._show_cross_corner(ids[0])
+        self.assertEqual(self.app.cross_cases.selection(),(ids[0],))
         self.assertIn('实际频率',self.app.cross_detail.get())
         self.assertTrue(self.app.cross_cases.item(ids[0],'values')[4])
+        from cross_regulation import for_input
+        same_voltage=for_input(result['cross_regulation'],self.p['V_in_min'])
+        self.app._finish_cross_regulation(SimpleNamespace(parameters={'p':p},error=None,value=same_voltage))
+        self.assertEqual(self.app._cross_endpoint_tree['displaycolumns'],('metric','vin1'))
+        self.assertEqual(len(self.app.cross_cases.get_children()),4)
         self.assertEqual(self.errors,[])
 
 

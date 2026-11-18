@@ -94,11 +94,16 @@ def find_elmer():
         if base:
             candidates.extend(str(p) for p in Path(base).glob('Elmer*'))
     for value in candidates:
-        if value:
-            root = Path(normalize_elmer(value))
-            if all((root / 'bin' / name).is_file() for name in ('ElmerSolver.exe', 'ElmerGrid.exe')):
-                return str(root)
+        if _available_elmer(value):
+            return normalize_elmer(value)
     return ''
+
+
+def _available_elmer(value):
+    if not value:
+        return False
+    root = Path(normalize_elmer(value))
+    return all((root / 'bin' / name).is_file() for name in ('ElmerSolver.exe', 'ElmerGrid.exe'))
 
 
 def from_legacy_template(path):
@@ -125,18 +130,20 @@ def from_legacy_template(path):
 
 
 def load_environment(config):
-    from spice_runtime import find_ltspice
     name = core_name(config)
     local = _read(_settings_file())
-    result = dict(elmer_home=local.get('elmer_home') or find_elmer(), ltspice=find_ltspice() or '',
+    saved_elmer = local.get('elmer_home')
+    elmer = normalize_elmer(saved_elmer) if _available_elmer(saved_elmer) else (
+        find_elmer() or normalize_elmer(saved_elmer))
+    result = dict(elmer_home=elmer, ltspice=load_spice_path(),
                   core_path='', core_model=name, core_mode='assembled', brep_unit='mm',
                   translation_mm=[0., 0., 0.], rotation_deg=[0., 0., 0.],
                   center_leg_radius_m=None, gap_center_z_m=0., r0_m=None, z0_m=None,
                   core_source='', mesh_profile=local.get('mesh_profile', 'standard'),
                   air_radius_m=local.get('air_radius_m', .05), timeout_s=local.get('timeout_s', 1200))
-    # Prefer a relative sibling model if the program directory was moved.
+    # An explicit local registration takes precedence over the portable seed.
     models = _read(_model_root() / 'index.json').get('models') or {}
-    for saved in (models.get(name), (local.get('models') or {}).get(name)):
+    for saved in ((local.get('models') or {}).get(name), models.get(name)):
         if not isinstance(saved, dict):
             continue
         saved = copy.deepcopy(saved)
@@ -162,9 +169,14 @@ def load_environment(config):
     for target, source in [('r0_m', 'r0_m_if_circular'), ('z0_m', 'z0_m')]:
         if frame.get(source) is not None:
             result[target] = frame[source]
-    if local.get('elmer_home'):
-        result['elmer_home'] = normalize_elmer(local['elmer_home'])
+    if elmer:
+        result['elmer_home'] = elmer
     return result
+
+
+def load_spice_path():
+    from spice_runtime import find_ltspice
+    return find_ltspice() or ''
 
 
 def _finite(value, label, positive=False):
@@ -208,10 +220,25 @@ def _model_record(env):
                 core_sha256=_sha(env['core_path']))
 
 
+def save_machine_settings(environment):
+    """Register installed solvers and solver defaults independently of a CAD."""
+    env = copy.deepcopy(environment)
+    env['elmer_home'] = normalize_elmer(env.get('elmer_home'))
+    settings = _read(_settings_file())
+    settings.update(schema=SCHEMA, elmer_home=env['elmer_home'],
+                    mesh_profile=env.get('mesh_profile', 'standard'),
+                    air_radius_m=env.get('air_radius_m', .05),
+                    timeout_s=env.get('timeout_s', 1200))
+    if env.get('ltspice'):
+        from spice_runtime import set_ltspice
+        set_ltspice(env['ltspice'])
+    _write(_settings_file(), settings)
+    return env
+
+
 def save_environment(config, environment):
     env = validate_model(environment, core_name(config))
-    env['elmer_home'] = normalize_elmer(env.get('elmer_home'))
-    local = _read(_settings_file())
+    env = save_machine_settings(env)
     record = _model_record(env)
     relative = Path(record['core_sha256'][:20]) / ('core' + Path(env['core_path']).suffix.lower())
     last_error = None
@@ -233,16 +260,12 @@ def save_environment(config, environment):
             last_error = exc
     if last_error is not None:
         raise last_error
-    local.update(schema=SCHEMA, elmer_home=env['elmer_home'], mesh_profile=env.get('mesh_profile', 'standard'),
-                 air_radius_m=env.get('air_radius_m', .05), timeout_s=env.get('timeout_s', 1200))
+    local = _read(_settings_file())
     saved = copy.deepcopy(record)
     # Absolute local fallback is never written into the portable catalog/ZIP.
     saved['core_path'] = str(target.resolve())
     local.setdefault('models', {})[core_name(config)] = saved
     _write(_settings_file(), local)
-    if env.get('ltspice'):
-        from spice_runtime import set_ltspice
-        set_ltspice(env['ltspice'])
     env['core_path'] = str(target.resolve())
     return env
 
@@ -299,7 +322,7 @@ def _windows_x64_exe(path):
     return len(header) == 6 and header[:4] == b'PE\0\0' and header[4:] == b'\x64\x86'
 
 
-def check_environment(environment, require_spice=True, probe=False):
+def check_environment(environment, require_spice=True, probe=False, validate_cad=True):
     checks = []
     def check(name, ok, message):
         checks.append(dict(name=name, ok=bool(ok), message=message))
@@ -313,11 +336,12 @@ def check_environment(environment, require_spice=True, probe=False):
         check(name, ok, str(path) if ok else '未找到有效Windows x64程序，请选择完整Elmer安装目录。')
     library = root / 'share' / 'elmersolver' / 'lib'
     check('Elmer运行库', library.is_dir(), str(library) if library.is_dir() else '缺少share/elmersolver/lib；仅复制两个exe不足以运行。')
-    try:
-        validate_model(environment, environment.get('core_model'))
-        check('磁芯与定位配置', True, '文件与输入值完整；真实实体、装配、气隙和绕组相交检查在准备阶段执行。')
-    except (ValueError, OSError) as exc:
-        check('磁芯与定位配置', False, str(exc))
+    if validate_cad:
+        try:
+            validate_model(environment, environment.get('core_model'))
+            check('磁芯与定位配置', True, '文件与输入值完整；真实实体、装配、气隙和绕组相交检查在准备阶段执行。')
+        except (ValueError, OSError) as exc:
+            check('磁芯与定位配置', False, str(exc))
     if require_spice:
         exe = Path(environment.get('ltspice') or '.')
         check('LTspice', exe.is_file() and exe.suffix.lower() == '.exe', str(exe))

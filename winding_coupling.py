@@ -111,17 +111,17 @@ def resolve_winding_geometry(p, nominal_op, rails=None):
         from transformer_turns import resolve_output_turns
         turns = resolve_output_turns(p, rails)
     selected = int(p.get('feedback_output', 1)) - 1
-    q = selected_params(p, rails)
+    q = selected_params(p, rails, turns)
     q.update(outputs=[], Np=turns['Np'], Ns=turns['Ns'][selected])
     primary_current = float(nominal_op.get('I_p_rms', nominal_op['I_sw_rms']))
     secondary_current = float(nominal_op.get('I_s_rms', nominal_op['I_d_rms']))
-    transformer = mag.design_transformer(nominal_op, q, primary_current,
-                                         secondary_current, n_ratio=q['N'])
+    transformer = mag.transformer_conductors(nominal_op, q, primary_current,
+                                             secondary_current, n_ratio=q['N'])
     if not transformer.get('ok'):
         raise ValueError('绕组几何预设计失败：' + transformer.get('reason', '无可用磁芯'))
     hardware = {key: transformer[key] for key in
-                ('core', 'core_geometry', 'MLT', 'MLT_source', 'Np', 'Ns', 'd_wire_p', 'd_wire_s',
-                 'n_strand_p', 'n_strand_s', 'parallel_wires_p', 'parallel_wires_s', 'R_dc_p', 'R_dc_s')}
+                ('core', 'core_geometry', 'Np', 'Ns', 'd_wire_p', 'd_wire_s',
+                 'n_strand_p', 'n_strand_s', 'parallel_wires_p', 'parallel_wires_s')}
     hardware.update(rho=float(p['rho']), windings=[],
                     auto_wire_sizing='nominal-predesign-frozen',
                     primary_wire_source='manual' if p.get('d_wire_p', 0) > 0 else 'nominal-predesign')
@@ -142,14 +142,23 @@ def resolve_winding_geometry(p, nominal_op, rails=None):
         copies=wire_count(frozen if frozen else rail,'s')
         current = float(child.get('I_s_rms', child['I_d_rms']))
         diameter = float(frozen.get('d_wire_s', rail['d_wire_s'])) or max(50e-6, mag.wire_diameter(current / (strands*copies), p['J']))
-        area = strands * copies * math.pi * diameter ** 2 / 4.
-        resistance = float(p['rho']) * hardware['MLT'] * count / area
         hardware['windings'].append(dict(id=int(rail.get('id', index)), Ns=int(count),
-            d_wire_s=float(diameter), n_strand_s=strands, parallel_wires_s=copies, R_dc=resistance,
+            d_wire_s=float(diameter), n_strand_s=strands, parallel_wires_s=copies,
             wire_source='fixed-hardware' if frozen else 'manual' if rail.get('d_wire_s', 0) > 0 else 'nominal-predesign'))
     feedback = hardware['windings'][selected]
     hardware.update(Ns=feedback['Ns'], d_wire_s=feedback['d_wire_s'],
-                    n_strand_s=feedback['n_strand_s'],parallel_wires_s=feedback['parallel_wires_s'],R_dc_s=feedback['R_dc'])
+                    n_strand_s=feedback['n_strand_s'],parallel_wires_s=feedback['parallel_wires_s'])
+    lengths = mag.transformer_winding_lengths(p, nominal_op, hardware, hardware['windings'])
+    primary = lengths['windings']['P']
+    area = hardware['n_strand_p'] * hardware['parallel_wires_p'] * math.pi * hardware['d_wire_p'] ** 2 / 4.
+    hardware.update(winding_lengths=lengths, MLT=primary['mlt_m'], MLT_source=primary['source'],
+                    copper_length_m=primary['length_m'], R_dc_p=hardware['rho'] * primary['length_m'] / area)
+    for row in hardware['windings']:
+        length = lengths['windings'][f"OUT{row['id']}"]
+        area = row['n_strand_s'] * row['parallel_wires_s'] * math.pi * row['d_wire_s'] ** 2 / 4.
+        row.update(MLT=length['mlt_m'], MLT_source=length['source'], copper_length_m=length['length_m'],
+                   R_dc=hardware['rho'] * length['length_m'] / area)
+    hardware.update(R_dc_s=feedback['R_dc'], MLT_s=feedback['MLT'], copper_length_s_m=feedback['copper_length_m'])
     return hardware
 
 

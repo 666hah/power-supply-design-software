@@ -28,7 +28,7 @@ class CatalogueTests(unittest.TestCase):
         actual = [key for section in SECTION_ORDER
                   for _title, keys in GROUPS[section] for key in keys]
         self.assertEqual(len(actual), len(set(actual)))
-        self.assertCountEqual(actual, expected)
+        self.assertCountEqual(actual, [key for key in expected if key != 'MLT'])
         self.assertEqual(set(META), set(expected))
         self.assertEqual(set(GROUPS), set(SECTION_ORDER))
         self.assertEqual(set(SECTION_TITLES), set(SECTION_ORDER))
@@ -64,6 +64,7 @@ class CatalogueTests(unittest.TestCase):
                 self.assertFalse(applicable(key, topology, 'Peak Current Mode'), (key, topology))
                 self.assertFalse(visible(key, topology, 'Peak Current Mode', True, {}))
             self.assertTrue(applicable('MLT', topology, 'Voltage Mode'))
+            self.assertFalse(visible('MLT', topology, 'Voltage Mode', True, {}))
             self.assertTrue(applicable('ring_margin', topology, 'Voltage Mode'))
         for topology in ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD'):
             self.assertTrue(applicable('N', topology, 'Peak Current Mode'))
@@ -117,7 +118,7 @@ class CatalogueTests(unittest.TestCase):
 
     def test_auto_mode_is_only_supported_zero_auto_fields(self):
         actual = {key for key, field in META.items() if field.auto}
-        self.assertEqual(actual, {'MLT', 'Np', 'Ns', 'd_wire_p', 'd_wire_s'})
+        self.assertEqual(actual, {'Np', 'Ns', 'd_wire_p', 'd_wire_s'})
 
 
 if __name__ == '__main__':

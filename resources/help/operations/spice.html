@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LTspice 电路仿真与计算对比 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>11  LTspice 电路仿真与计算对比</h1>
+<p>以单元现有硬件和可配置行为控制器生成 LTspice 工程。先验证瞬态和逐周期稳定，再按需要增加开关环路 FRA 和多路负载角点。</p>
+<p class='entry'>电源单元 → 仿真配置中心 → 电路仿真</p>
+<h2>操作步骤</h2><ol>
+<li><strong>匹配拓扑与控制器</strong> 检查所选示例或工程的拓扑、反馈和控制器参考。改用另一原型时核对调制、CS 阈值和补偿。切换输入框时，右侧逻辑图高亮参数对应的模块。</li>
+<li><strong>准备本机 LTspice</strong> 在“设备与模型”核对 LTspice 路径。若先对照原理图，点击“导出 ASC 工程…”，解压 ZIP 后在 LTspice 打开随包 ASC，保留同目录下的网表和包含文件。</li>
+<li><strong>跑快速预检</strong> 点击“快速预检（推荐）”，确认输入边界，运行并导出对比报告。各路最大功率从零开机，固定输入只跑一次稳态。通过后独立测试反馈路最大双向负载跳变，其余路保持满载。</li>
+<li><strong>增加验证项目</strong> 完整对比增加环路 FRA、多路轻重载角点和线载联合动态稳定度。联合试验只运行一次，输入在上下限间切换，各路以不同周期重复跳载。短路试验单独启用。</li>
+<li><strong>保存配置和证据</strong> “应用到计算器”写入当前单元，保存设计 JSON 或回画布保存工程可保留设置。保留 Word 与同名工程 ZIP。ZIP 中的 comparison.json 供后续工程验收导入。</li>
+</ol>
+<h2>输入字段</h2><div class="table"><table><caption>表 11-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">芯片频率、最大占空比</th><td>Hz、比例</td><td>定频控制频率填 0 时跟随设计，最大占空比限制单周期导通窗口。QR 的实际周期由退磁后 ZCD 谷底事件决定。</td></tr>
+<tr><th scope="row">Vcs 逐周期钳位、CS 消隐与延时</th><td>V、ns</td><td>钳位是电流检测信号的阈值，换算需核对采样电阻和斜坡。消隐及关断延时会影响实际开关峰值。</td></tr>
+<tr><th scope="row">软启动方式、软启动时间</th><td>参考 / CS / COMP、ms</td><td>选择启动期缓升的参考量，定义其上升时长。按对应控制器和设计输入核对。</td></tr>
+<tr><th scope="row">仿真结束、阶跃时刻及负载</th><td>ms、ms、额定负载比例</td><td>阶跃发生前需要完整稳态观察窗，阶跃后留出恢复时间。负载比例 0.5 表示原额定测试负载的 50%。</td></tr>
+<tr><th scope="row">FRA 起止频率、密度、幅度</th><td>Hz、点/倍频程、%</td><td>定义注入扫描范围、采样密度和相对反馈电压的注入峰峰值。频点最少开关周期与超时共同影响扫描耗时。</td></tr>
+<tr><th scope="row">交叉调整率覆盖、角点保持时间</th><td>重点角点 / 全组合、ms</td><td>按各路最小与最大负载构造组合。轻载保持时间不足会使末段电压继续漂移。</td></tr>
+<tr><th scope="row">短路注入与保护策略</th><td>启停、输出路号、ms、Ω</td><td>选择被短路输出、开始与持续时间及等效电阻。控制器保护策略与故障激励分别设置。</td></tr>
+<tr><th scope="row">复用相同设计的标称结果</th><td>开启 / 关闭</td><td>保留同配置的有效标称瞬态用于后续完整对比。想独立重跑时选择每次重新运行。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>先查每个端点的瞬态和逐周期状态，再比较输出电压、纹波、电流平均值和峰值。保护停振、跳周期、周期二或未进入稳态的端点，先处理具体原因再判断环路。</p>
+<p>黑盒看端口：稳压精度以各输出相对参考电压的偏差表示；交叉调整率比较本路负载不变、其他路负载改变的角点。白盒看器件：先按位号查输入和各路输出每颗电容的纹波有效值，再核对 MOS 漏源电压和二极管反向电压。</p>
+<p>计算环路、按导出参数重建的环路和开关 FRA 分别对应不同证据。FRA 有效性以扫描范围、逐周期检查和半幅复核为准。</p>
+<p>出现部分完成时，在工程 ZIP 中按端点查日志和 comparison.json。对比里显示的行为控制器与参数假设应随报告保留。</p>
+<div class="paging"><a href="fem.html">上一章　变压器电磁仿真</a> <a href="joint.html">下一章　电磁场解回填与联合验证</a></div></main>
+</body>
+</html>

@@ -119,19 +119,37 @@ class SourceUI(unittest.TestCase):
         self.app._apply_config(copy.deepcopy(self.base))
     def tearDown(self):
         self.root.update(); self.assertEqual(self.errors,[])
-    def test_one_location_axes_targets_and_context_only(self):
+    def test_model_picker_and_device_data_targets_have_separate_locations(self):
         a=self.app
+        from tkinter import ttk
+
+        def buttons(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Button):
+                    yield child
+                yield from buttons(child)
+
         self.assertEqual(list(a._param_sections)[:3],['spec','curves','stage'])
+        self.assertFalse(list(buttons(a._param_sections['curves'])))
+        device_buttons = {item.cget('text'): item for item in buttons(a._param_sections['device'])}
+        self.assertIn('整流与续流曲线数据…',device_buttons)
+        device_buttons['Q1 曲线数据…'].invoke()
+        dialog = a._curve_data_dialog
+        self.assertIn('导入 / 替换…',[item.cget('text') for item in buttons(dialog)])
+        dialog.destroy()
         self.assertFalse(hasattr(a,'_diode_tree')); self.assertFalse(hasattr(a,'_mos_mode_combo'))
         for target,axes in ((TRANSFER,'X=Vgs'),(CHARGE,'X=Qg'),('D1','X=Vf')):
             a._curve_tree.selection_set(target); a._curve_selection_note()
-            self.assertIn(axes,a._curve_detail.get())
+            self.assertNotIn(axes,a._curve_detail.get())
+            self.assertIn(axes,a._curve_data_note(a._selected_curve_row(), a._curve_context()))
         a.params['topology'].set('BUCK'); a._filter_params()
         self.assertNotIn('D_F1',a._curve_tree.get_children())
         a._apply_config(json.loads((ROOT/'examples/3_OUTPUT_COUPLED_FLYBACK.json').read_text(encoding='utf-8')))
         children=set(a._curve_tree.get_children())
         self.assertTrue({'D_O1','D_O2','D_O3'}.issubset(children)); self.assertNotIn('D1',children)
         self.assertFalse(any(target.startswith('D_F') for target in children))
+        self.assertEqual([row['target'] for row in a._device_data_rows('rectifier',2)], ['D_O2'])
+        self.assertFalse(a._device_data_rows('rectifier',None))
 
     def test_missing_curve_status_persistence_and_explicit_fixed_fallback(self):
         a=self.app; a._curve_global.set('curve'); a._choose_global_curve_mode()
@@ -152,7 +170,7 @@ class SourceUI(unittest.TestCase):
         from mos_gate_charge import validate_charge
         self.assertEqual(a._mos_charge_curve,validate_charge(profile())); self.assertEqual(a._manual_events_value(),draft)
         a._curve_tree.selection_set('D1'); a._curve_selection_note()
-        self.assertIn('已存但不使用',a._curve_detail.get())
+        self.assertIn('已存但不使用',a._curve_data_note(a._selected_curve_row(),a._curve_context()))
         a._set_curve_override('D1','curve')
         self.assertIn('混合来源',a._curve_summary.get())
         self.assertEqual(source_for(a.get_params(),'D1'),'curve')
@@ -161,9 +179,15 @@ class SourceUI(unittest.TestCase):
     def test_unbind_is_explicit_local_and_cancel_preserves_binding(self):
         a=self.app; a._diode_curves={'D1':curve('保留的曲线')}; a._set_curve_override('D1','curve')
         a._curve_tree.selection_set('D1')
-        with patch('device_curve_ui.messagebox.askyesno',return_value=False): a._unbind_selected_curve()
+        row = a._selected_curve_row()
+        with patch('device_curve_ui.messagebox.askyesno') as confirm:
+            a._unbind_selected_curve(row)
+            confirm.assert_not_called()
         self.assertIn('D1',a._diode_curves)
-        with patch('device_curve_ui.messagebox.askyesno',return_value=True): a._unbind_selected_curve()
+        a._set_curve_override('D1','fixed')
+        with patch('device_curve_ui.messagebox.askyesno',return_value=False): a._unbind_selected_curve(row)
+        self.assertIn('D1',a._diode_curves)
+        with patch('device_curve_ui.messagebox.askyesno',return_value=True): a._unbind_selected_curve(row)
         self.assertNotIn('D1',a._diode_curves); self.assertEqual(source_for(a.get_params(),'D1'),'fixed')
 
     def test_reuse_requires_explicit_targets_and_owns_independent_data(self):
@@ -174,16 +198,16 @@ class SourceUI(unittest.TestCase):
         def hidden(*args,**kwargs):
             dialog=original(*args,**kwargs); dialog.withdraw(); return dialog
         with patch('device_curve_ui.tk.Toplevel',side_effect=hidden):
-            a._reuse_diode_curve()
+            a._reuse_diode_curve(a._selected_curve_row())
         dialog=next(w for w in self.root.winfo_children() if isinstance(w,original))
         checks=[w for w in dialog.winfo_children() if isinstance(w,ttk.Checkbutton)]
         next(w for w in checks if str(w.cget('text')).startswith('D_OUT')).invoke()
         with patch('device_curve_ui.messagebox.askyesno',return_value=True):
-            next(w for w in dialog.winfo_children() if isinstance(w,ttk.Button) and w.cget('text')=='复制并启用所选').invoke()
+            next(w for w in dialog.winfo_children() if isinstance(w,ttk.Button) and w.cget('text')=='复制曲线到所选').invoke()
         self.assertEqual(set(a._diode_curves),{'D1','D_OUT'})
         self.assertEqual(a._diode_curves['D1'],a._diode_curves['D_OUT'])
         self.assertIsNot(a._diode_curves['D1']['points'],a._diode_curves['D_OUT']['points'])
-        self.assertEqual(source_for(a.get_params(),'D_OUT'),'curve')
+        self.assertEqual(source_for(a.get_params(),'D_OUT'),'fixed')
 
     def test_preview_and_curve_hub_folding_release_content(self):
         a=self.app; a._diode_curves={'D1':curve('预览校核')}; a._set_curve_override('D1','curve')
@@ -191,7 +215,7 @@ class SourceUI(unittest.TestCase):
         original=tk.Toplevel
         def hidden(*args,**kwargs):
             dialog=original(*args,**kwargs); dialog.withdraw(); return dialog
-        with patch('device_curve_ui.tk.Toplevel',side_effect=hidden): a._preview_selected_curve()
+        with patch('device_curve_ui.tk.Toplevel',side_effect=hidden): a._preview_selected_curve(a._selected_curve_row())
         dialog=a._device_curve_preview; self.assertIsNotNone(dialog)
         dialog.destroy(); self.assertIsNone(a._device_curve_preview)
         frame=a._param_sections['curves']; a._folded_sections.discard(frame); a._filter_params(); self.root.update_idletasks()

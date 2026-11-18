@@ -3,7 +3,7 @@ from pathlib import Path
 
 KINDS = {'topology','power','parasitics','switching','switching_real','outputs','capacitors','input_caps',
          'output_caps','losses','device_losses','output_losses','magnetics','magnetic_flux',
-         'winding','loop','efficiency','clamp'}
+         'winding','loop','load_step','efficiency','clamp'}
 
 
 def render(run, path, case_id, kind, output=1):
@@ -22,7 +22,7 @@ def render(run, path, case_id, kind, output=1):
     p, result = case['p'], case['result']
     op, wf = result['op'], result['wf']
     sizes = {'topology':(13.5,6.5), 'power':(12,6.7), 'switching':(12,4.2),
-             'outputs':(11.2,6.0), 'output_caps':(11.2,7.2), 'loop':(12,6.5),
+             'outputs':(11.2,6.0), 'output_caps':(11.2,7.2), 'loop':(12,6.5), 'load_step':(12,3.8),
              'winding':(12,6.), 'capacitors':(12,9.), 'input_caps':(12,7.5),
              'clamp':(12,6.),'magnetic_flux':(12,5.5)}
     if op['topology'] == 'ACF-FORWARD':
@@ -69,12 +69,18 @@ def render(run, path, case_id, kind, output=1):
                 ax.bar(x,row['bands'],color='#2f83ac');ticks=np.unique(np.r_[np.arange(0,max(len(bands)-4,1),4),len(bands)-1])
                 ax.set_xticks(ticks,[bands[j] for j in ticks]);ax.set(title=name+' · 频带 RMS',ylabel='A');ax.margins(y=.2)
         elif kind == 'device_losses':
-            axes=fig.subplots(1,2);semi=result['semi'];sw=semi['switch'];di=semi['diode']
+            axes=fig.subplots(1,2);semi=result['semi'];sw=semi['switch'];di=semi.get('diode',{})
             names=['导通','开通','关断','Coss','驱动'];values=[sw[key] for key in ('P_cond','P_sw_on','P_sw_off','P_coss','P_gate')]
-            other=[('导通',di.get('P_cond',di.get('P_sr_cond',0))),('反向恢复',di.get('P_rr',0))]
-            if semi.get('freewheel'):other += [('续流导通',semi['freewheel']['P_cond']),('续流恢复',semi['freewheel']['P_rr'])]
-            if semi.get('auxiliary'):other += [('辅助 MOS',semi['auxiliary']['P_total'])]
-            for ax,labels,values,title in ((axes[0],names,values,'Q1 损耗分解'),(axes[1],[r[0] for r in other],[r[1] for r in other],'整流 / 辅助器件损耗')):
+            if op.get('cot'):
+                low = semi['auxiliary']
+                other = [('低侧导通',low['P_cond']),('低侧 Coss',low['P_coss']),('低侧驱动',low['P_gate'])]
+                second_title = '每相低侧 MOS 损耗'
+            else:
+                other=[('导通',di.get('P_cond',di.get('P_sr_cond',0))),('反向恢复',di.get('P_rr',0))]
+                if semi.get('freewheel'):other += [('续流导通',semi['freewheel']['P_cond']),('续流恢复',semi['freewheel']['P_rr'])]
+                if semi.get('auxiliary'):other += [('辅助 MOS',semi['auxiliary']['P_total'])]
+                second_title = '整流 / 辅助器件损耗'
+            for ax,labels,values,title in ((axes[0],names,values,'每相高侧 MOS 损耗' if op.get('cot') else 'Q1 损耗分解'),(axes[1],[r[0] for r in other],[r[1] for r in other],second_title)):
                 bars=ax.barh(labels,values,color='#2676b9');ax.invert_yaxis();ax.bar_label(bars,fmt='%.3g W',padding=4);ax.set(title=title,xlabel='W');ax.set_xlim(0,max(values+[.01])*1.3)
         elif kind in ('magnetics','magnetic_flux') and (result['mag'].get('inductor') or {}).get('design_enabled') is False:
             ind = result['mag']['inductor']
@@ -160,7 +166,8 @@ def render(run, path, case_id, kind, output=1):
             if loop is None:
                 raise ValueError(case.get('loop_error') or '当前模型未提供环路结果')
             axes=fig.subplots(2,2)
-            for index,label in ((0,'对象 Gvc'),(1,'补偿器 Gc')):
+            labels = ('频率到取样电压 Gvf', '频率 PI') if op.get('cot') else ('对象 Gvc', '补偿器 Gc')
+            for index,label in enumerate(labels):
                 axes[0,0].semilogx(loop['f'],20*np.log10(np.maximum(abs(loop['gains'][index]),1e-300)),label=label)
                 axes[0,1].semilogx(loop['f'],loop['phases'][index],label=label)
             axes[1,0].semilogx(loop['f'],20*np.log10(np.maximum(abs(loop['gains'][2]),1e-300)),label='开环增益'); axes[1,1].semilogx(loop['f'],loop['phases'][2],label='开环相位')
@@ -169,6 +176,12 @@ def render(run, path, case_id, kind, output=1):
                 if loop.get('fc'):
                     ax.axvline(loop['fc'],ls=':',color='#4aa996')
             axes[1,0].axhline(0,ls='--',color='#cf6666'); axes[1,1].axhline(-180,ls='--',color='#cf6666')
+        elif kind == 'load_step':
+            from loop_charts import draw_feedback_load_step
+            step = (result.get('loop') or {}).get('load_step') or {}
+            if not step.get('available'):
+                raise ValueError(step.get('reason') or '当前工况未提供反馈路负载阶跃')
+            draw_feedback_load_step(fig.subplots(1, 2, sharex=True), step)
         elif kind == 'efficiency':
             curve=case.get('efficiency_curve')
             if not curve:

@@ -26,6 +26,21 @@ def device_stress(op):
     topo = op['topology']
     sw = {'I_rms': op['I_sw_rms'], 'I_pk': op['I_sw_pk'],
           'I_avg': op['I_sw_avg'], 'V_max': op['V_sw_max']}
+    if op.get('cot'):
+        cot = op['cot']
+        abs_peak = max(op['I_L_pk'], abs(op['I_L_min']))
+        rows=cot.get('phase_data') or []
+        if rows:
+            abs_peak=max(max(abs(r['current_peak_A']),abs(r['current_valley_A'])) for r in rows)
+            sw['I_rms']=max(r['high_rms_A'] for r in rows)
+        note = '稳态阻断含平均压降和已配置死区体二极管压降，Vmax 另含设定裕量。未求解寄生换流尖峰。'
+        sw.update(I_pk=abs_peak, V_block=cot['high_side_block_V'],
+                  note='每相高侧 MOSFET。'+note)
+        low = dict(I_rms=max(r['low_rms_A'] for r in rows) if rows else cot['phase_low_side_rms_A'], I_pk=abs_peak,
+                   I_avg=op['I_L_avg']*op['Dp'], V_block=cot['low_side_block_V'],
+                   V_max=cot['low_side_block_V']*(1.+op['ring_margin']),
+                   note='每相同步低侧 MOSFET。'+note)
+        return dict(switch=sw, auxiliary=low)
     d = {'I_rms': op['I_d_rms'], 'I_pk': op['I_d_pk'],
          'I_avg': op['I_d_avg'], 'V_max': op['V_d_max']}
     if topo in (TOPO_FLYBACK, TOPO_QRFLYBACK):
@@ -251,6 +266,55 @@ def diode_loss(op, dev, di_stress=None, current=None, curve_key='diode_curve'):
 def semiconductor_losses(op, dev, n_switches=1, n_diodes=1, wf=None):
     """Total semiconductor loss (switch + rectifier, per topology)."""
     stress = device_stress(op)
+    if op.get('cot'):
+        cot = op['cot']
+        frequency = op['f_sw']
+        rows=cot.get('phase_data')
+        if rows:
+            cfg=(cot.get('engineering') or {}).get('configuration') or {}
+            phase_losses=[]
+            for r in rows:
+                local=dict(op,I_sw_on=abs(r['current_valley_A']),I_sw_off=r['current_peak_A'])
+                device=dict(dev,Rds_on=r['rhigh_ohm'])
+                high=dict(I_rms=r['high_rms_A'],I_pk=max(abs(r['current_peak_A']),abs(r['current_valley_A'])),
+                          I_avg=r['duty']*r['current_avg_A'],V_max=r['high_block_V'])
+                hs=mosfet_loss(local,device,high)
+                dead=cfg.get('dead_time_s',0.); vf=cfg.get('body_diode_V',.7)
+                # Both dead windows replace low-channel conduction. Body loss
+                # is bounded separately; channel overlap correction is omitted
+                # to keep a conservative, explicit first-order budget.
+                body=frequency*dead*sum((vf+.005*abs(edge))*abs(edge) for edge in
+                                       (r['current_peak_A'],r['current_valley_A']))
+                reverse=cfg.get('body_qrr_C',0.)*cot['bus_voltage_V']*frequency if r['current_valley_A']>0 else 0.
+                hs['P_qrr']=reverse
+                hs['P_total']+=reverse
+                hs['recovery_note']='Qrr×Vbus×fs 的换流能量预算归入高侧开通；体二极管实际热分配需器件瞬态模型。'
+                ls=dict(P_cond=r['rlow_ohm']*r['low_rms_A']**2,
+                        P_gate=dev['Qg_aux']*dev['Vgs']*frequency,
+                        P_coss=.5*dev['Coss_aux']*r['low_block_V']**2*frequency,
+                        P_body=body,P_qrr=0.,
+                        note='低侧导通/栅驱/Coss及显式死区、Qrr一阶预算；未扣除被死区替代的沟道损耗，未求解ZVS。')
+                ls['P_total']=sum(ls[k] for k in ('P_cond','P_gate','P_coss','P_body','P_qrr'))
+                phase_losses.append(dict(id=r['id'],switch=hs,auxiliary=ls,P_total=hs['P_total']+ls['P_total']))
+            return dict(switch=phase_losses[0]['switch'],auxiliary=phase_losses[0]['auxiliary'],
+                        phases=phase_losses,n_switches=2*len(rows),n_diodes=0,
+                        P_total=sum(r['P_total'] for r in phase_losses))
+        # Use the physical blocking estimate for switching loss, rather than
+        # the engineering selection margin. Negative valley direction is
+        # retained on the waveforms; its magnitude is used for hard-switching
+        # screening because no dead-time or commutation model is present.
+        hi = stress['switch']
+        sw = mosfet_loss(dict(op, I_sw_on=abs(op['I_L_min'])), dev,
+                         dict(hi, V_max=hi['V_block']))
+        low = stress['auxiliary']
+        aux = dict(P_cond=dev['Rds_aux']*low['I_rms']**2,
+                   P_gate=dev['Qg_aux']*dev['Vgs']*frequency,
+                   P_coss=.5*dev['Coss_aux']*low['V_block']**2*frequency,
+                   note='每相低侧估算含导通、栅驱动和 Coss；未评估体二极管及死区换流。')
+        aux['P_total'] = aux['P_cond']+aux['P_gate']+aux['P_coss']
+        phases = cot['phases']
+        return dict(switch=sw, auxiliary=aux, n_switches=2*phases, n_diodes=0,
+                    P_total=phases*(sw['P_total']+aux['P_total']))
     sw = mosfet_loss(op, dev, stress['switch'])
     if wf is None and (dev.get('diode_curve') or dev.get('freewheel_curve')):
         from waveforms import make_waveforms

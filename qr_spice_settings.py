@@ -2,6 +2,7 @@
 QR_SETTINGS = {
     'qr_cds_pf': (470., 0., 100000., '漏极有效谐振电容，0=使用设计 Coss', 'pF'),
     'qr_aux_ratio': (.1, .001, 2., 'ZCD 辅助绕组匝比 Naux/Np', ''),
+    'qr_zcd_winding': (-1., -1., 6., 'ZCD 取样：-1自动，0原边端电压，1–6输出绕组', ''),
     'qr_zcd_r': (22000., 1., 1e7, 'ZCD 串联电阻', 'Ω'),
     'qr_zcd_c_pf': (5., .1, 10000., 'ZCD 等效输入电容（假设）', 'pF'),
     'qr_zcd_delay_ns': (-1., -1., 10000., 'ZCD 附加延时，-1=四分之一谐振周期估算', 'ns'),
@@ -18,7 +19,7 @@ QR_SETTINGS = {
     'qr_ocp_v': (2., .1, 5., '异常 CS 故障锁存阈值', 'V'),
     'qr_max_on_us': (100., 1., 1000., '最长导通看门狗（模型安全约束）', 'µs'),
 }
-COMMON = {'blanking_ns','min_on_ns','delay_ns','driver_resistance','soft_start_ms',
+COMMON = {'line_load_enabled','blanking_ns','min_on_ns','delay_ns','driver_resistance','soft_start_ms',
     'stop_ms','step_ms','load_after','feedback_scale','cs_filter_ns','kp','fz1','fp1','fz2','fp2',
     'include_cap_esl','diode_cj_pf','short_test','short_output','short_start_ms','short_duration_ms',
     'short_resistance','simulation_timeout_s','simulation_threads','simulation_reuse','comparison_tolerance_pct',

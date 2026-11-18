@@ -10,3 +10,6 @@ jsonschema==4.25.0
 # Integrated transformer CAD/mesh worker; Elmer remains a user-installed solver.
 gmsh==4.15.2
 meshio==5.3.5
+# Isolated desktop 3D preview; renders with the installed WebView2 runtime.
+pywebview==6.1
+pythonnet==3.2.1; sys_platform == 'win32'

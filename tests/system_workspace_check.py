@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -76,38 +77,99 @@ class DesktopLifecycle(unittest.TestCase):
         try:
             shell = SystemWorkspace(root, recovery=False)
             shell.initialize()
+            root.maxsize(1920, 1080)
+            root.geometry('1440x900')
+            root.update()
+            self.assertIn('szj', shell._github_button.cget('text'))
+            with patch('project_identity.webbrowser.open_new_tab', return_value=True) as open_tab:
+                shell._github_button.invoke()
+                open_tab.assert_called_once_with('https://github.com/sunzhanjie2-sudo/power-supply-design-software')
             self.assertIsNone(shell.calculator)
             self.assertEqual(len(shell.project['units']), 1)
             shell.add_unit()
             shell.project['units'][1]['name'] = '独立 Buck'
             buck = json.loads((ROOT/'examples/24W_BUCK_VM_TPS40200.json').read_text(encoding='utf-8'))
             w.set_unit_config(shell.project, 'PSU-02', buck)
+            shell.set_zoom(2)
+            root.update()
+            shell.canvas.xview_moveto(.27)
+            view = shell.canvas.xview()
             for identity in ('PSU-01','PSU-02','PSU-01'):
                 shell.open_unit(identity)
                 app = shell.calculator
                 self.assertIsNotNone(app)
+                self.assertIs(app.root, root)
+                self.assertTrue(root.winfo_ismapped())
+                self.assertFalse(shell._architecture.winfo_manager())
+                self.assertEqual(app.container.winfo_manager(), 'grid')
+                self.assertEqual(shell._github_button.winfo_manager(), 'grid')
                 self.assertEqual(app._topo_key(), 'BUCK' if identity=='PSU-02' else 'FLYBACK')
                 if identity=='PSU-01':
                     app.set_param('P_out', 42)
+                    app.restore_result_page('mag')
                 app.on_close()
                 self.assertTrue(root.winfo_exists())
                 self.assertIsNone(shell.calculator)
+                self.assertEqual(shell._architecture.winfo_manager(), 'grid')
+                self.assertAlmostEqual(shell.canvas.xview()[0], view[0], places=2)
                 self.assertEqual(w.unit_by_id(shell.project, identity)['spec']['P_out'], 24 if identity=='PSU-02' else 42)
+            shell.open_unit('PSU-01')
+            self.assertIs(shell.calculator, app)
+            self.assertEqual(app.selected_result_page(), 'mag')
+
+            with tempfile.TemporaryDirectory() as directory:
+                saved = str(Path(directory)/'system.json')
+                app.set_param('P_out', 43)
+                with patch('system_workspace_ui.filedialog.asksaveasfilename', return_value=saved):
+                    self.assertTrue(shell.save())
+                self.assertIs(shell.calculator, app)
+                self.assertEqual(w.unit_by_id(w.load_project(saved), 'PSU-01')['spec']['P_out'], 43)
+                self.assertEqual(shell._save_state.get(), '已保存到工程文件')
+
+            field = app._param_widgets['P_out'][1]
+            field.delete(0, 'end')
+            field.insert(0, 'pending')
+            with patch('system_workspace_ui.messagebox.showerror') as show_error:
+                self.assertFalse(shell.back_to_architecture())
+                show_error.assert_called_once()
+            self.assertIs(shell.calculator, app)
+            self.assertEqual(w.unit_by_id(shell.project, 'PSU-01')['spec']['P_out'], 43)
+            app.set_param('P_out', 43)
+            self.assertTrue(shell.back_to_architecture())
             root.update()
             # No dangling bind_all handlers referring to destroyed Toplevels.
             root.event_generate('<MouseWheel>', delta=-120)
             root.update()
             self.assertEqual(errors, [])
-            from PIL import ImageGrab
-            root.geometry('1440x900+0+0')
-            shell.render();root.update()
-            dest = ROOT/'artifacts/qa/system_workspace_20261031/desktop.png'
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            ImageGrab.grab(bbox=(root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height())).save(dest)
         finally:
             if shell.calculator:
                 shell.calculator._workspace_return = lambda app: True
                 shell.calculator.on_close()
+            root.destroy()
+
+    def test_system_simulation_returns_after_unit_navigation(self):
+        import tkinter as tk
+        from tkinter import ttk
+        from simulation_center import show
+        from system_workspace_ui import SystemWorkspace
+
+        root = tk.Tk()
+        shell = SystemWorkspace(root, recovery=False)
+        shell.initialize()
+        try:
+            window = show(shell, 'unit', system=True)
+            page = shell._simulation_center.pages['unit']
+            next(widget for widget in page.winfo_children() if isinstance(widget, ttk.Button)).invoke()
+            calculator = shell.calculator
+            self.assertIsNotNone(calculator)
+            self.assertIs(calculator.root, root)
+            self.assertEqual(window.state(), 'withdrawn')
+            self.assertFalse(calculator._simulation_center.closed)
+            self.assertTrue(shell.back_to_architecture())
+            root.update()
+            self.assertEqual(window.state(), 'normal')
+            self.assertTrue(calculator._simulation_center.closed)
+        finally:
             root.destroy()
 
 

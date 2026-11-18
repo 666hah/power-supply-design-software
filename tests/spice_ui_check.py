@@ -138,14 +138,31 @@ class SpiceUICheck(unittest.TestCase):
             dialog.geometry('1120x760')
             end=time.monotonic()+.4
             while time.monotonic()<end:root.update();time.sleep(.01)
-            # Small windows now retain readable diagram boxes and expose a
-            # horizontal scrollbar, instead of shrinking text into overlaps.
+            # Geometry and hit-testing require a mapped toplevel. The owned
+            # dialog stays transparent throughout the test.
+            if not dialog.winfo_ismapped():
+                root.deiconify()
+                dialog.deiconify()
+                end=time.monotonic()+.4
+                while time.monotonic()<end:root.update();time.sleep(.01)
+            # The compact field and fitted view must leave the diagram wider
+            # than the form, with manual zoom available for closer inspection.
             extent=tuple(float(v) for v in logic.canvas.cget('scrollregion').split())
             self.assertLessEqual(logic.canvas.bbox('all')[2],extent[2]+2)
+            self.assertGreater(logic.winfo_width(),dialog.winfo_width()*.57)
+            self.assertLess(field.winfo_width(),180)
+            self.assertLessEqual(logic.canvas.bbox('all')[2],logic.canvas.winfo_width())
+            logic._change_zoom(2.)
+            end=time.monotonic()+.25
+            while time.monotonic()<end:root.update();time.sleep(.01)
             self.assertTrue(logic.xscroll.winfo_ismapped())
             logic.canvas.xview_moveto(1);root.update()
             self.assertGreater(logic.canvas.xview()[0],0)
-            self.assertAlmostEqual(logic.canvas.xview()[1],1)
+            self.assertAlmostEqual(logic.canvas.xview()[1],1,places=2)
+            logic._fit()
+            end=time.monotonic()+.25
+            while time.monotonic()<end:root.update();time.sleep(.01)
+            self.assertFalse(logic.xscroll.winfo_ismapped())
             capture(dialog,folder/'desktop-settings-small.png')
             with tempfile.TemporaryDirectory() as td, patch('spice_ui.filedialog.asksaveasfilename',return_value=str(Path(td)/'project.zip')),patch('spice_ui.messagebox.showinfo') as info:
                 button=next(w for w in descendants(dialog) if isinstance(w,ttk.Button) and '导出 ASC' in w.cget('text'))

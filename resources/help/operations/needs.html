@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>填写开关电源的需求与工况 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>04  填写开关电源的需求与工况</h1>
+<p>先定义计算边界，再选器件。输入用连接器侧电压，输出用端口电压。隔离多路先确认主反馈，其他输出由匝比与工作条件估算。</p>
+<p class='entry'>系统画布 → 双击开关电源单元 → 左侧“① 需求与方案”。</p>
+<h2>操作步骤</h2><ol>
+<li><strong>选择拓扑和控制方式</strong> 按电路选择 Buck、Boost、反相 Buck-Boost、反激、准谐振反激或有源钳位正激。电压型和峰值电流型的环路对象不同，按实际控制器选择可用模式。</li>
+<li><strong>确定端点与额定点</strong> 依次填输入下限和上限、端口输出目标和输出功率。固定输入时上下限填同一个值。示例可从“示例 → 三路 CCM 反激 · 用户配置”载入，先核对需求再修改。</li>
+<li><strong>选择单路或隔离多绕组输出</strong> 多路时启用“启用隔离多绕组输出（最多 6 路）”，设置路数，在各路填写最大、最小功耗与纹波目标。在左栏“⑧ 反馈与补偿”选主反馈 OUT，核对该路端口设定值。</li>
+<li><strong>复核拓扑与显示工况</strong> 点“重新计算”，在右侧“① 拓扑”核对符号、器件位号和各路输出。用“显示工况（全部页面）”选 Vin min 或 Vin max，确认顶部显示的当前点。</li>
+</ol>
+<figure><a href="screens/needs.jpg" target="_blank" aria-label="查看原图 需求与方案输入和拓扑示意"><img src="screens/needs.jpg" alt="需求与方案输入和拓扑示意"></a><figcaption>图 4-1　需求与方案输入和拓扑示意</figcaption><p>对照左侧需求、右侧连接与位号及顶部显示工况。修改端点后要看数值是否出现在当前工况栏。</p></figure>
+<h2>输入字段</h2><div class="table"><table><caption>表 4-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">输入电压下限 Vin,min / 上限 Vin,max</th><td>V</td><td>均为输入端口电压，范围必须为正且下限不高于上限。输入防反管启用时，板内母线另有压降。</td></tr>
+<tr><th scope="row">端口电压 Vout、输出功率 Pout</th><td>V、W</td><td>若启用输出防反，端口位于防反管之后。SSR 主反馈测量点位于防反管前电容端。</td></tr>
+<tr><th scope="row">开关频率 fsw</th><td>Hz 或界面倍率</td><td>固定频率拓扑用所填频率。准谐振模式的该项用于上限检查，实际频率从工作点读出。</td></tr>
+<tr><th scope="row">预设效率 η预设</th><td>%</td><td>用于工作点的功率预算。实际模型效率由各项损耗汇总求得。</td></tr>
+<tr><th scope="row">输出纹波目标 ΔV/Vout</th><td>%</td><td>输出峰峰纹波相对输出电压的设计限值。与实际计算纹波分别查看。</td></tr>
+<tr><th scope="row">输出路数、隔离反馈方式、主反馈 / PSR 基准 OUT</th><td>1–6、选择</td><td>分配有效副边路数和主反馈路。定频反激可按实际电路选择 SSR 或 PSR-MP6005。</td></tr>
+<tr><th scope="row">各路最大 / 最小输出功率</th><td>W</td><td>交叉调整率扫描的每路负载端点。最小值按实际永久负载填写。旧项目两值相同表示该路没有轻重载差。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>界面仅切换当前显示工况。报告根据保存的输入范围生成结果，两端共用同一套已确定的硬件。</p>
+<p>多路模型只有选定的主反馈回路。非反馈路从整数匝数等参数派生参考值，并随实际负载与换流条件改变。</p>
+<p>核对单位下拉项后再录入数字。比如输入 250 并选择 kHz，保存到计算配置中对应 250000 Hz。</p>
+<div class="paging"><a href="ldo.html">上一章　核算 LDO 压差 损耗和结温</a> <a href="initial.html">下一章　由规格生成电源初版</a></div></main>
+</body>
+</html>

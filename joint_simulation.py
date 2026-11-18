@@ -182,11 +182,13 @@ def _write(path, value):
 
 def run_joint_simulation(config, *, tool_root='builtin', project_file=None, output_directory,
                          leakage_factor=1.2, executable=None, prepare_reference_inputs=True,
-                         resume_field=None, cancelled=None, progress=None, environment=None):
+                         auto_circuit_plan=True, resume_field=None, cancelled=None,
+                         progress=None, environment=None):
     """Run all stages serially in an isolated, uniquely named export directory.
 
     ``resume_field`` is an optional {package,result_directory} bundle, checked
     through the same source/hash/artifact verification as a new field run.
+    With ``auto_circuit_plan=False``, honor the saved circuit test options.
     ``progress`` receives {stage,message,status}. No Tk objects are accessed.
     """
     cancel = cancelled or (lambda: False)
@@ -248,14 +250,18 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
             candidate = copy.deepcopy(original)
         else:
             candidate = _freeze_hardware(original, _calculate(original, cancel))
-            from spice_planning import recommend_settings
-            from config_io import decode_config
-            candidate['spice_config'] = recommend_settings(decode_config(candidate),
-                candidate.get('spice_config') or {}, scope='full')
+            if auto_circuit_plan:
+                from spice_planning import recommend_settings
+                from config_io import decode_config
+                candidate['spice_config'] = recommend_settings(decode_config(candidate),
+                    candidate.get('spice_config') or {}, scope='full')
+            record['circuit_plan'] = 'automatic_full' if auto_circuit_plan else 'design_settings'
         if environment is not None and not resume_field:
             from simulation_environment import check_environment
             environment = dict(environment, ltspice=str(executable))
-            checked = check_environment(environment, require_spice=True, probe=True)
+            # CAD can be generated from the current core profile during the
+            # portable preparation that follows this local executable check.
+            checked = check_environment(environment, require_spice=True, probe=True, validate_cad=False)
             record['environment_check'] = checked
             if not checked['ok']:
                 raise ValueError('仿真环境检查未通过：' + '; '.join(
@@ -364,7 +370,7 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
             record['limits'].append('部分端点的解析环路未完成，报告并列呈现失败原因，不补造波特图。')
         finish()
 
-        begin('spice', '使用同一矩阵执行电路瞬态、环路FRA和适用的交叉负载角点')
+        begin('spice', '使用同一矩阵运行已配置的电路试验')
         from spice_runtime import compare_design
         spice_result = compare_design(design_run, directory / '电路仿真与设计对比.docx',
             cancelled=cancel, executable=executable,

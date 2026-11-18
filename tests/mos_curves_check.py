@@ -145,6 +145,8 @@ class CurveUIChecks(unittest.TestCase):
         a=self.app
         with patch('mos_curve_ui.filedialog.askopenfilename',return_value=str(ROOT/'examples/MOS_CURVE_DEMO_TRANSFER.csv')):
             a._import_mos_curve()
+        self.assertEqual(a._mos_resolved_mode(),'manual')
+        a._set_curve_override('Q1:transfer','curve')
         self.assertEqual(a.params['mos_miller_mode'].get(),'curve')
         self.assertTrue(a.update_all())
         self.assertIn('曲线查值',a.mos_gate_readout.get())
@@ -177,7 +179,7 @@ class CurveUIChecks(unittest.TestCase):
         with patch('mos_curve_ui.filedialog.askopenfilename',return_value=str(ROOT/'examples/40W_CCM_FLYBACK.json')),patch('mos_curve_ui.messagebox.showerror') as error:
             a._import_mos_curve();self.assertTrue(error.called)
         self.assertEqual(a._mos_miller_curve,before)
-        bad=dict(self.base,mos_miller_mode='curve',mos_miller_curve={})
+        bad=dict(self.base,mos_miller_mode='curve',mos_miller_curve={},device_curve_settings={})
         with self.assertRaises(ValueError):a._apply_config(bad)
 
     def test_multiple_candidates_use_explicit_selection_and_cancellation(self):
@@ -190,7 +192,7 @@ class CurveUIChecks(unittest.TestCase):
             with patch.object(a,'_select_mos_curve',return_value=second):
                 a._import_mos_curve()
         self.assertEqual(a._mos_miller_curve['name'],'another condition')
-        self.assertEqual(a.params['mos_miller_mode'].get(),'curve')
+        self.assertEqual(a.params['mos_miller_mode'].get(),'manual')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

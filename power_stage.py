@@ -120,6 +120,8 @@ DEFAULT_PARAMS.update(PSR_DEFAULTS)
 DEFAULT_PARAMS.update(outputs=[],feedback_mode='SSR',feedback_output=1,
                       coupling_config=dict(enabled=False, k=[], dcr=[]))
 DEFAULT_PARAMS['engineering_acceptance'] = {}
+from cot_settings import DEFAULTS as COT_DEFAULTS
+DEFAULT_PARAMS.update(COT_DEFAULTS)
 
 
 # ----------------------------------------------------------------------------
@@ -127,6 +129,8 @@ DEFAULT_PARAMS['engineering_acceptance'] = {}
 # ----------------------------------------------------------------------------
 def validate_design_inputs(p):
     """Reject invalid numerical inputs consistently before making a snapshot."""
+    from cot_settings import validate as validate_cot
+    validate_cot(p)
     from inductor_selection import validate as validate_inductor, purchased, DESIGN_FIELDS
     validate_inductor(p)
     from custom_cores import validate_selected_cores
@@ -201,12 +205,17 @@ def _with_efficiency(p, solver):
 
 
 def compute_operating_point(p):
+    from copy import deepcopy
     from capacitor_banks import normalize
-    from isolated_outputs import selected_params,output_specs
+    from isolated_outputs import selected_params
     p=normalize(p)
     op=_compute_operating_point(p)
     op['output_capacitors']=selected_params(p).get('output_capacitors')
-    for child,rail in zip(op.get('output_ops',[]),output_specs(p)):
+    for child,rail in zip(op.get('output_ops',[]),op.get('outputs',[])):
+        # Physical solvers also expose a synthetic rail for single-output
+        # projects, whose capacitor bank is stored at the project root.
+        if not p.get('outputs'):
+            rail['output_capacitors']=deepcopy(p.get('output_capacitors'))
         child['output_capacitors']=rail.get('output_capacitors')
     return op
 
@@ -220,6 +229,11 @@ def _compute_operating_point(p):
     from parasitics import effective_parameters
     p = effective_parameters(p)
     validate_design_inputs(p)
+    from cot_settings import active as cot_active, COT_MODE
+    if cot_active(p):
+        from cot_buck import compute_operating_point as compute_cot
+        q = dict(p, buck_phases=int(p.get('buck_phases', 1)), control_mode=COT_MODE)
+        return compute_cot(q)
     from nonisolated import is_enabled
     if is_enabled(p):
         from nonisolated import solve, effective
@@ -264,6 +278,9 @@ def _compute_operating_point(p):
 
 
 def compute_nonllc_op(p):
+    from cot_settings import active as cot_active
+    if cot_active(p):
+        return compute_operating_point(p)
     from flyback_clamp import attach_clamp
     return attach_clamp(_with_efficiency(p, _compute_nonllc_op), p)
 

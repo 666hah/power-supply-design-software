@@ -15,13 +15,11 @@ const dimensions = [
   { key: "Ae", label: "有效截面积", power: 2 },
   { key: "Ve", label: "有效体积", power: 3 },
   { key: "Wa", label: "窗口面积", power: 2 },
-  { key: "MLT", label: "平均匝长", power: 1 },
 ];
 const units = ref<Record<string, string>>({
   Ae: "mm",
   Ve: "mm",
   Wa: "mm",
-  MLT: "mm",
 });
 const choice = computed(() =>
     props.inductor ? "core_choice_L" : "core_choice",
@@ -50,7 +48,6 @@ function selectCore(value: string) {
       Ae: { v: 0, u: "mm²" },
       Ve: { v: 0, u: "mm³" },
       Wa: { v: 0, u: "mm²" },
-      MLT: { v: 0, u: "mm" },
     };
   emit("change", next);
 }
@@ -172,8 +169,9 @@ function input(key: string, power: number, value: string) {
     </p>
     <p v-if="material && ['FLYBACK','QR-FLYBACK','ACF-FORWARD'].includes(spec.topology) && meta.permeability_materials" class="hint">
       材料初始磁导率 μi={{ meta.permeability_materials[spec.core_material]?.mu_r ?? '待提供' }}。
-      μr 填 0 时采用该预设，可在“磁导率与气隙估算”中修改。有效磁路长度 le 自动取 Ve/Ae，平均匝长 MLT 用于铜阻计算。
+      μr 填 0 时采用该预设，可在“磁导率与气隙估算”中修改。有效磁路长度 le 自动取 Ve/Ae。
     </p>
+    <p class="hint">{{ meta.native ? '此浏览器内核按磁芯估计平均匝长。' : '平均匝长由磁件设计计算，结果见磁件设计报告。' }}</p>
   </div>
 </template>
 <style scoped>

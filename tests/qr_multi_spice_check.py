@@ -63,6 +63,50 @@ class MultiQRSpiceChecks(unittest.TestCase):
         self.assertEqual(meta['qr']['feedback_output'],2)
         self.assertIn('SEL={FB_SELECT}',files['power_stage.inc'].decode('ascii'))
 
+    def test_independent_current_components_are_saved_with_physical_names(self):
+        _,files=self.files()
+        meta=json.loads(files['manifest.json'])
+        probes=meta['current_observation']
+        analysis=files['analysis.inc'].decode('ascii').lower()
+        self.assertEqual(probes['mos_channel'],'i(xq1:smain)')
+        self.assertEqual(probes['mos_channel_direction_scale'],-1.)
+        self.assertIn('D→S',probes['mos_channel_direction_note'])
+        self.assertEqual(probes['mos_coss'],'i(xq1:coss)')
+        for name in ('mos_channel','mos_coss','mos_gate_capacitance',
+                     'mos_body_diode','sense_resistor','clamp_conduction','clamp_capacitance'):
+            self.assertIn(probes[name],analysis)
+        for i in (1,2):
+            rail=probes['outputs'][f'OUT{i}']
+            self.assertEqual(rail['rectifier_conduction'],f'i(xd_o{i}:dmain)')
+            self.assertEqual(rail['rectifier_capacitance'],f'i(xd_o{i}:cj)')
+            self.assertTrue(all(name in analysis for name in rail.values()))
+        self.assertIn('QR_CURRENTS_AND_RINGING.md',files)
+        self.assertEqual(files['QR_CURRENTS_AND_RINGING.md'],
+                         (ROOT/'docs/QR_CURRENTS_AND_RINGING.md').read_bytes())
+
+    def test_zcd_auto_explicit_and_historical_sense_share_native_nodes(self):
+        p,files=self.files()
+        meta=json.loads(files['manifest.json'])
+        self.assertEqual(meta['qr']['zcd_sense']['selected_winding'],2)
+        self.assertAlmostEqual(meta['resolved_controller']['Z_SENSE_RATIO'],.1*60/7)
+        self.assertIn(b'XZCD rect2 sgnd zcd 0 GQR_ZCD RATIO={Z_SENSE_RATIO}',files['power_stage.inc'])
+        self.assertIn(b'FLAG 1232 772 rect2',files['Flyback.asc'])
+        self.assertIn(b'FLAG 1232 852 sgnd',files['Flyback.asc'])
+        self.assertIn(b'SYMATTR SpiceLine RATIO={Z_SENSE_RATIO}',files['Flyback.asc'])
+        for choice,positive,negative in ((0,'drain','vin_bus'),(1,'rect1','sgnd')):
+            configured=copy.deepcopy(p);configured['spice_config']['qr_zcd_winding']=choice
+            bundle=calculate_parameters(configured,analysis='endpoints',include_loop=False,
+                include_cross_regulation=False).runtime_bundle()
+            exported=project_files(configured,bundle=bundle)
+            self.assertIn(f'XZCD {positive} {negative} zcd 0'.encode(),exported['power_stage.inc'])
+            self.assertIn(f'FLAG 1232 772 {positive}'.encode(),exported['Flyback.asc'])
+            self.assertIn(f'FLAG 1232 852 {negative}'.encode(),exported['Flyback.asc'])
+        configured=copy.deepcopy(p);configured['spice_config']['qr_zcd_winding']=3
+        with self.assertRaisesRegex(ValueError,'ZCD'):
+            project_files(configured,bundle=calculate_parameters(configured,analysis='endpoints',
+                include_loop=False,include_cross_regulation=False).runtime_bundle())
+
+
     def test_six_output_native_sheet_keeps_all_power_parts(self):
         native=_multi_schematic((ROOT/'resources/spice/Flyback_6.asc').read_bytes(),6).decode()
         self.assertEqual(native.count('SYMBOL GQR_CTRL'),1)

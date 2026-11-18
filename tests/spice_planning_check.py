@@ -15,7 +15,7 @@ configure_numeric_threads()
 from design_engine.service import calculate_parameters
 from design_engine.specification import load_spec
 from spice_export import normalize_settings,project_files
-from spice_planning import execution_plan,recommend_settings
+from spice_planning import execution_plan,recommend_settings,qr_charge_observation
 from spice_result_cache import NominalCache,cache_key
 from spice_runtime import compare_design,_simulate_nominal
 
@@ -32,10 +32,11 @@ class PlanningChecks(unittest.TestCase):
         changed={k for k in s if s[k]!=quick[k]}
         self.assertEqual(changed,{'step_ms','stop_ms','fra_enabled','cross_enabled'})
         plan=execution_plan(self.p,quick)
-        self.assertEqual(plan['voltages'],[20.,30.]);self.assertEqual(len(plan['stages']),2)
+        self.assertEqual(plan['voltages'],[20.,30.]);self.assertEqual(len(plan['stages']),4)
         self.assertIn('环路 FRA',plan['skipped'])
         full=recommend_settings(self.p,quick,'full');plan=execution_plan(self.p,full)
-        self.assertEqual(len(plan['stages']),6);self.assertEqual(plan['cross_count'],8)
+        self.assertEqual(len(plan['stages']),9);self.assertEqual(plan['cross_count'],8)
+        self.assertEqual(sum(stage['kind']=='line_load' for stage in plan['stages']),1)
         self.assertEqual(full['fra_cycles'],s['fra_cycles'])
         # The suggestion cannot shrink a deliberate long observation window.
         long=normalize_settings(dict(step_ms=200,stop_ms=400))
@@ -44,9 +45,28 @@ class PlanningChecks(unittest.TestCase):
     def test_single_input_and_output_are_not_duplicate_jobs(self):
         p=copy.deepcopy(self.p);p.update(V_in_min=30,V_in_max=30,outputs=[])
         plan=execution_plan(p,normalize_settings())
-        self.assertEqual(len(plan['stages']),2)
+        self.assertEqual(len(plan['stages']),3)
         self.assertEqual(plan['output_count'],1)
         self.assertFalse(plan['cross_enabled'])
+
+    def test_qr_light_auxiliary_gets_charge_observation_without_hardware_change(self):
+        p=copy.deepcopy(self.p);p['topology']='QR-FLYBACK';p['feedback_output']=1
+        p['outputs']=p['outputs'][:2]
+        p['outputs'][1].update(V_out=12.,P_out=.5,
+            output_capacitors=[dict(C=450e-6,ESR=.03,ESL=0.)])
+        saved=copy.deepcopy(p)
+        hint=qr_charge_observation(p)
+        self.assertEqual(len(hint),1)
+        self.assertEqual(hint[0]['output'],2)
+        # Frozen turns and diode drops resolve this rail to 11.508333 V;
+        # the old editable 12 V hint must not become an independent setpoint.
+        self.assertAlmostEqual(hint[0]['RC_s'],11.508333333333333**2/.5*450e-6)
+        settings=normalize_settings(dict(step_ms=20.,stop_ms=40.))
+        recommended=recommend_settings(p,settings,'quick')
+        self.assertGreater(recommended['step_ms'],hint[0]['recommended_observation_s']*1000)
+        self.assertEqual(p,saved)
+        self.assertEqual(settings['step_ms'],20.)
+        self.assertEqual(qr_charge_observation(dict(p,topology='FLYBACK')),[])
 
     def test_qr_equal_load_bounds_do_not_invent_cross_regulation_corners(self):
         p=copy.deepcopy(self.p);p['topology']='QR-FLYBACK'
@@ -135,6 +155,7 @@ class PlanningChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT/'artifacts') as td,\
              patch('spice_result_cache.NominalCache.load',return_value=(cached,b'unit test log','test')) ,\
              patch('spice_runtime._run') as simulate,\
+             patch('spice_boundary.run_load_transient',return_value=dict(complete=True)),\
              patch('spice_studies.run_fra',new=fra),patch('spice_studies.qr_measured_point',return_value={}),\
              patch('spice_comparison_report.write_report',side_effect=lambda p,e:Path(p).write_bytes(b'unit test report')):
             result=compare_design(run,Path(td)/'test.docx',executable=sys.executable)
@@ -142,15 +163,17 @@ class PlanningChecks(unittest.TestCase):
             self.assertEqual(observed,[41000])
             self.assertEqual(result['fra_successful'],1)
 
-    def test_unsettled_nominal_does_not_start_expensive_studies(self):
+    def test_unsettled_nominal_only_allows_independent_load_steps(self):
         def unsuccessful(exe,folder,case,meta,s,record,cancelled,progress=None):
             record.update(complete=True,nominal_comparable=False,periodicity=dict(stable=False))
         with tempfile.TemporaryDirectory(dir=ROOT/'artifacts') as td,patch.dict(os.environ,POWER_DESIGN_SPICE_CACHE=td),\
              patch('spice_runtime._simulate_nominal',new=unsuccessful),\
+             patch('spice_boundary.run_load_transient',return_value=dict(complete=True)) as step,\
              patch('spice_studies.run_fra') as fra,patch('spice_studies.run_cross') as cross,\
              patch('spice_comparison_report.write_report',side_effect=lambda p,e:Path(p).write_bytes(b'report')):
             result=compare_design(self.design_run,Path(td)/'test.docx',executable=sys.executable)
             fra.assert_not_called();cross.assert_not_called()
+            self.assertEqual(step.call_count,2)
             self.assertTrue(result['incomplete']);self.assertEqual(result['cross_total'],2)
             self.assertEqual(result['cross_successful'],0)
 

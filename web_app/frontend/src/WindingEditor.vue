@@ -216,7 +216,7 @@ function updateConfig(nextConfig: Spec) {
   const next = clone(props.spec);
   next.winding_config = nextConfig;
   ownConfigSignature.value = canonical(nextConfig);
-  localMessage.value = "设置已更改。请评估/刷新截面；如改动了电气匝数或线径，请先重新计算设计。";
+  localMessage.value = "设置已更改。可刷新截面，或重新计算以更新磁件结果。";
   emit("change", next);
 }
 function moveWire(nextConfig:Spec){updateConfig(nextConfig);emit('preview',nextConfig);}

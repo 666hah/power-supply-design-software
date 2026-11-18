@@ -5,12 +5,12 @@ import json
 import math
 import re
 
-MODEL_VERSION='GenericQR-L6565-1.0'
+MODEL_VERSION='GenericQR-L6565-1.2'
 CONTROL_KEYS=('A_CS','CS0','VFF','VSET','TSS','TYPE','KP','FZ1','FP1','FZ2','FP2','RDRV','VG',
     'UVON','UVOFF','TLEB','TONMIN','TPROP','CS_TAU','ZARM','ZTRIG','ZDELAY','TOFFMIN','TOFFLIGHT','TSTART','OCP','TONMAX')
 
 
-def _multi_schematic(content,count):
+def _multi_schematic(content,count,zcd_winding=0):
     """Adapt the checked N-output native sheet, retaining every power branch.
 
     GQR_CTRL retains the first ten GFLY_CTRL2 pins in the same positions. Its
@@ -32,12 +32,13 @@ def _multi_schematic(content,count):
     if n!=1:raise ValueError('QR原生图缺少唯一VCC供电')
     y=200+(count-1)*320+300
     # Flagged terminals are real LTspice electrical nets, not annotation only.
-    flags=(f'FLAG 208 800 zcd\nFLAG 1232 {y-48} drain\n'
-           f'FLAG 1232 {y+32} vin_bus\nFLAG 1488 {y-48} zcd\nFLAG 1360 {y+80} 0\n')
+    positive,negative=(f'rect{zcd_winding}','sgnd') if zcd_winding else ('drain','vin_bus')
+    flags=(f'FLAG 208 800 zcd\nFLAG 1232 {y-48} {positive}\n'
+           f'FLAG 1232 {y+32} {negative}\nFLAG 1488 {y-48} zcd\nFLAG 1360 {y+80} 0\n')
     text=text.replace('SYMBOL PowerVoltage 64 184 R0',flags+'SYMBOL PowerVoltage 64 184 R0',1)
     text+=(f'SYMBOL QR_ZCD 1360 {y} R0\nSYMATTR InstName ZCD\nSYMATTR Value GQR_ZCD\n'
-           'SYMATTR SpiceLine RATIO={Z_RATIO} RZ={Z_R} CZ={Z_C}\n'
-           f'TEXT 1064 {y+112} Left 2 ;ZCD: primary drain-voltage replica; all secondary loads remain physical.\n')
+           'SYMATTR SpiceLine RATIO={Z_SENSE_RATIO} RZ={Z_R} CZ={Z_C}\n'
+           f'TEXT 1064 {y+112} Left 2 ;ZCD: isolated voltage replica of {positive}-{negative}; not a VCC supply.\n')
     text=text.replace('CONFIGURABLE FLYBACK SSR -- native power circuit and controller',
         'MULTI-OUTPUT QR SSR -- event-driven ZCD / CS controller')
     text=text.replace('Controller settings: frequency / soft start / CS / SCP / OLP / hiccup',
@@ -93,6 +94,16 @@ def project_files(parameters,*,bundle=None):
     base['spice_config']=dict(settings,frequency_hz=ref_frequency,short_mode=0,soft_start_mode=0,
         cs_limit=settings['qr_cs_clamp_v'],slope_mode=2,slope=0,comp_offset_v=0.,comp_voltage_max=0.)
     files=fixed_project(base,bundle=bundle);meta=json.loads(files['manifest.json']);v=meta['resolved_controller']
+    requested=int(settings['qr_zcd_winding'])
+    if requested>count:
+        raise ValueError(f'ZCD 取样选择 OUT{requested}，但工程只有 {count} 路输出')
+    geometry=meta['hardware']
+    if requested==-1:
+        candidates=[i for i in range(1,count+1) if i!=selected] or [selected]
+        zcd_winding=min(candidates,key=lambda i:(geometry['windings'][i-1]['Ns'],i))
+    else:zcd_winding=requested
+    zcd_positive,zcd_negative=(f'rect{zcd_winding}','sgnd') if zcd_winding else ('drain','vin_bus')
+    zcd_ratio=settings['qr_aux_ratio']*(geometry['Np']/geometry['windings'][zcd_winding-1]['Ns'] if zcd_winding else 1.)
     v.update(FSW=ref_frequency,CS0=settings['qr_cs_clamp_v'],VFF=settings['qr_vff_v'],
         UVON=settings['qr_uvlo_on_v'],UVOFF=settings['qr_uvlo_off_v'],
         TLEB=settings['blanking_ns']*1e-9,ZARM=settings['qr_zcd_arm_v'],ZTRIG=settings['qr_zcd_trigger_v'],
@@ -100,6 +111,7 @@ def project_files(parameters,*,bundle=None):
         TOFFLIGHT=settings['qr_off_light_us']*1e-6,TSTART=settings['qr_starter_us']*1e-6,
         OCP=settings['qr_ocp_v'],TONMAX=settings['qr_max_on_us']*1e-6,
         QR_VCC=settings['qr_vcc_v'],Z_RATIO=settings['qr_aux_ratio'],Z_R=settings['qr_zcd_r'],
+        Z_SENSE_RATIO=zcd_ratio,Z_SENSE_WINDING=zcd_winding,
         Z_C=settings['qr_zcd_c_pf']*1e-12,Q_COSS=cds,CS_LIM=settings['qr_cs_clamp_v']*(1-settings['qr_vff_v']/3),
         SLOPE=0.,COFF=0.,FSW_LIMIT=float(q['f_sw']))
     inc=files['design_params.inc'].decode('ascii')
@@ -121,10 +133,27 @@ def project_files(parameters,*,bundle=None):
     stage=stage.replace('VCC_SOURCE vcc 0 {VG}','VCC_SOURCE vcc 0 {QR_VCC}')
     stage=re.sub(r'(?m)^XU_CTRL .*$',
         'XU_CTRL fb sense en vcc gate comp ramp ss fault 0 zcd GQR_CTRL '+' '.join(k+'={'+k+'}' for k in CONTROL_KEYS),stage)
-    stage+='\nXZCD drain vin_bus zcd 0 GQR_ZCD RATIO={Z_RATIO} RZ={Z_R} CZ={Z_C}\n'
+    stage+=f'\nXZCD {zcd_positive} {zcd_negative} zcd 0 GQR_ZCD RATIO={{Z_SENSE_RATIO}} RZ={{Z_R}} CZ={{Z_C}}\n'
     files['power_stage.inc']=stage.encode('ascii')
     files['Flyback.cir']=files['Flyback.cir'].replace(b'Generic configurable closed-loop flyback',b'Event-driven QR flyback - L6565 inspired').replace(b'.include power_stage.inc',b'.include GenericQR_L6565.lib\n.include power_stage.inc')
     files['analysis.inc']+=b'\n.save V(zcd) V(vcc) V(xu_ctrl:filtered) V(xu_ctrl:trip)\n'
+    # A winding current includes rectifier displacement current. Preserve the
+    # independent branches so reports can compare the physical quantities
+    # without smoothing away real commutation peaks.
+    current_probes = dict(primary='i(lp)', mos_channel='i(xq1:smain)',
+        mos_coss='i(xq1:coss)', mos_gate_capacitance='i(xq1:cgate)',
+        mos_body_diode='i(xq1:xbody:dmain)', sense_resistor='i(rs1)',
+        clamp_conduction='i(xd_sn1:dmain)', clamp_capacitance='i(xd_sn1:cj)',
+        outputs={f'OUT{i}': dict(winding=f'i(ls{i})',
+            rectifier_conduction=f'i(xd_o{i}:dmain)',
+            rectifier_capacitance=f'i(xd_o{i}:cj)') for i in range(1,count+1)})
+    probe_names = [v for v in current_probes.values() if isinstance(v,str)]
+    probe_names += [v for rail in current_probes['outputs'].values() for v in rail.values()]
+    if parasitic['cw_primary']:probe_names.append('i(c_par_p)')
+    for i,rail in enumerate(parasitic['rails'],1):
+        if rail['cw']:probe_names.append(f'i(c_par_s{i})')
+        if rail['snub_c']:probe_names.append(f'i(r_par_d{i})')
+    files['analysis.inc'] += ('.save V(vin_bus) V(clamp) '+' '.join(probe_names)+'\n').encode('ascii')
     snubber_c=parasitic['snub_c_primary']
     snubber_r=parasitic['snub_r_primary']
     if snubber_c:
@@ -133,23 +162,36 @@ def project_files(parameters,*,bundle=None):
             'FROM {TLOAD-200/FSW} TO {TLOAD-10/FSW}\n').encode('ascii')
     library=resource_path('resources/spice/GenericQR_L6565.lib').read_bytes()
     files['GenericQR_L6565.lib']=library
+    # LTspice reports voltage-controlled-switch I(S) from the second power
+    # terminal to the first. A passive one-switch circuit verifies the sign;
+    # retain the raw trace and explicitly report channel current D -> S.
+    current_probes.update(mos_channel_direction_scale=-1.,
+        mos_channel_direction_note='LTspice I(Smain) 原始方向 S→D；乘 −1 后为 D→S，包含导通及 Coss 放电电流。')
     meta.update(model_version=MODEL_VERSION,library_sha256=hashlib.sha256(library).hexdigest(),
+        current_observation=current_probes,
         topology='QR-FLYBACK',settings=settings,qr=dict(cds_f=cds,design_coss_f=q['Coss'],frequency_limit_hz=q['f_sw'],
             primary_snubber_c_f=snubber_c,primary_snubber_r_ohm=snubber_r,
             extra_body_cj_f=0. if p.get('parasitic_config') else settings['diode_cj_pf']*1e-12,
             design_frequency_hz=ref_frequency,source='https://www.st.com/resource/en/datasheet/l6565.pdf',
             event_driven=True,output_count=count,feedback_output=selected,
             auxiliary='unloaded-voltage-replica',gate_supply='ideal-configured-Vgs',
+            zcd_sense=dict(requested_winding=requested,selected_winding=zcd_winding,
+                positive_node=zcd_positive,negative_node=zcd_negative,ratio=zcd_ratio,
+                source='output-winding-terminal-voltage' if zcd_winding else 'legacy-primary-terminal-voltage',
+                isolation='ideal-unloaded-voltage-replica',supplies_vcc=False),
             note='FSW 只用于测量窗口与步长；不驱动时钟。VG 采用设计驱动电压，不模拟真实 VCC−压降。'))
     meta['approximation_notes']=[
         'L6565 逻辑参考的原创通用 QR 行为模型，不是 ST 官方晶体管级模型，也未直接套用用户参考库。',
         'ZCD 上升预备、下降触发，经 RC 与附加延时置位；按 COMP 调节关断消隐，轻载可跳谷。400µs 定时器仅在无触发时补发启动脉冲，不是固定频率时钟。',
-        'CS 逐周期限流随 VFF 线性折减；异常 CS 超阈值锁存至 VCC 欠压。外部理想 VCC 不会自行跌落，故不能宣称已模拟 VCC 供电打嗝重启。',
+        'CS 逐周期限流随 VFF 线性折减；输入使用高阻电压副本实现给定时间常数的等效滤波，不用内部1Ω数学电阻加载采样电阻。异常 CS 超阈值锁存至 VCC 欠压；外部理想 VCC 不会自行跌落。',
         'SSR 采用计算器等效补偿传递函数与外部参考缓升；不模拟芯片 OTA、光耦/TL431 及真实启动供电。COMP 是放大后 CS 命令，芯片等效 COMP=2.5+3×COMP/(A_CS×CS0)。',
         f'有效漏极谐振电容 {cds*1e12:g} pF；设计原 Coss={q["Coss"]*1e12:g} pF。包含此处常数电容与器件结电容，不能当作实测 Coss(Vds)。',
         '驱动采用设计 VG，VCC 仅用于 UVLO 状态；最长导通看门狗属于模型安全约束。',
         ('全部输出绕组、整流管、独立C/ESR/ESL及负载保留在电路中，ZCD只是一组不加载磁芯的理想电压副本；'
          '它不代替任何已配置的辅助输出绕组，也不替代真实VCC供电。'),
+        (f'ZCD 从 OUT{zcd_winding} 绕组端电压取样，按 Naux/Np 与实际 Np/Ns 换算，保留该绕组的漏感及整流换流。'
+         '这是隔离的理想电压观察，不表示次级直接连到原边控制器。' if zcd_winding else
+         'ZCD 使用历史原边 drain−Vin 电压副本，含原边漏感尖峰；用于历史复现，需检查退磁前误触发。'),
         ('多路QR启用非理想kij时，交叉负载计算需取得退磁事件、变频周期及各路电荷平衡的独立解；'
          '固定同一组实际导出RCD阻容，按各角点钳位能量与电阻耗散平衡更新平均钳位电压，不在轻载重新设计阻容；不求解RCD电容的瞬时纹波。'
          '未启用或不收敛时保留缺失，不把名义匝比冒充交叉调整率。低频环路仍按所选反馈路折算负载与电容；'
@@ -163,10 +205,14 @@ def project_files(parameters,*,bundle=None):
         +'\n'.join('- '+n for n in meta['approximation_notes'])+'\n').encode('utf-8')
     template=resource_path('resources/spice/QR_Flyback_1.asc')
     if count>1:
-        files['Flyback.asc']=_multi_schematic(files['Flyback.asc'],count)
+        files['Flyback.asc']=_multi_schematic(files['Flyback.asc'],count,zcd_winding)
         files['Flyback.plt']=_multi_plot(count)
     elif template.is_file():
-        files['Flyback.asc']=template.read_bytes()
+        text=template.read_text(encoding='utf-8')
+        text=text.replace('FLAG 1312 576 drain',f'FLAG 1312 576 {zcd_positive}')
+        text=text.replace('FLAG 1312 656 vin_bus',f'FLAG 1312 656 {zcd_negative}')
+        text=text.replace('RATIO={Z_RATIO}', 'RATIO={Z_SENSE_RATIO}')
+        files['Flyback.asc']=text.encode('utf-8')
         if p.get('parasitic_config'):
             from parasitic_spice import schematic
             files['Flyback.asc']=schematic(files['Flyback.asc'],count)
@@ -174,4 +220,6 @@ def project_files(parameters,*,bundle=None):
     if count==1 and plot.is_file():files['Flyback.plt']=plot.read_bytes()
     guide=resource_path('docs/QR_L6565_SPICE.md')
     if guide.is_file():files['QR_MODEL_GUIDE.md']=guide.read_bytes()
+    current_guide=resource_path('docs/QR_CURRENTS_AND_RINGING.md')
+    if current_guide.is_file():files['QR_CURRENTS_AND_RINGING.md']=current_guide.read_bytes()
     return files

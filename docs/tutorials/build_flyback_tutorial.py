@@ -18,6 +18,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from docx_layout import new_document, paragraph, table, figure, equation, _font
+from docs.apply_book_style_to_help import apply_book_style
 import word_math as wm
 
 ART = ROOT/'artifacts/tutorials/multi_flyback_20261023'
@@ -254,8 +255,8 @@ def build():
     P('电阻瞬时发热是 i²R。先平均 i²，再开方得到的才是 RMS。对只在 D 区间导通的线性斜坡，可以直接积分得到下面的公式。')
     E('Irms²=D·(Ipk²+Ipk·Imin+Imin²)/3')
     P('如果错误地使用全周期平均电流平方，脉冲越尖，低估发热越严重。后续对实际矩阵波形，软件直接统计波形或积分，不强行套用整段理想三角波。')
-    H('3.6  8 µH 是否意味着设计正确')
-    P('本例内核的“L 初选下限”不是 CCM 临界电感。它是按约 40% 电流纹波再加 1.5 倍裕量给出的保守预设计提示，20 V 和 30 V 结果约为 33.70 µH 和 46.51 µH。因此 8 µH 会触发复核，但这不等于当前波形不能工作，也不等于主反馈已经变成 DCM。')
+    H('3.6  如何核查 8 µH 励磁电感')
+    P('20 V 和 30 V 的励磁电感初选参考约为 33.70 µH 和 46.51 µH。此参考采用 40% 原边电流纹波和 1.5 倍初选系数。实际采用 8 µH 时，本例两端原边谷值均大于零，工作在 CCM。选型还需核对原边峰值电流、峰值磁密、气隙和温升。')
     E('Ip,on,avg=Pin,est/(Vin·DCCM)')
     E('Lmin≈1.5·Vin·DCCM·Ts/(0.4·Ip,on,avg)')
     P('这两式沿用等效预设计的 DCCM 与预估输入功率，不拿矩阵解的全周期输入平均电流直接作分母。特别要区分全周期平均电流与开通区间平均电流；两者差了占空比。')
@@ -884,10 +885,12 @@ def build():
         border.getparent().remove(border)
     for p in doc.paragraphs:
         p.paragraph_format.widow_control=True
-    from docs.update_cross_regulation_documents import update_document
-    update_document(doc, 'tutorial')
+    from docs.update_cross_regulation_documents import DATA_PATH, update_document
+    # Reuse the frozen 40 W worked example together with its original figures.
+    worked_example = json.loads(DATA_PATH.read_text(encoding='utf-8'))
+    update_document(doc, 'tutorial', data=worked_example)
     OUT.parent.mkdir(parents=True,exist_ok=True)
-    doc.save(OUT)
+    apply_book_style(doc, kind='tutorial').save(OUT)
     assert hashlib.sha256(REF.read_bytes()).hexdigest()==baseline
     (ART/'equations.json').write_text(json.dumps(eq_manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(dict(output=str(OUT),equations=len(eq_manifest),figures=len(doc.inline_shapes),

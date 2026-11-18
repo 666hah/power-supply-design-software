@@ -66,8 +66,9 @@ class MosCurveUI:
             candidate=self._read_mos_input(path,'transfer')
             if candidate is None:return
             data=validate_curve(candidate)
+            self._ensure_curve_settings()
             self._mos_miller_curve=copy.deepcopy(data)
-            self._set_curve_override('Q1:transfer','curve')
+            self._curve_sources_changed()
         except (ValueError,OSError,UnicodeError) as exc:
             messagebox.showerror('MOS 曲线未导入',str(exc),parent=self.root)
 
@@ -103,7 +104,7 @@ class MosCurveUI:
         curve=self.params['mos_charge_mode'].get()=='curve'
         for (case,edge,key),entry in self._manual_event_entries.items():
             entry.configure(state='disabled' if curve and key=='Qgs' else 'normal')
-        self._manual_event_note.set('Qgs 由栅电荷曲线按四个平台读取，表内电荷草稿不参与计算。' if curve else '四行独立生效；Qg(th)、Qgd 与总 Qg 仍为公共器件参数。对应电流见上方“四工况”核算。')
+        self._manual_event_note.set('Qgs 由栅电荷曲线按四个平台读取，表内电荷草稿不参与计算。' if curve else '四行独立生效。Qg(th)、Qgd 与总 Qg 使用公共器件参数。对应电流见 Q1 的“四工况”核算。')
 
     def _manual_event_changed(self,*_):
         if self._manual_loading or self._building:return
@@ -150,8 +151,9 @@ class MosCurveUI:
         try:
             candidate=self._read_mos_input(path,'gate_charge')
             if candidate is None:return
+            self._ensure_curve_settings()
             self._mos_charge_curve=copy.deepcopy(candidate)
-            self._set_curve_override('Q1:charge','curve')
+            self._curve_sources_changed()
         except (ValueError,OSError,UnicodeError) as exc:messagebox.showerror('栅电荷曲线未导入',str(exc),parent=self.root)
 
     def _read_mos_input(self,path,kind):

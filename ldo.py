@@ -97,7 +97,7 @@ def calculate(raw):
     check('input_max','推荐输入上限',p['V_in_max'],p['input_rating_max'],'V')
     check('current','最大通过电流（含分压）',corners[-1]['I_pass'],p['current_rating'],'A')
     tj=[c['T_j'] for c in corners if c['T_j'] is not None]
-    check('thermal','端点最高估算结温（标称Vo）',max(tj) if tj else None,p['junction_limit'],'°C',note='只统计可稳压角点；压差失败角点不伪造温度和效率')
+    check('thermal','端点最高估算结温（标称Vo）',max(tj) if tj else None,p['junction_limit'],'°C',note='统计可稳压角点。')
     check('thermal_evidence','有效热阻证据',1 if p['thermal_verified'] else None,1,note='需匹配实际 PCB 铜面积、层数及散热条件')
     for k,name in [('C_in','输入有效容量'),('C_out','输出有效容量')]:check(k,name,p[k],p['required_'+k],'F',True)
     check('esr_min','输出 ESR 下限',p['ESR_out'],p['required_ESR_min'],'Ω',True)
@@ -112,12 +112,12 @@ def calculate(raw):
             e.update(value=power,rating=rating,factor=rule['factor'],limit=limit,state=rows[-1]['state'])
         elif kind=='capacitor':
             cap_type=item.get('capacitor_type','unknown');rule=rule_for(p['component_management'],cap_type+'_voltage' if cap_type in ('electrolytic','mlcc','film') else 'other_voltage');rating=item.get('voltage_V');limit=rating*rule['factor'] if rating and rule['factor'] else None
-            check('bom_'+ref,ref+' 耐压降额',v,limit,'V',note='未计算电容瞬态纹波 RMS；未将容量/ESR检查当作环路稳定性证明')
+            check('bom_'+ref,ref+' 耐压降额',v,limit,'V',note='瞬态纹波电流待测。')
             e.update(value=v,rating=rating,factor=rule['factor'],limit=limit,state=rows[-1]['state'])
         else:e.update(value=p['V_in_max'],rating=p['input_rating_max'],factor=None,limit=p['input_rating_max'],state=next(r['state'] for r in rows if r['id']=='input_max'))
         if any(not e.get(k) for k in ('manufacturer','model','package')):check('identity_'+ref,ref+' 厂家/型号/封装',None,1,note='器件身份资料未填全')
         bom.append(e)
-    notes=['静态线性稳压估算；Iq 为接地电流，不包含负载及外部分压。','输出精度为用户填写的规格书包络，不叠加未知的线性/负载调整率；功耗、温升及系统后级预算使用标称输出电压。','有效容量和 ESR 仅核对已填写规格书条件；不产生通用 Bode/稳定性、PSRR、噪声或瞬态预测。','反向电流保护：'+{'unknown':'未知，需核对掉电或输出被外部供电时的能力','yes':'已声明具备，仍需遵守芯片条件','no':'无保护，存在回灌可能时需外部处理'}[p['reverse_blocking']]]
+    notes=['静态估算采用标称输出电压及规格书精度范围。','容量和 ESR 按规格书条件检查。稳定性、噪声与瞬态响应另测。','反向电流保护：'+{'unknown':'掉电或外部回灌时待核对','yes':'按规格书条件使用','no':'存在回灌时需外部处理'}[p['reverse_blocking']]]
     return dict(schema='power.ldo-result/1',spec=p,corners=corners,divider=d,checks=rows,bom=bom,notes=notes,
         worst=dict(P_chip=max((c['P_chip'] for c in corners if c['P_chip'] is not None),default=None),T_j=max(tj) if tj else None),
         state='review' if any(r['state']=='review' for r in rows) else 'undefined' if any(r['state']=='undefined' for r in rows) else 'pass')

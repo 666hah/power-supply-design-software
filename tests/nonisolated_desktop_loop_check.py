@@ -43,6 +43,12 @@ class DesktopLoopChecks(unittest.TestCase):
                                 image=ROOT/'artifacts/qa/loop_ui_fix_20261029/boost_loop_fixed.png'
                                 image.parent.mkdir(parents=True,exist_ok=True)
                                 app.fig_loop.savefig(image,dpi=130)
+                                app.loop_step_button.invoke()
+                                self.assertTrue(app._loop_result['load_step']['available'])
+                                self.assertEqual(app._loop_result['load_step']['feedback_output'],1)
+                                self.assertIn('10% → 90%',app.ax_loop_step[0].get_title())
+                                self.assertIn('90% → 10%',app.ax_loop_step[1].get_title())
+                                app.loop_bode_button.invoke()
         finally:
             if 'app' in locals():app._calculation_worker.close()
             for timer in root.tk.splitlist(root.tk.call('after','info')):
@@ -59,6 +65,8 @@ class DesktopLoopChecks(unittest.TestCase):
         self.assertNotIn('未计算',app.margin_info['fc'].get())
         self.assertIn('反馈路：OUT1',app.loop_esr_note.get())
         self.assertNotIn('multi_output',loop)
-        self.assertFalse(app.loop_view_row.winfo_manager())
+        self.assertEqual(app.loop_view_row.winfo_manager(),'pack')
+        self.assertEqual(app.loop_step_button.winfo_manager(),'pack')
+        self.assertFalse(app.loop_multi_button.winfo_manager())
 
 if __name__=='__main__':unittest.main()

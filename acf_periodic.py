@@ -387,7 +387,7 @@ def solve_forward(p,nominal):
 
 
 def waveforms(op,n_cycles,n_pts):
-    from waveforms import cap_bank_ripple
+    from waveforms import cap_bank_ripple_fields
     z=op['acf_solution'];T=op['Ts'];t=np.linspace(0,n_cycles*T,n_cycles*max(n_pts,2048),endpoint=False)
     phase=t%T;sample=lambda y:np.interp(phase,z['t'],y)
     common=dict(t=t,dt=t[1]-t[0],f_sw=op['f_sw'],topology=op['topology'],
@@ -398,14 +398,10 @@ def waveforms(op,n_cycles,n_pts):
     common['i_cin_rms']=float(np.sqrt(np.mean(common['i_cin']**2)))
     outputs=[]
     for j,child in enumerate(op['output_ops']):
-        from capacitor_banks import tuples
-        il=sample(z['iL'][j]);ic=il-child['I_out'];caps=tuples(child)
-        low=cap_bank_ripple(t,ic,[(c,r,0.) for c,r,_ in caps]);full=cap_bank_ripple(t,ic,caps)
+        il=sample(z['iL'][j]);ic=il-child['I_out']
         wf=dict(common,iL=il,i_s=sample(z['i_s'][j]),i_d=sample(z['i_forward'][j]),
-            i_free=sample(z['i_free'][j]),i_c=ic,v_d=sample(z['v_d'][j]),v_free=sample(z['v_free'][j]),
-            vout=child['V_out']+low,vcap=child['V_out_cap']+low,vout_ripple=low,v_esl=full-low,
-            ripple_pp=float(np.ptp(low)),ripple_pp_total=float(np.ptp(full)),
-            esl_spike_pp=float(max(abs(full-low))),i_c_rms=float(np.sqrt(np.mean(ic**2))))
+            i_free=sample(z['i_free'][j]),i_c=ic,v_d=sample(z['v_d'][j]),v_free=sample(z['v_free'][j]))
+        wf.update(cap_bank_ripple_fields(t, ic, child))
         outputs.append(wf)
     result=dict(outputs[op['feedback_output']-1]);result['outputs']=outputs
     return result

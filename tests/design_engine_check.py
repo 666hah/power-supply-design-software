@@ -18,7 +18,8 @@ from engine_baseline_cases import CASES, case_spec, metrics
 from design_engine.catalog import parameter_catalog, specification_schema
 from design_engine.contracts import json_value
 from design_engine.service import (calculate, calculate_parameters, read_snapshot,
-                                  validate_spec, SpecValidationError, export_report)
+                                  restore_report_bundle, validate_spec, SpecValidationError,
+                                  export_report)
 from design_api import load_spec, run_design, run_input_endpoints
 from calculation_scheduler import CalculationCancelled
 from power_stage import DEFAULT_PARAMS
@@ -212,6 +213,75 @@ class CalculationChecks(unittest.TestCase):
         compact = run.to_dict(include_waveforms=False, include_details=False)
         self.assertIsNone(compact['cases'][0]['result'])
         self.assertLess(len(json.dumps(compact)), len(json.dumps(full)))
+
+
+class ReportSnapshotChecks(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.spec = case_spec('3_OUTPUT_COUPLED_FLYBACK.json')
+        run = calculate(cls.spec, analysis='endpoints',
+                        include_cross_regulation=False, include_efficiency=True)
+        cls.live = run.runtime_bundle()
+        cls.payload = json.loads(json.dumps(run.to_dict(), allow_nan=False))
+
+    def test_restores_recorded_waveforms_and_complex_responses_without_solving(self):
+        from report_architecture import report_cases
+        with patch('loss_model.compute_design', side_effect=AssertionError('unexpected solve')), \
+             patch('loop_tuning.analyze_loop', side_effect=AssertionError('unexpected loop analysis')):
+            restored = restore_report_bundle(self.payload)
+        self.assertEqual(len(report_cases(restored)), 1)
+        live, saved = self.live['cases'][0], restored['cases'][0]
+        self.assertEqual(saved['checks'], live['checks'])
+        self.assertEqual(json_value(saved['efficiency_curve']), json_value(live['efficiency_curve']))
+        self.assertEqual(restored['hardware'], json_value(self.live['hardware']))
+        self.assertEqual(saved['p']['_fixed_transformer'], restored['hardware']['transformer'])
+        self.assertNotIn('coupled_solution', saved['result']['op'])
+        for key in ('t', 'i_sw', 'vout_ripple'):
+            np.testing.assert_array_equal(saved['result']['wf'][key], live['result']['wf'][key])
+        np.testing.assert_array_equal(saved['result']['loop']['gains'], live['result']['loop']['gains'])
+        np.testing.assert_array_equal(saved['result']['loop']['multi_output']['load'],
+                                      live['result']['loop']['multi_output']['load'])
+        saved['result']['wf']['i_sw'][0] = -99.
+        self.assertNotEqual(self.payload['cases'][0]['result']['wf']['i_sw'][0], -99.)
+
+    def test_rejects_summary_only_missing_curve_and_mismatched_timebase(self):
+        for mode, message in (('summary', '计算明细'), ('efficiency', '效率扫描'),
+                              ('waveforms', '与时间轴不一致')):
+            payload = copy.deepcopy(self.payload)
+            if mode == 'summary':
+                payload['options']['include_details'] = False
+            elif mode == 'efficiency':
+                payload['cases'][0]['efficiency_curve'] = None
+            else:
+                payload['cases'][0]['result']['wf']['i_sw'].pop()
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, message):
+                restore_report_bundle(payload)
+
+    def test_distinct_mos_events_at_the_same_voltage_stay_separate(self):
+        from mos_manual import normalize_events
+        from report_architecture import report_cases
+        spec = case_spec('40W_CCM_FLYBACK.json')
+        events = normalize_events(None, spec)
+        events['max']['off']['Vgp'] += .2
+        spec.update(mos_manual_events=events, mos_miller_mode='manual')
+        run = calculate(spec, analysis='endpoints',
+                        include_cross_regulation=False, include_efficiency=True)
+        cases = report_cases(restore_report_bundle(run.to_dict()))
+        self.assertEqual([case['id'] for case in cases], ['Vinmin', 'Vinmax'])
+        self.assertEqual(cases[0]['voltage'], cases[1]['voltage'])
+        self.assertNotEqual(cases[0]['result']['semi']['switch']['gate']['Vgp_off'],
+                            cases[1]['result']['semi']['switch']['gate']['Vgp_off'])
+
+    def test_different_saved_loop_and_failed_endpoint_stay_visible(self):
+        from report_architecture import report_cases
+        payload = copy.deepcopy(self.payload)
+        payload['cases'][1]['result']['loop']['phases'][0][0] += 1.
+        self.assertEqual(len(report_cases(restore_report_bundle(payload))), 2)
+        payload['cases'][1].update(error='归档工况求解失败', result=None)
+        cases = report_cases(restore_report_bundle(payload))
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[1]['error'], '归档工况求解失败')
+        self.assertIsNone(cases[1]['result'])
 
 
 if __name__ == '__main__':

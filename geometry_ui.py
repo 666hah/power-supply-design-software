@@ -61,7 +61,8 @@ def edit_profile(app):
         try: app._geometry_profile=read()
         except ValueError as exc:
             messagebox.showerror('请检查建模设置',str(exc),parent=win);return
-        app.status_var.set('三维建模设置已应用，可导出或保存工程。');win.destroy()
+        app._schedule_winding_redraw()
+        app.status_var.set('三维建模设置已应用，绕组长度将随电气结果更新。');win.destroy()
     buttons=ttk.Frame(win,padding=8);buttons.grid(row=3,columnspan=2,sticky='ew')
     ttk.Button(buttons,text='导入设置 JSON…',command=load).pack(side='left')
     ttk.Button(buttons,text='应用到当前工程',command=apply).pack(side='right')

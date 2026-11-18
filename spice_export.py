@@ -25,7 +25,7 @@ SETTINGS = {
     'soft_start_ms': (1., .01, 100., '软启动时间', 'ms'),
     'stop_ms': (12., .1, 5000., '仿真结束时间', 'ms'),
     'step_ms': (8., .05, 4999., '负载阶跃时刻', 'ms'),
-    'load_after': (.5, .01, 2., '阶跃后／额定负载', ''),
+    'load_after': (.5, .01, 2., '独立 ASC 阶跃后负载／额定（对比报告固定 10% ↔ 90%）', ''),
     'feedback_scale': (1., .001, 1., '理想隔离反馈比例', ''),
     'cs_limit': (0., 0., 10., 'Vcs 逐周期钳位，0=自动', 'V'),
     'slope': (-1., -1., 1e9, '手动补偿斜坡（手动模式生效）', 'V/s'),
@@ -61,6 +61,7 @@ SETTINGS = {
     'simulation_timeout_s': (180., 10., 1800., '每工况仿真超时', 's'),
     'simulation_threads': (2.,1.,8.,'LTspice 最大线程数',''),
     'simulation_reuse': (1.,0.,1.,'复用相同设计已通过的标称仿真',''),
+    'line_load_enabled': (0.,0.,1.,'黑盒动态稳定度：输入与负载联合跳变（长时）',''),
     'comparison_tolerance_pct': (5., .1, 100., '对比偏差提示阈值', '%'),
     'cycle_tolerance_pct': (5.,1.,30.,'逐周期重复性阈值','%'),
     'fra_enabled': (1.,0.,1.,'实际开关闭环 FRA 对比',''),
@@ -84,6 +85,8 @@ from nonisolated import SETTINGS as NISO_SETTINGS
 SETTINGS.update(NISO_SETTINGS)
 
 CHOICES = {
+    'qr_zcd_winding': {-1:'自动选择辅助绕组',0:'历史原边端电压',
+                       **{i:f'OUT{i} 绕组电压副本' for i in range(1,7)}},
     'niso_profile': {0:'未启用（沿用原计算）',1:'TPS40200 · Buck 电压模式',2:'LTC3864 · Buck 峰值电流',3:'LM5022 · Boost 峰值电流'},
     'niso_edge_model': {0:'快速闭环：不含结电容尖峰',1:'常数 Coss / Cj 开关边沿'},
     'soft_start_mode': {0:'输出参考缓升',1:'CS 限流阈值缓升',2:'COMP 上限缓升（MP6005 SSR 思路）'},
@@ -92,6 +95,7 @@ CHOICES = {
     'include_cap_esl': {0:'快速验证 不含 ESL',1:'详细模型 包含 ESL'},
     'slope_mode': {0:'跟随设计计算值',1:'自动工程建议值（非芯片实测）',2:'手动设置，0 表示禁用'},
     'simulation_reuse': {0:'每次重新运行',1:'复用已通过结果（配置变化自动重跑）'},
+    'line_load_enabled': {0:'关闭',1:'开启：输入每档 500 ms，各路重复跳载'},
     'fra_enabled': {0:'关闭',1:'开启'},'cross_enabled': {0:'关闭',1:'开启'},
     'cross_mode': {0:'三路以内全组合，更多路采用重点角点',1:'所有 min/max 负载组合（耗时较长）'},
 }
@@ -112,6 +116,7 @@ def mp6005_preset(current=None):
 
 
 def setting_group(key):
+    if key=='line_load_enabled':return '测试与对比报告'
     if key.startswith('niso_'):return 'Buck / Boost 原型'
     if key.startswith('acf_'):return '有源钳位与 SYNC'
     if key.startswith('qr_'):return '准谐振与 ZCD'
@@ -177,14 +182,35 @@ def _json(value):
 
 
 def project_files(parameters, *, bundle=None):
+    """Return an owned filename-to-bytes map with the netlist model scope."""
     from capacitor_banks import normalize
-    parameters=normalize(parameters)
-    """Return an owned filename->bytes map. Never executes untrusted SPICE text."""
+    from capacitor_impedance import bank_uses_curves
+    p = normalize(parameters)
+    files = _project_files(p, bundle=bundle)
+    groups = [p.get('input_capacitors', ()), p.get('output_capacitors', ())]
+    groups.extend(rail.get('output_capacitors', ()) for rail in p.get('outputs', ()) or ())
+    if any(bank_uses_curves(group) for group in groups):
+        note = '计算侧电容分流与损耗使用扫频阻抗。LTspice 电容使用固定 C/ESR/ESL。'
+        metadata = json.loads(files['manifest.json'])
+        notes = metadata.setdefault('approximation_notes', [])
+        if note not in notes:
+            notes.append(note)
+            files['manifest.json'] = _json(metadata).encode('utf-8')
+        if 'README.md' in files and note.encode('utf-8') not in files['README.md']:
+            files['README.md'] += ('\n- ' + note + '\n').encode('utf-8')
+    return files
+
+
+def _project_files(parameters, *, bundle=None):
     from app_resources import resource_path
     from isolated_outputs import output_specs, RAIL_KEYS
     from winding_coupling import resolve_winding_geometry, resolve_winding_model
     from plants import resolve_controller_type
     p = copy.deepcopy(parameters)
+    from cot_buck_spice import is_cot
+    if is_cot(p):
+        from cot_buck_spice import project_files as cot_project
+        return cot_project(p,bundle=bundle)
     if p.get('topology') in ('BUCK','BOOST'):
         from nonisolated_spice import project_files as nonisolated_project
         return nonisolated_project(p,bundle=bundle)
@@ -215,7 +241,7 @@ def project_files(parameters, *, bundle=None):
         '主开关为 Ron + 常数 Coss + 等效门电容的开关模型；未复用 Id–Vgs / Vgs–Qg 作为完整晶体管模型。',
         '二极管采用固定正向压降和通用等效结电容；该电容是假设值，不是已选器件实测参数，不含反向恢复或温度模型。',
         '隔离反馈为理想受控源，不含光耦/TL431 延时和寄生；需自行替换再评估环路。',
-        '磁芯采用线性电感，不含饱和、磁滞与磁芯损耗；DCR 来自已冻结的 MLT、匝数、线径和股数。',
+        '磁芯采用线性电感。各绕组 DCR 来自已冻结的等效铜线长度、线径和股数。',
         '预设效率用于计算器设计估算，未重复乘入物理 SPICE 电压或电流；两者数值不保证一致。',
         '负载为电阻；阶跃时所有输出同时按同一比例变化。此文件不构成完整交叉调整率角点扫描。',
         '普通 .ac 不适用于此开关闭环模型；本工程提供瞬态验证，未生成或宣称 FRA 结果。',

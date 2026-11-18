@@ -10,6 +10,9 @@ import MagneticReport from "./MagneticReport.vue";
 import ResultTable from "./ResultTable.vue";
 import CapacitorTable from "./CapacitorTable.vue";
 import CapacitorBank from "./CapacitorBank.vue";
+import CapacitorModels from "./CapacitorModels.vue";
+import type { CapacitorModelEdit } from "./capacitor_inputs";
+import DeviceCurveData from "./DeviceCurveData.vue";
 import AdvancedTools from "./AdvancedTools.vue";
 import WindingEditor from "./WindingEditor.vue";
 import TransformerGeometry from "./TransformerGeometry.vue";
@@ -18,6 +21,7 @@ import ComponentManager from "./ComponentManager.vue";
 import ControllerLogic from "./ControllerLogic.vue";
 import ParasiticEditor from "./ParasiticEditor.vue";
 import InitialDesign from "./InitialDesign.vue";
+import CotEngineering from "./CotEngineering.vue";
 import { request, post, getBlob, download, setToken } from "./api";
 import { FONT_SIZES, normalizeFontSize } from "./ui-font";
 import type {
@@ -29,6 +33,7 @@ import type {
   Job,
   Parameter,
   Check,
+  LoadStep,
 } from "./types";
 import { fmt, topologyNames } from "./types";
 
@@ -56,6 +61,10 @@ const spiceFocus = ref('frequency_hz');
 let geometrySource:{name:string;text:string}|null=null;
 const spiceOptions = computed(()=>(meta.value?.spice_options || []).filter(item=>item.topologies.includes(spec.value.topology) &&
   !(Object.keys(spec.value.parasitic_config || {}).length && ['diode_cj_pf','qr_cds_pf'].includes(item.key))));
+const spiceValues = computed(() => ({
+  ...Object.fromEntries(spiceOptions.value.map(option => [option.key, option.default])),
+  ...(spec.value.spice_config || {}),
+}));
 const result = ref<Snapshot | null>(null),
   job = ref<Job | null>(null),
   busy = ref(false),
@@ -80,6 +89,7 @@ const mosRealTime = ref(false),
   fontSize = ref(16),
   curveViewer = ref<CurveTarget | null>(null);
 const reuseCurveTarget = ref("");
+let importRevision = -1;
 const windingPreview = ref<Spec | null>(null),
   windingBusy = ref(false),
   windingError = ref(""),
@@ -121,7 +131,7 @@ const nav = computed(() =>
       : item.id === "psr"
         ? spec.value.feedback_mode === "PSR-MP6005"
         : item.id === "compensation"
-          ? spec.value.feedback_mode !== "PSR-MP6005"
+          ? spec.value.feedback_mode !== "PSR-MP6005" && !cotBuck.value
           : true,
   ),
 );
@@ -134,6 +144,13 @@ const selected = computed(
 const display = computed(
   () => result.value?.display.find((c) => c.id === activeCase.value) || null,
 );
+const loadStep = computed<LoadStep | undefined>(() => display.value?.load_step);
+const loadStepRows = computed(() => {
+  const step = loadStep.value;
+  return step?.available
+    ? [{ direction: "10% → 90%", ...step.rise }, { direction: "90% → 10%", ...step.fall }]
+    : [];
+});
 const summary = computed(() =>
   selected.value?.summary?.ok ? selected.value.summary : null,
 );
@@ -151,9 +168,14 @@ const resultIsolated = computed(() =>
   ),
 );
 const multi = computed(() => Boolean(spec.value.outputs?.length));
+const cotBuck = computed(() => spec.value.topology === "BUCK" &&
+  (spec.value.control_mode === "Constant On-Time" || Number(spec.value.buck_phases || 1) > 1));
+const cotFraDefaults = computed(() => meta.value?.spice_presets.cot || {});
+const cotFraOptions = computed(() => spiceOptions.value.filter(item => item.key in cotFraDefaults.value && item.key !== 'fra_enabled'));
+const cotFraEnabled = computed(() => (spec.value.spice_config?.fra_enabled ?? cotFraDefaults.value.fra_enabled) === 1);
 const inductorChoice = computed(() => !meta.value?.native && ['BUCK','BOOST','BUCK-BOOST'].includes(spec.value.topology));
 const purchasedInductor = computed(() => inductorChoice.value && spec.value.inductor_design_enabled === false);
-const magneticDesignFields = new Set(['Bmax','Bsat','J','Ku','rho','k_core','a_core','b_core','MLT','h_conv','temp_rise_limit']);
+const magneticDesignFields = new Set(['Bmax','Bsat','J','Ku','rho','k_core','a_core','b_core','h_conv','temp_rise_limit']);
 const purchasedInductorFields = new Set(['inductor_dcr','inductor_rated_current','inductor_saturation_current','inductor_extra_loss']);
 const feedback = computed(() => Number(spec.value.feedback_output) || 1);
 const groups = computed(() => {
@@ -172,6 +194,7 @@ const groups = computed(() => {
     ];
   const excluded = new Set([
     'inductor_design_enabled',
+    'buck_phases','cot_ton_s','cot_min_off_s','cot_kp_hz','cot_ki_hz_per_s',
     'input_capacitors','output_capacitors','Cin1','Rcin1','ESLin1','Cin2','Rcin2','ESLin2','cin2_enable',
     'C_out','Rc','ESL','C_out2','Rc2','ESL2','cout2_enable',
     "component_management",
@@ -192,6 +215,7 @@ const groups = computed(() => {
     "fc_target",
     "pm_target",
     "feedback_output",
+    "MLT",
   ]);
   if (multi.value)
     [
@@ -219,6 +243,8 @@ const groups = computed(() => {
       category,
       title: meta.value?.sections[category] || "其它计算与评审参数",
       rows: rows.filter((row) => {
+        if (cotBuck.value && ['Vm','Vf_diode','Qrr','Rds_aux','Qg_aux','Coss_aux',
+          'KP','fz1','fz2','fp1','fp2'].includes(row.name)) return false;
         if (purchasedInductor.value && magneticDesignFields.has(row.name)) return false;
         if (!purchasedInductor.value && purchasedInductorFields.has(row.name)) return false;
         if (
@@ -315,14 +341,23 @@ function setValue(key: string, value: any) {
   spec.value[key] = value;
   touch();
 }
+function editCapacitorModel({ side, railIndex, rows }: CapacitorModelEdit) {
+  if (railIndex === undefined) {
+    setValue(`${side}_capacitors`, rows);
+    return;
+  }
+  setValue("outputs", spec.value.outputs.map((rail: Spec, index: number) =>
+    index === railIndex ? { ...rail, output_capacitors: rows } : rail));
+}
 function replaceSpec(value: Spec) {
   spec.value = value;
   touch();
 }
 function changeWindingSpec(value:Spec){
   if(exportOperation.value)void post(`/operations/${exportOperation.value}/cancel`,{}).catch(()=>{});
-  spec.value=value;revision.value++;dirty.value=true;error.value='';
-  message.value='绕制配置已写入当前工程，电气结果沿用；导出报告前请重新计算以更新几何快照。';
+  replaceSpec(value);
+  message.value=meta.value?.native ? '绕制配置已应用。此浏览器内核使用磁芯匝长估算。'
+    : '绕制配置已应用。重新计算可更新平均匝长、铜阻和温升。';
 }
 function applyUpdates(updates: Spec) {
   replaceSpec({ ...clone(spec.value), ...clone(updates) });
@@ -396,6 +431,67 @@ function storedCurve(target: CurveTarget | null) {
       ? spec.value.mos_charge_curve
       : spec.value.diode_curves?.[target.target] || {};
 }
+function sourceForTarget(target: string) {
+  const p = spec.value;
+  const settings = p.device_curve_settings;
+  if (settings?.mode) return settings.overrides?.[target] || settings.mode;
+  if (target === 'Q1:transfer') {
+    if (p.mos_miller_mode === 'curve') return 'curve';
+    return p.mos_miller_mode === 'gfs' || ((!p.mos_miller_mode || p.mos_miller_mode === 'auto') && p.gfs > 0) ? 'legacy' : 'fixed';
+  }
+  if (target === 'Q1:charge') return p.mos_charge_mode === 'curve' ? 'curve' : 'fixed';
+  return p.diode_curves?.[target] && Object.keys(p.diode_curves[target]).length ? 'curve' : 'fixed';
+}
+const curveTargets = computed(() => (preview.value?.targets ?? []).map((row) => {
+  const curve = storedCurve(row);
+  return { ...row, source: sourceForTarget(row.target),
+    loaded: !!curve && Object.keys(curve).length > 0,
+    filename: curve?.import_file?.filename || curve?.source?.filename || '' };
+}));
+const MOSCurveTargets = computed(() => curveTargets.value.filter(row => row.target.startsWith('Q1:')));
+const mainRectifierCurves = computed(() => (multi.value && isolated.value ? [] :
+  curveTargets.value.filter(row => ['D1', 'D2', 'D_O1', 'D_F1'].includes(row.target))));
+const inputBlockingCurves = computed(() => curveTargets.value.filter(row => row.target === 'D_IN'));
+const outputBlockingCurves = computed(() => (multi.value && isolated.value ? [] :
+  curveTargets.value.filter(row => ['D_OUT', 'D_B1'].includes(row.target))));
+function railCurves(index: number, blocking: boolean) {
+  const refs = blocking ? ['D_B' + (index + 1)] : ['D_O' + (index + 1), 'D_F' + (index + 1)];
+  return curveTargets.value.filter(row => refs.includes(row.target));
+}
+function explicitSources() {
+  const settings = spec.value.device_curve_settings;
+  if (settings?.mode) return clone(settings);
+  // Freeze historical inferred models before binding an inactive curve.
+  const targets = ['Q1:transfer', 'Q1:charge', 'D1', 'D2', 'D_IN', 'D_OUT',
+    ...Array.from({length: 6}, (_, index) => ['O', 'F', 'B'].map(kind => `D_${kind}${index + 1}`)).flat()];
+  const sources = targets.map(target => [target, sourceForTarget(target)] as const);
+  const mode = sources.some(([, source]) => source === 'curve') ? 'curve' : 'fixed';
+  return {mode, overrides: Object.fromEntries(sources.filter(([, source]) => source !== mode))};
+}
+function storeCurveData(target: string, data: Spec) {
+  spec.value.device_curve_settings = explicitSources();
+  if (target === 'Q1:transfer') spec.value.mos_miller_curve = data;
+  else if (target === 'Q1:charge') spec.value.mos_charge_curve = data;
+  else (spec.value.diode_curves ||= {})[target] = data;
+  touch();
+}
+function openCurveImporter(target: CurveTarget) {
+  importRevision = revision.value;
+  curveTarget.value = target;
+}
+function closeCurveImporter() {
+  importRevision = -1;
+  curveTarget.value = null;
+}
+function applyCurveData(data: Spec) {
+  const target = curveTarget.value?.target;
+  if (target && importRevision === revision.value) storeCurveData(target, data);
+  closeCurveImporter();
+}
+function previewCurve(target: CurveTarget) {
+  curveViewer.value = target;
+  reuseCurveTarget.value = '';
+}
 const viewingCurve = computed(() => {
   const data = storedCurve(curveViewer.value);
   return (
@@ -409,10 +505,7 @@ const viewingCurve = computed(() => {
 });
 function reuseCurve() {
   if (!curveViewer.value || !reuseCurveTarget.value) return;
-  const copy = clone(storedCurve(curveViewer.value));
-  spec.value.diode_curves ||= {};
-  spec.value.diode_curves[reuseCurveTarget.value] = copy;
-  setSource(reuseCurveTarget.value, "curve");
+  storeCurveData(reuseCurveTarget.value, clone(storedCurve(curveViewer.value)));
   curveViewer.value = null;
   reuseCurveTarget.value = "";
 }
@@ -481,6 +574,10 @@ function changeTopology(value: string) {
       coupling_config: clone(spec.value.coupling_config),
     };
   spec.value.topology = value;
+  if (value !== "BUCK" && (spec.value.control_mode === "Constant On-Time" || Number(spec.value.buck_phases || 1) > 1)) {
+    spec.value.buck_phases = 1;
+    spec.value.control_mode = "Voltage Mode";
+  }
   if (!["FLYBACK", "QR-FLYBACK", "ACF-FORWARD"].includes(value)) {
     spec.value.outputs = [];
     spec.value.feedback_mode = "SSR";
@@ -493,6 +590,11 @@ function changeTopology(value: string) {
     spec.value.feedback_mode = "SSR";
     if (spec.value.coupling_config) spec.value.coupling_config.enabled = false;
   }
+  touch();
+}
+function setBuckPhases(phases: number) {
+  spec.value.buck_phases = phases;
+  if (phases > 1) spec.value.control_mode = "Constant On-Time";
   touch();
 }
 function enableMulti(enabled: boolean) {
@@ -543,16 +645,16 @@ function setGlobalMode(value: string) {
   touch();
 }
 function setSource(target: string, value: string) {
-  const settings = clone(
-    spec.value.device_curve_settings || { mode: "fixed", overrides: {} },
-  );
+  const settings = explicitSources();
   settings.overrides ||= {};
   if (value === "global") delete settings.overrides[target];
   else settings.overrides[target] = value;
   spec.value.device_curve_settings = settings;
   touch();
 }
-function removeCurve(target: string) {
+function removeCurveData(row: CurveTarget) {
+  const target = row.target;
+  if (sourceForTarget(target) === 'curve') return;
   if (target === "Q1:transfer") spec.value.mos_miller_curve = {};
   else if (target === "Q1:charge") spec.value.mos_charge_curve = {};
   else delete spec.value.diode_curves?.[target];
@@ -576,7 +678,6 @@ function manualEvent(
   events[caseId][event][key] =
     value === "" ? null : Number(value) * (key === "Qgs" ? 1e-9 : 1);
   spec.value.mos_manual_events = events;
-  spec.value.mos_miller_mode = "manual";
   touch();
 }
 function eventValue(c: string, e: string, k: string) {
@@ -600,18 +701,6 @@ function changeK(i: number, j: number, value: string) {
   k[i][j] = k[j][i] = Number(value);
   touch();
 }
-function coreChoice(value: string) {
-  spec.value.core_choice = value;
-  if (value === "自定义（非标准）" && !spec.value.custom_core?.Ae)
-    spec.value.custom_core = {
-      name: "自定义磁芯",
-      Ae: { v: 0, u: "mm²" },
-      Ve: { v: 0, u: "mm³" },
-      Wa: { v: 0, u: "mm²" },
-      MLT: { v: 0, u: "mm" },
-    };
-  touch();
-}
 function materialChanged(value: string) {
   spec.value.core_material = value;
   const preset = meta.value?.materials[value];
@@ -620,22 +709,6 @@ function materialChanged(value: string) {
     spec.value.a_core = preset.a;
     spec.value.b_core = preset.b;
   }
-  touch();
-}
-function geometryValue(key: string) {
-  const raw = spec.value.custom_core?.[key];
-  return typeof raw === "object"
-    ? raw.v
-    : raw === undefined
-      ? ""
-      : Number(raw) * (key === "Ve" ? 1e9 : key === "MLT" ? 1e3 : 1e6);
-}
-function geometryChanged(key: string, value: string) {
-  spec.value.custom_core ||= {};
-  spec.value.custom_core[key] = {
-    v: value === "" ? null : Number(value),
-    u: key === "Ve" ? "mm³" : key === "MLT" ? "mm" : "mm²",
-  };
   touch();
 }
 function windowValue(key: string) {
@@ -831,7 +904,14 @@ async function exportReport(format: string) {
     });
     exportOperation.value = operation.id;
     const cfg = spec.value.spice_config || {};
-    const timeoutSeconds = format === 'comparison' ? 120 + 2 * ((cfg.short_test ? 2 : 1) * (cfg.simulation_timeout_s || 180) + (cfg.fra_enabled === 0 ? 0 : 2 * (cfg.fra_timeout_s || 600)) + (cfg.cross_enabled === 0 ? 0 : cfg.cross_timeout_s || 1200)) : 180;
+    let timeoutSeconds = 180;
+    if (format === 'comparison') {
+      const transient = cfg.simulation_timeout_s || 180;
+      const fra = cfg.fra_timeout_s || 600;
+      timeoutSeconds = cotBuck.value
+        ? 120 + 2 * (transient + (cotFraEnabled.value ? fra : 0))
+        : 120 + 2 * ((cfg.short_test ? 2 : 1) * transient + (cfg.fra_enabled === 0 ? 0 : 2 * fra) + (cfg.cross_enabled === 0 ? 0 : cfg.cross_timeout_s || 1200));
+    }
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < deadline) {
       const state = await request<any>(`/operations/${operation.id}`);
@@ -897,6 +977,8 @@ function stateName(state: string) {
         pass: "通过",
         review: "需复核",
         undefined: "未计算",
+        reference: "初选参考",
+        na: "不适用",
         not_applicable: "不适用",
         info: "说明",
       } as Record<string, string>
@@ -1085,13 +1167,38 @@ onBeforeUnmount(() => {
               ><label class="stacked-label"
                 >控制方式<select
                   v-model="spec.control_mode"
-                  :disabled="spec.feedback_mode === 'PSR-MP6005'"
+                  :disabled="spec.feedback_mode === 'PSR-MP6005' || (cotBuck && Number(spec.buck_phases) > 1)"
                   @change="touch"
                 >
                   <option>Peak Current Mode</option>
                   <option>Voltage Mode</option>
+                  <option v-if="spec.topology === 'BUCK' && !meta.native" value="Constant On-Time">恒定导通时间 · COT</option>
                 </select></label
               >
+              <div v-if="spec.topology === 'BUCK' && !meta.native" class="isolation-controls">
+                <label class="field-row">Buck 相数<select :value="spec.buck_phases ?? 1"
+                  @change="setBuckPhases(Number(($event.target as HTMLSelectElement).value))">
+                  <option v-for="phase in 16" :key="phase" :value="phase">{{ phase }} 相</option>
+                </select></label>
+                <template v-if="cotBuck">
+                  <label class="field-row">固定导通时间 / ns<input type="number" min="0" step="any"
+                    :value="(spec.cot_ton_s ?? 0) * 1e9"
+                    @change="setValue('cot_ton_s', Number(($event.target as HTMLInputElement).value) * 1e-9)" /></label>
+                  <label class="field-row">最小关断时间 / ns<input type="number" min="0" step="any"
+                    :value="(spec.cot_min_off_s ?? 0) * 1e9"
+                    @change="setValue('cot_min_off_s', Number(($event.target as HTMLInputElement).value) * 1e-9)" /></label>
+                  <label class="field-row">每相低侧 MOS 导通电阻 / mΩ<input type="number" min="0" step="any"
+                    :value="spec.Rds_aux * 1e3"
+                    @change="setValue('Rds_aux', Number(($event.target as HTMLInputElement).value) * 1e-3)" /></label>
+                  <label class="field-row">每相低侧 MOS 栅电荷 / nC<input type="number" min="0" step="any"
+                    :value="spec.Qg_aux * 1e9"
+                    @change="setValue('Qg_aux', Number(($event.target as HTMLInputElement).value) * 1e-9)" /></label>
+                  <label class="field-row">每相低侧 MOS Coss / pF<input type="number" min="0" step="any"
+                    :value="spec.Coss_aux * 1e12"
+                    @change="setValue('Coss_aux', Number(($event.target as HTMLInputElement).value) * 1e-12)" /></label>
+                  <p class="hint">导通时间填 0 时按输入前馈与目标每相频率计算。每相参数相同，各相共用一个输出。</p>
+                </template>
+              </div>
               <div v-if="isolated" class="isolation-controls">
                 <label class="checkbox-label"
                   ><input
@@ -1142,10 +1249,12 @@ onBeforeUnmount(() => {
             <details class="parameter-section curve-section" open>
               <summary>
                 <Icon name="chart" :size="16" /><strong
-                  >器件计算方式与曲线</strong
+                  >器件模型精度选择</strong
                 ><Icon name="chevron" :size="14" />
               </summary>
               <div class="section-content">
+                <CapacitorModels :spec="spec" :multi="multi && isolated" @change="editCapacitorModel" />
+                <h5 class="subsection-heading">MOS 与二极管</h5>
                 <div class="mode-switch">
                   <button
                     :class="{
@@ -1155,33 +1264,25 @@ onBeforeUnmount(() => {
                     }"
                     @click="setGlobalMode('fixed')"
                   >
-                    固定值快速估算</button
+                    固定参数模型</button
                   ><button
                     :class="{
                       active: spec.device_curve_settings?.mode === 'curve',
                     }"
                     @click="setGlobalMode('curve')"
                   >
-                    曲线精细计算
+                    曲线模型
                   </button>
                 </div>
-                <p class="hint">全局选择可逐项覆盖；切换不会删除已导入曲线。</p>
+                <p class="hint">默认模型用于 MOS 和二极管，各项可单独选择。</p>
                 <div
-                  v-for="target in preview?.targets"
+                  v-for="target in curveTargets"
                   :key="target.target"
                   class="curve-row"
                 >
                   <div class="curve-title">
                     <strong>{{ target.ref }}</strong
-                    ><span>{{
-                      target.target === "Q1:transfer"
-                        ? target.axes.includes("Vds")
-                          ? "Id–Vds"
-                          : "Id–Vgs"
-                        : target.target === "Q1:charge"
-                          ? "Vgs–Qg"
-                          : "If–Vf"
-                    }}</span
+                    ><span>{{ target.role }}</span
                     ><span
                       class="curve-status"
                       :class="
@@ -1198,13 +1299,10 @@ onBeforeUnmount(() => {
                             : "待导入"
                           : target.source === "legacy"
                             ? "兼容跨导"
-                            : target.loaded
-                              ? "已保存"
-                              : "固定值"
+                            : "固定参数"
                       }}</span
                     >
                   </div>
-                  <p>{{ target.role }}</p>
                   <div class="curve-actions">
                     <select
                       :value="
@@ -1213,7 +1311,7 @@ onBeforeUnmount(() => {
                         ] || 'global'
                       "
                       :aria-label="
-                        target.ref + ' ' + target.target + '计算来源'
+                        target.ref + ' ' + target.target + '模型'
                       "
                       @change="
                         setSource(
@@ -1222,87 +1320,14 @@ onBeforeUnmount(() => {
                         )
                       "
                     >
-                      <option value="global">使用全局选择</option>
-                      <option value="fixed">此项使用固定值</option>
-                      <option value="curve">此项使用曲线</option></select
-                    ><button
-                      v-if="target.loaded"
-                      class="small-button"
-                      @click="
-                        curveViewer = target;
-                        reuseCurveTarget = '';
-                      "
-                    >
-                      预览</button
-                    ><button class="small-button" @click="curveTarget = target">
-                      {{ target.loaded ? "更换" : "导入" }}</button
-                    ><button
-                      v-if="target.loaded"
-                      class="icon-button small"
-                      title="解除该位号的曲线"
-                      @click="removeCurve(target.target)"
-                    >
-                      <Icon name="close" :size="13" />
-                    </button>
+                      <option value="global">跟随默认模型</option>
+                      <option value="fixed">固定参数模型</option>
+                      <option value="curve">曲线模型</option>
+                      <option v-if="target.target === 'Q1:transfer' && target.source === 'legacy'" value="legacy">旧跨导模型</option>
+                    </select>
                   </div>
-                  <small
-                    v-if="target.filename"
-                    class="curve-filename"
-                    :title="target.filename"
-                    >{{ target.filename }}</small
-                  >
-                  <FieldInput
-                    v-if="
-                      target.target === 'Q1:transfer' &&
-                      spec.mos_miller_curve?.kind === 'output_family'
-                    "
-                    :field="metadataFields.mos_curve_vds"
-                    :value="spec.mos_curve_vds"
-                    @change="setValue('mos_curve_vds', $event)"
-                  />
+                  <small v-if="target.source === 'curve' && !target.loaded">在对应器件参数中导入曲线。</small>
                 </div>
-                <details class="manual-events">
-                  <summary>手动四事件平台与 Qgs</summary>
-                  <p class="hint">
-                    固定值模式下各事件分别输入。Qgs 为 0 V 至米勒平台的电荷。
-                  </p>
-                  <div class="event-header">
-                    <span>工况 / 事件</span><span>Vgp / V</span
-                    ><span>Qgs / nC</span>
-                  </div>
-                  <template v-for="c in ['min', 'max']"
-                    ><div v-for="e in ['on', 'off']" class="event-input">
-                      <label
-                        >Vin{{ c }} · {{ e === "on" ? "开通" : "关断" }}</label
-                      ><input
-                        type="number"
-                        step="any"
-                        :aria-label="'Vin' + c + e + '米勒电压'"
-                        :value="eventValue(c, e, 'Vgp')"
-                        @input="
-                          manualEvent(
-                            c,
-                            e,
-                            'Vgp',
-                            ($event.target as HTMLInputElement).value,
-                          )
-                        "
-                      /><input
-                        type="number"
-                        step="any"
-                        :aria-label="'Vin' + c + e + '平台电荷'"
-                        :value="Number(eventValue(c, e, 'Qgs')) * 1e9"
-                        @input="
-                          manualEvent(
-                            c,
-                            e,
-                            'Qgs',
-                            ($event.target as HTMLInputElement).value,
-                          )
-                        "
-                      /></div
-                  ></template>
-                </details>
               </div>
             </details>
             <details v-if="multi && isolated" class="parameter-section" open>
@@ -1316,7 +1341,16 @@ onBeforeUnmount(() => {
                   :meta="meta"
                   :preview="preview"
                   @change="replaceSpec"
-                />
+                >
+                  <template #rectifier-model-data="{ index }">
+                    <DeviceCurveData v-for="target in railCurves(index, false)" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                  </template>
+                  <template #blocking-model-data="{ index }">
+                    <DeviceCurveData v-for="target in railCurves(index, true)" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                  </template>
+                </OutputEditor>
               </div>
             </details>
             <details
@@ -1340,8 +1374,8 @@ onBeforeUnmount(() => {
                   <p class="card-note">取消＝外购成品电感。L 仍在功率级填写；按 DCR 计算直流铜损，0 表示未提供。磁芯/交流附加损耗未填时不计，磁密、绕制与温升未评估。</p>
                 </template>
                 <template v-if="group.category==='capacitors'">
-                  <CapacitorBank :spec="spec" side="input" :value="spec.input_capacitors" @change="setValue('input_capacitors',$event)" />
-                  <CapacitorBank v-if="!multi" :spec="spec" :value="spec.output_capacitors" @change="setValue('output_capacitors',$event)" />
+                  <CapacitorBank :spec="spec" side="input" @change="setValue('input_capacitors',$event)" />
+                  <CapacitorBank v-if="!(multi && isolated)" :spec="spec" @change="setValue('output_capacitors',$event)" />
                 </template>
                 <template
                   v-for="(field, index) in group.rows"
@@ -1366,6 +1400,74 @@ onBeforeUnmount(() => {
                     "
                     @change="setValue(field.name, $event)"
                   />
+                </template>
+                <template v-if="group.category === 'device'">
+                  <details class="manual-events">
+                    <summary>Q1 · 主开关曲线</summary>
+                    <DeviceCurveData v-for="target in MOSCurveTargets" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                    <FieldInput v-if="spec.mos_miller_curve?.kind === 'output_family'" :field="metadataFields.mos_curve_vds"
+                      :value="spec.mos_curve_vds" @change="setValue('mos_curve_vds', $event)" />
+                  </details>
+                  <details v-if="mainRectifierCurves.length" class="manual-events">
+                    <summary>整流与续流二极管曲线</summary>
+                    <DeviceCurveData v-for="target in mainRectifierCurves" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                  </details>
+                  <details class="manual-events">
+                    <summary>Q1 · 手动四事件平台与 Qgs</summary>
+                    <p class="hint">
+                      固定值模式下各事件分别输入。Qgs 为 0 V 至米勒平台的电荷。
+                    </p>
+                    <div class="event-header">
+                      <span>工况 / 事件</span><span>Vgp / V</span
+                      ><span>Qgs / nC</span>
+                    </div>
+                    <template v-for="c in ['min', 'max']"
+                      ><div v-for="e in ['on', 'off']" class="event-input">
+                        <label
+                          >Vin{{ c }} · {{ e === "on" ? "开通" : "关断" }}</label
+                        ><input
+                          type="number"
+                          step="any"
+                          :aria-label="'Vin' + c + e + '米勒电压'"
+                          :value="eventValue(c, e, 'Vgp')"
+                          @input="
+                            manualEvent(
+                              c,
+                              e,
+                              'Vgp',
+                              ($event.target as HTMLInputElement).value,
+                            )
+                          "
+                        /><input
+                          type="number"
+                          step="any"
+                          :aria-label="'Vin' + c + e + '平台电荷'"
+                          :value="Number(eventValue(c, e, 'Qgs')) * 1e9"
+                          @input="
+                            manualEvent(
+                              c,
+                              e,
+                              'Qgs',
+                              ($event.target as HTMLInputElement).value,
+                            )
+                          "
+                        /></div
+                    ></template>
+                  </details>
+                </template>
+                <template v-if="group.category === 'capacitors'">
+                  <details v-if="inputBlockingCurves.length" class="manual-events">
+                    <summary>输入防反二极管曲线</summary>
+                    <DeviceCurveData v-for="target in inputBlockingCurves" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                  </details>
+                  <details v-if="outputBlockingCurves.length" class="manual-events">
+                    <summary>输出防反二极管曲线</summary>
+                    <DeviceCurveData v-for="target in outputBlockingCurves" :key="target.target" :target="target"
+                      @import-curve="openCurveImporter" @preview="previewCurve" @remove="removeCurveData" />
+                  </details>
                 </template>
                 <details v-if="group.category==='stage' && isolated" class="parameter-section">
                   <summary>寄生参数与吸收 · 快速 / 寄生瞬态</summary>
@@ -1418,7 +1520,7 @@ onBeforeUnmount(() => {
                     </p></template
                   ></template
                 >
-                <template v-if="group.category === 'ctrl'"
+                <template v-if="group.category === 'ctrl' && !cotBuck"
                   ><label class="field-row"
                     >补偿器类型<select
                       v-model="spec.controller_type"
@@ -1751,7 +1853,7 @@ onBeforeUnmount(() => {
                       <div>
                         <strong
                           >{{ checks.filter((c) => c.state === "pass").length
-                          }}<small> / {{ checks.length }}</small></strong
+                          }}<small> / {{ checks.filter((c) => ['pass', 'review', 'undefined'].includes(c.state)).length }}</small></strong
                         >
                         <p>检查项通过</p>
                       </div>
@@ -1866,7 +1968,12 @@ onBeforeUnmount(() => {
                 </section></template
               >
               <template v-if="page === 'power'"
-                ><section class="card page-toolbar">
+                ><section v-if="summary?.cot" class="card">
+                  <h3>同步 COT · {{ summary.cot.phases }} 相</h3>
+                  <p>每相 {{ fmt(op.f_sw, 'Hz') }} · 导通 {{ fmt(summary.cot.ton_s, 's') }} · 关断
+                    {{ fmt(summary.cot.toff_s, 's') }} · 合成电流峰峰值 {{ fmt(summary.cot.total_output_current_ripple_A, 'A') }}</p>
+                  <p class="hint">{{ summary.cot.scope }}</p>
+                </section><section class="card page-toolbar">
                   <label class="checkbox-label"
                     ><input v-model="mosRealTime" type="checkbox" />MOS
                     开通/关断使用真实时间轴（同时用于报告）</label
@@ -1924,8 +2031,8 @@ onBeforeUnmount(() => {
                     :data="display?.stress?.switch"
                     title="Q1 · MOS 电压 / 电流应力"
                   /><ResultTable
-                    :data="display?.stress?.diode"
-                    title="D1 · 整流器件应力（未计尖峰）"
+                    :data="summary?.cot ? display?.stress?.auxiliary : display?.stress?.diode"
+                    :title="summary?.cot ? 'Q2 · 每相低侧 MOS 应力' : 'D1 · 整流器件应力（未计尖峰）'"
                   />
                 </div>
                 <div v-if="display?.stress?.auxiliary" class="two-column">
@@ -2066,6 +2173,7 @@ onBeforeUnmount(() => {
                 <CapacitorTable
                   v-if="!display?.outputs?.length"
                   :bank="display?.capacitors?.output"
+                  :voltage-ripple="display?.capacitor_voltage_ripple"
                   title="输出电容 · 参数与交流 RMS"
                   prefix="C_O"
                 />
@@ -2091,6 +2199,7 @@ onBeforeUnmount(() => {
                   v-for="rail in display?.outputs"
                   :key="'cap-table-' + rail.id"
                   :bank="rail.capacitors?.output"
+                  :voltage-ripple="rail.capacitor_voltage_ripple"
                   :title="'OUT' + rail.id + ' · 输出电容参数与交流 RMS'"
                   :prefix="'C_O' + rail.id + '-'"
                 />
@@ -2135,7 +2244,6 @@ onBeforeUnmount(() => {
                         dB: '磁通摆幅 / T',
                         Np: '原边匝数',
                         Ns: '副边匝数',
-                        MLT: '平均匝长 / m',
                         dT: '温升 / K',
                         P_core: '磁芯损耗 / W',
                         P_cu: '铜损 / W',
@@ -2145,6 +2253,9 @@ onBeforeUnmount(() => {
                       ><strong>{{ fmt(device[key]) }}</strong>
                     </div>
                   </div>
+                  <p v-if="device.MLT != null" class="card-note">
+                    平均匝长 {{ fmt(device.MLT * 1e3, 'mm') }} · {{ device.MLT_source || '磁芯目录估算' }}。
+                  </p>
                     <div v-if="device.kind === 'transformer' && device.gap_design" class="magnetic-facts">
                       <div><span>磁材相对磁导率 μr</span><strong>{{ fmt(device.gap_design.mu_r) }}</strong></div>
                       <div><span>有效磁路长度 le / mm</span><strong>{{ fmt(device.gap_design.le_m * 1000) }}</strong></div>
@@ -2233,7 +2344,24 @@ onBeforeUnmount(() => {
                   note="疏/密绕、利兹线及交错绕组沿用既有配置；几何评估不等同于安规或量产认证。"
               /></template>
               <template v-if="page === 'loop'"
-                ><AdvancedTools
+                ><section v-if="cotBuck" class="card spice-card">
+                  <div class="card-heading"><h3>COT 电压外环与工程配置</h3></div>
+                  <CotEngineering v-if="meta?.cot_engineering" :schema="meta.cot_engineering" :config="spec.cot_config" :phases="Number(spec.buck_phases||1)" @update="setValue('cot_config',$event)" />
+                  <p>按归一化电压误差调整每相发脉冲频率。两项均填 0 时自动选值，手动设置时 Ki 须大于 0。</p>
+                  <div class="spice-settings">
+                    <label><span>比例增益 Kp / Hz</span><input type="number" min="0" step="any"
+                      :value="spec.cot_kp_hz ?? 0"
+                      @change="setValue('cot_kp_hz', Number(($event.target as HTMLInputElement).value))" /></label>
+                    <label><span>积分增益 Ki / (Hz/s)</span><input type="number" min="0" step="any"
+                      :value="spec.cot_ki_hz_per_s ?? 0"
+                      @change="setValue('cot_ki_hz_per_s', Number(($event.target as HTMLInputElement).value))" /></label>
+                    <label><span>输出电容 ESL</span><select :value="spec.spice_config?.include_cap_esl ?? 0"
+                      @change="setValue('spice_config', {...(spec.spice_config || {}), include_cap_esl: Number(($event.target as HTMLSelectElement).value)})">
+                      <option :value="0">忽略</option><option :value="1">使用每颗电容的 ESL</option>
+                    </select></label>
+                  </div>
+                </section>
+                <AdvancedTools
                   mode="loop"
                   :job="chartJob"
                   :case-id="activeCase"
@@ -2245,23 +2373,79 @@ onBeforeUnmount(() => {
                 <div v-if="summary.loop" class="loop-metrics">
                   <span
                     >穿越频率
-                    <strong>{{ fmt(summary.loop.fc, "Hz") }}</strong></span
+                    <strong>{{ cotBuck && summary.loop.fc == null ? '带内未检出' : fmt(summary.loop.fc, "Hz") }}</strong></span
                   ><span
                     >相位裕度
                     <strong>{{ fmt(summary.loop.pm, "°") }}</strong></span
                   ><span
                     >增益裕度
-                    <strong>{{ fmt(summary.loop.gm_db, "dB") }}</strong></span
-                  ><span class="tag">只闭合主反馈路</span>
+                    <strong>{{ cotBuck && summary.loop.gm_db == null ? '带内未检出' : fmt(summary.loop.gm_db, "dB") }}</strong></span
+                  ><span class="tag">{{ cotBuck ? '公共电压外环' : '只闭合主反馈路' }}</span>
+                  <template v-if="cotBuck && summary.loop.model">
+                    <span>有效 Kp <strong>{{ fmt(summary.loop.model.cot_kp_hz, 'Hz') }}</strong></span>
+                    <span>有效 Ki <strong>{{ fmt(summary.loop.model.cot_ki_hz_per_s, 'Hz/s') }}</strong></span>
+                    <span>建议穿越上限 <strong>{{ fmt(summary.loop.model.recommended_fc_max, 'Hz') }}</strong></span>
+                    <span>模型频带上限 <strong>{{ fmt(summary.loop.model.frequency_limit, 'Hz') }}</strong></span>
+                  </template>
                 </div>
                 <ChartPanel
                   v-if="display?.loop_available"
                   :job="chartJob"
                   :case-id="activeCase"
                   kind="loop"
-                  title="对象、补偿器与开环 Bode 图"
+                  :title="cotBuck ? 'COT 频率到电压、PI 与开环 Bode 图' : '对象、补偿器与开环 Bode 图'"
                 />
-                <div class="notice">
+                <ChartPanel
+                  v-if="loadStep?.available"
+                  :job="chartJob"
+                  :case-id="activeCase"
+                  kind="load_step"
+                  :title="`OUT${loadStep.feedback_output} · 反馈路负载阶跃响应`"
+                  :note="loadStep.notes || undefined"
+                >
+                  <p class="chart-note">
+                    端口基准 {{ fmt(loadStep.output_voltage_V, "V", 5) }} ·
+                    10% 负载 {{ fmt(loadStep.current_low_A, "A") }} ·
+                    90% 负载 {{ fmt(loadStep.current_high_A, "A") }}
+                  </p>
+                  <div class="table-wrap">
+                    <table class="data-table" aria-label="反馈路双向负载阶跃指标">
+                      <thead><tr>
+                        <th scope="col">负载阶跃</th>
+                        <th scope="col">端口电压最小 / 最大</th>
+                        <th scope="col">最大下冲</th>
+                        <th scope="col">最大上冲</th>
+                        <th scope="col">恢复时间 / 容差带</th>
+                      </tr></thead>
+                      <tbody>
+                        <tr v-for="row in loadStepRows" :key="row.direction">
+                          <td><strong>{{ row.direction }}</strong></td>
+                          <td>{{ fmt(row.min_V, "V", 6) }} / {{ fmt(row.max_V, "V", 6) }}</td>
+                          <td>{{ fmt(row.droop_V * 1000, "mV") }}</td>
+                          <td>{{ fmt(row.overshoot_V * 1000, "mV") }}</td>
+                          <td>
+                            {{ row.settling_s == null ? "窗内未恢复" : fmt(row.settling_s * 1000, "ms") }}
+                            / ±{{ fmt(row.settling_band_V * 1000, "mV") }}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p v-if="loadStep.warning" class="chart-note">{{ loadStep.warning }}</p>
+                </ChartPanel>
+                <section v-else class="card chart-card">
+                  <div class="card-heading"><h3>反馈路负载阶跃响应</h3></div>
+                  <p class="chart-note">
+                    {{ meta?.native
+                      ? "双向负载阶跃曲线可在桌面版或本地 Python 网页版的环路页查看。"
+                      : loadStep?.reason || "当前快照未提供反馈路负载阶跃。"
+                    }}
+                  </p>
+                </section>
+                <div v-if="cotBuck" class="notice">
+                  <Icon name="info" />固定活动相数下的低频电压外环，按各相器件、采样误差和均流带宽计算。各颗电容的 ESR 分别建模；输入滤波互动、轻载跳脉冲和关断保护通过开关仿真核对。
+                </div>
+                <div v-else class="notice">
                   <Icon
                     name="info"
                   />环路是当前工作点的小信号近似，多路输出仅闭合主反馈路。耦合模型为低频实验模型，高频外推不能代替
@@ -2421,7 +2605,28 @@ onBeforeUnmount(() => {
                   </div>
                   <Icon name="file" :size="70" />
                 </section>
-                <section class="card spice-card" v-if="['FLYBACK','QR-FLYBACK','ACF-FORWARD','BUCK','BOOST'].includes(spec.topology) && spec.feedback_mode === 'SSR'">
+                <section v-if="cotBuck && meta?.spice_presets.cot" class="card spice-card">
+                  <div class="card-heading"><h3>COT 电路仿真</h3></div>
+                  <div :class="{ 'spice-layout': meta.spice_cot_logic }">
+                    <div>
+                      <label class="checkbox-label" @focusin="spiceFocus='fra_enabled'"><input type="checkbox" :checked="cotFraEnabled"
+                        @change="setValue('spice_config', {...(spec.spice_config || {}), fra_enabled: ($event.target as HTMLInputElement).checked ? 1 : 0})" />对比报告加入实际开关模型 FRA</label>
+                      <p>启用后在电压反馈节点注入扰动。起止频率应覆盖预期穿越频率两侧，最高测量频率限于每相开关频率的 1/10。修改后重新计算，再运行对比报告。</p>
+                      <div v-if="cotFraEnabled" class="spice-settings">
+                        <label v-for="option in cotFraOptions" :key="option.key" @focusin="spiceFocus=option.key">
+                          <span>{{ option.label }} {{ option.unit }}</span>
+                          <input type="number" step="any" :min="option.minimum" :max="option.maximum"
+                            :value="spec.spice_config?.[option.key] ?? cotFraDefaults[option.key]"
+                            @change="setValue('spice_config', {...(spec.spice_config || {}), [option.key]: Number(($event.target as HTMLInputElement).value)})" />
+                        </label>
+                      </div>
+                    </div>
+                    <ControllerLogic v-if="meta.spice_cot_logic" :definition="meta.spice_cot_logic"
+                      :values="{ ...spec, ...cotFraDefaults, ...(spec.spice_config || {}) }" :design="spec"
+                      :selected="spiceFocus" @selected="spiceFocus=$event" />
+                  </div>
+                </section>
+                <section class="card spice-card" v-else-if="!cotBuck && ['FLYBACK','QR-FLYBACK','ACF-FORWARD','BUCK','BOOST'].includes(spec.topology) && spec.feedback_mode === 'SSR'">
                   <div class="card-heading"><h3>LTspice 通用电源闭环设置</h3><span class="tag">{{ ['BUCK','BOOST'].includes(spec.topology)?(spec.control_mode==='Voltage Mode'?'TPS40200 · 电压模式':spec.topology==='BUCK'?'LTC3864 · 峰值电流':'LM5022 · 峰值电流'):spec.topology==='QR-FLYBACK'?'L6565 QR · SSR':spec.topology==='ACF-FORWARD'?'MP6005 · 有源钳位正激':'固定频率 · SSR' }}</span></div>
                   <p>{{ spec.topology==='QR-FLYBACK'?'ZCD 事件触发决定实际周期，主界面 f_sw 为设计频率上限。外部参考缓升与理想 VCC 是模型假设；异常 CS 锁存至 VCC 欠压。':'用户可独立配置频率、软启动和保护。参考配置不是完整芯片模型。' }} 修改后重新计算再导出。</p>
                   <div class="report-actions">
@@ -2446,7 +2651,7 @@ onBeforeUnmount(() => {
                     </label>
                     </div>
                   </section>
-                  </div><ControllerLogic v-if="meta?.spice_logic" :definition="['BUCK','BOOST'].includes(spec.topology)?meta.spice_niso_logic:spec.topology==='QR-FLYBACK'?meta.spice_qr_logic:spec.topology==='ACF-FORWARD'?meta.spice_acf_logic:meta.spice_logic" :values="{...meta.spice_presets.generic,...(spec.spice_config || {})}" :design="spec" :selected="spiceFocus" @selected="spiceFocus=$event" /></div>
+                  </div><ControllerLogic v-if="meta?.spice_logic" :definition="['BUCK','BOOST'].includes(spec.topology)?meta.spice_niso_logic:spec.topology==='QR-FLYBACK'?meta.spice_qr_logic:spec.topology==='ACF-FORWARD'?meta.spice_acf_logic:meta.spice_logic" :values="spiceValues" :design="spec" :selected="spiceFocus" @selected="spiceFocus=$event" /></div>
                   <p>模型边界：Ron / 常数 Coss / 等效门电容，固定二极管压降，线性磁芯及理想隔离反馈。{{ ['BUCK','BOOST'].includes(spec.topology)?'默认快速闭环关闭结电容尖峰；单路无交叉调整率。Boost 关断 MOS 不会切断输入至输出的短路通路。':spec.topology==='QR-FLYBACK'?'Python 本地计算支持 QR 多路 SSR 矩阵跨调；小信号环路仍为低频约化，应与实际 FRA 分开判读。纯浏览器内核尚未支持 QR 矩阵跨调。':'不是 MP6005 精确模型；FRA 和交叉负载角点由试验设置决定。' }}</p>
                 </section>
                 <p v-if="exporting"><span class="spinner" /> {{ exportProgress }} · 已用时 {{ exportElapsed }} s。仿真可能需要较长时间。<button class="button" @click="cancelExport">取消本次导出与仿真</button></p>
@@ -2587,13 +2792,8 @@ onBeforeUnmount(() => {
         v-if="curveTarget"
         :target="curveTarget"
         :spec="spec"
-        @close="curveTarget = null"
-        @applied="
-          (value) => {
-            replaceSpec(value);
-            curveTarget = null;
-          }
-        "
+        @close="closeCurveImporter"
+        @applied="applyCurveData"
       />
       <div
         v-if="curveViewer"
@@ -2648,7 +2848,7 @@ onBeforeUnmount(() => {
                 >复用目标<select v-model="reuseCurveTarget">
                   <option value="">请选择位号</option>
                   <option
-                    v-for="row in preview?.targets.filter(
+                    v-for="row in curveTargets.filter(
                       (t) =>
                         t.target.startsWith('D') &&
                         t.target !== curveViewer?.target,

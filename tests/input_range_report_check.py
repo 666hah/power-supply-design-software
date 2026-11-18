@@ -6,8 +6,6 @@ import sys
 import unittest
 from unittest.mock import patch
 
-import numpy as np
-
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from runtime_resources import configure_numeric_threads
@@ -15,13 +13,12 @@ configure_numeric_threads()
 from docx import Document
 from design_api import load_spec
 from input_voltage_range import calculate_input_endpoints
-from input_range_report import export_input_range_docx, _draw_comparison, CASE_COLORS
-from matplotlib.figure import Figure
+from input_range_report import export_input_range_docx
 from power_stage import DEFAULT_PARAMS
 from report_docx import export_design_docx, value
 
 
-OUT=ROOT/'_tmp_input_range_report_qa'
+OUT=ROOT/'artifacts'/'report-review-20261112'/'word'
 
 
 def curve(case):
@@ -47,7 +44,7 @@ class RangeReportChecks(unittest.TestCase):
     def setUpClass(cls):
         cls.snapshot=add_curves(calculate_input_endpoints(dict(DEFAULT_PARAMS,
             V_in_min=24.,V_in_max=40.,input_voltage_case='max'),include_loop=True))
-        OUT.mkdir(exist_ok=True)
+        OUT.mkdir(parents=True,exist_ok=True)
 
     def test_both_complete_reports_share_one_document_and_preserve_snapshot(self):
         snap=self.snapshot
@@ -63,6 +60,16 @@ class RangeReportChecks(unittest.TestCase):
         doc=Document(path); body=text(doc)
         self.assertEqual(sum(p.style.name=='Title' for p in doc.paragraphs),1)
         self.assertIn('同一套已确定硬件与补偿',body)
+        self.assertEqual(sum(p.style.name=='Caption' and '电路拓扑与器件位号' in p.text for p in doc.paragraphs),1)
+        self.assertEqual(doc.paragraphs[2].text,'1 评审结论')
+        chapter_links = doc.element.xpath('.//w:hyperlink/@w:anchor')
+        chapter_targets = doc.element.xpath('.//w:bookmarkStart/@w:name')
+        self.assertEqual(len(chapter_links), len([p for p in doc.paragraphs if p.style.name=='Heading 1']))
+        self.assertEqual(set(chapter_links),set(chapter_targets))
+        table_captions = [p.text for p in doc.paragraphs if p.style.name=='Report Table Caption']
+        data_tables = [t for t in doc.tables if not t._tbl.xpath('.//w:drawing')]
+        self.assertEqual(len(table_captions), len(data_tables))
+        self.assertTrue(all(caption.startswith('表 ') for caption in table_captions))
         for title in ('需求与共同硬件','功率级与开关过程','器件选型与损耗',
                       '电容分流与输出纹波','磁件设计与绕制','环路与反馈补偿','输入参数与追溯'):
             self.assertIn(title,body)
@@ -95,14 +102,6 @@ class RangeReportChecks(unittest.TestCase):
         self.assertEqual(len(ids),len(set(ids)))
         print('Report QA:',path)
 
-    def test_comparison_lines_are_actual_case_samples_with_stable_colors(self):
-        fig=Figure(figsize=(7,5)); _draw_comparison(fig,self.snapshot['cases'])
-        for index,case in enumerate(self.snapshot['cases']):
-            for axis,key,scale in zip(fig.axes[:3],('i_sw','v_sw','vout_ripple'),(1,1,1000)):
-                line=axis.lines[index]
-                np.testing.assert_array_equal(line.get_ydata(),case['result']['wf'][key]*scale)
-                self.assertEqual(line.get_color(),CASE_COLORS[case['id']])
-
     def test_failure_is_visible_and_not_replaced_by_other_endpoint(self):
         snap=dict(self.snapshot,cases=[dict(case) for case in self.snapshot['cases']])
         snap['cases'][1].update(result=None,error='测试角点不能收敛',models=None,checks=[])
@@ -115,17 +114,22 @@ class RangeReportChecks(unittest.TestCase):
         self.assertIn('Vinmax 本工况不可用',body)
         self.assertNotIn('[Vinmax] 2  关键时域',body)
 
-    def test_equal_endpoints_keep_both_labeled_complete_sections(self):
+    def test_equal_endpoints_have_one_report_column_and_diagram(self):
         snap=add_curves(calculate_input_endpoints(dict(DEFAULT_PARAMS,
             V_in_min=30.,V_in_max=30.),include_loop=True))
         self.assertIs(snap['cases'][0]['result'],snap['cases'][1]['result'])
-        # Only append orchestration is needed here; full actual authoring is
-        # independently tested above, so omit duplicative chart work.
-        with patch('input_range_report.export_design_docx',return_value=dict(checks=1,needs_review=0)) as append:
-            out=export_input_range_docx(OUT/'相同输入端点报告.docx',snap)
-        self.assertEqual(append.call_count,2)
-        self.assertIsNot(append.call_args_list[0].kwargs['document'],append.call_args_list[1].kwargs['document'])
-        self.assertTrue(all(not c.kwargs['save'] for c in append.call_args_list))
+        path=OUT/'相同输入端点报告.docx'
+        out=export_input_range_docx(path,snap)
+        self.assertEqual(out['displayed_case_count'],1)
+        self.assertEqual(out['successful_cases'],2)
+        doc=Document(path)
+        self.assertEqual(len(doc.sections),1)
+        self.assertEqual(sum(p.style.name=='Caption' and '电路拓扑与器件位号' in p.text for p in doc.paragraphs),1)
+        metrics=next(t for t in doc.tables if t.cell(0,0).text=='关键指标')
+        self.assertEqual([c.text for c in metrics.rows[0].cells],['关键指标','固定输入  30 V'])
+        self.assertFalse(any(cell.text=='Vinmax' for t in doc.tables for row in t.rows for cell in row.cells))
+        ids=doc.element.xpath('.//wp:docPr/@id')
+        self.assertEqual(len(ids),len(set(ids)))
         self.assertFalse(out['incomplete'])
 
     def test_multi_output_each_cap_group_only_once_per_case(self):
@@ -140,7 +144,7 @@ class RangeReportChecks(unittest.TestCase):
         doc=Document(output); body=text(doc)
         self.assertEqual(len([t for t in doc.tables if t.cell(0,0).text=='电容']),1)
         for group in ('共享输入','OUT1','OUT2','OUT3'):
-            self.assertEqual(sum('图 4-' in p.text and group+' 电容 FFT 分带（仅列一次）' in p.text for p in doc.paragraphs),1)
+            self.assertEqual(sum(p.style.name=='Caption' and group+' 电容 FFT 分带（仅列一次）' in p.text for p in doc.paragraphs),1)
         self.assertNotIn('图 1-C1',body)
         self.assertEqual(out['successful_cases'],2)
         demand=next(row.cells[1].text for t in doc.tables for row in t.rows

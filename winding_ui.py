@@ -29,6 +29,7 @@ class WindingUI:
         self._winding_overrides={}
         self._winding_order=[]
         self._winding_source=None
+        self._winding_preview_state={}
         self._winding_job=None
         self._winding_row_signature=None
         self._winding_assessment=None
@@ -113,8 +114,8 @@ class WindingUI:
             self._winding_loading=False
         self._select_winding_details()
         self._render_winding_plan()
-        self._toggle_winding_plan()
-        self._schedule_winding_redraw()
+        self._toggle_winding_plan(electrical=False)
+        self._schedule_winding_redraw(electrical=False)
 
     def _winding_override_vars(self,key):
         if key not in self._winding_overrides:
@@ -141,6 +142,8 @@ class WindingUI:
                   style='Muted.TLabel').pack(fill='x',padx=10,pady=(9,5))
         from geometry_ui import edit_profile,export_package
         model_bar=ttk.Frame(body);model_bar.pack(fill='x',padx=9,pady=(0,4))
+        from transformer_preview_ui import open_preview
+        ttk.Button(model_bar,text='3D 结构预览…',command=lambda:open_preview(self)).pack(side='left',padx=(0,6))
         ttk.Button(model_bar,text='三维建模设置…',command=lambda:edit_profile(self)).pack(side='left')
         ttk.Button(model_bar,text='导出三维建模数据…',command=lambda:export_package(self)).pack(side='left',padx=6)
         ttk.Button(model_bar,text='仿真与报告中心…',
@@ -174,6 +177,8 @@ class WindingUI:
         self._build_winding_plan(body,label)
         self.winding_summary=tk.StringVar(value='请先填写骨架窗口净宽与净高。')
         label(textvariable=self.winding_summary,style='Result.TLabel').pack(fill='x',padx=10,pady=6)
+        self._winding_length_note=tk.StringVar(value='绕组长度和平均匝长 MLT 待计算。')
+        label(textvariable=self._winding_length_note,style='Result.TLabel').pack(fill='x',padx=10,pady=(0,6))
         editbar=ttk.Frame(body,padding=(8,4));editbar.pack(fill='x')
         ttk.Button(editbar,text='一键均匀排布',command=self._uniform_winding_positions).grid(row=0,column=0,sticky='ew',padx=3,pady=3)
         ttk.Button(editbar,text='撤销位置调整',command=self._undo_winding_position).grid(row=0,column=1,sticky='ew',padx=3,pady=3)
@@ -193,7 +198,7 @@ class WindingUI:
         from winding_drag_ui import WindingDragController
         self._winding_drag=WindingDragController(self.canvas_winding,self.ax_winding,self._commit_winding_position,
             self._winding_position_note,self._winding_move_step,self._undo_winding_position)
-        label(text='几何预评估，不是可量产工艺或安规判定。图中骨架挡墙仅作示意，不占用用户输入的净窗口。利兹线默认宽 ×1.5、高 ÷1.5，为等面积假设，不代表实物必然可压到此尺寸。未包含引线、交叉线、骨架圆角和工艺公差；外径与绝缘必须按实物确认。调整截面不会改变铜损、漏感或 kij。',
+        label(text='截面用于检查绕组、留边和绝缘。图中挡墙为示意。默认利兹线压扁宽 ×1.5、高 ÷1.5，外径与绝缘按实物填写。调整绕组后会更新平均匝长及铜阻。漏感和耦合系数仍由其模型配置或场解给出。',
                   style='Muted.TLabel').pack(fill='x',padx=10,pady=(6,12))
         body.bind('<Configure>',self._resize_winding_text,add='+')
         parent.bind('<Destroy>',lambda event:self._cancel_winding_redraw() if event.widget is parent else None,add='+')
@@ -281,14 +286,14 @@ class WindingUI:
         self._render_winding_plan()
         self._toggle_winding_plan()
 
-    def _toggle_winding_plan(self,*_):
+    def _toggle_winding_plan(self,*_,electrical=True):
         if hasattr(self,'_winding_plan_body'):
             if self._winding_plan_enabled.get():
                 self._winding_plan_body.pack(fill='x',pady=(6,0))
             else:
                 self._winding_plan_body.pack_forget()
             self._update_winding_plan_note()
-        self._schedule_winding_redraw()
+        self._schedule_winding_redraw(electrical=electrical)
 
     def _selected_winding_plan_index(self):
         if not hasattr(self,'_winding_plan_tree'):
@@ -521,9 +526,17 @@ class WindingUI:
             except tk.TclError:
                 pass
 
-    def _schedule_winding_redraw(self,*_):
+    def _winding_geometry_changed(self):
+        from isolated_outputs import ISOLATED
+        refresh = getattr(self,'schedule_update',None)
+        if refresh and self._topo_key() in ISOLATED:
+            refresh()
+
+    def _schedule_winding_redraw(self,*_,electrical=True):
         if self._winding_loading or getattr(self,'_closing',False):
             return
+        if electrical:
+            self._winding_geometry_changed()
         self._cancel_winding_redraw()
         if hasattr(self,'canvas_winding'):
             self._winding_job=self.root.after(300,self._refresh_winding)
@@ -575,6 +588,7 @@ class WindingUI:
             order[i],order[j]=order[j],order[i]
             self._winding_order=order+[x for x in self._winding_order if x not in order]
             self._winding_row_signature=None
+            self._winding_geometry_changed()
             self._refresh_winding()
 
     def _update_winding(self,op,p,res):
@@ -582,6 +596,14 @@ class WindingUI:
         # the full electrical result here would retain old multi-output waves
         # after another lazy page publishes a newer design.
         self._winding_source=transformer_windings(res)
+        transformer=(res.get('mag') or {}).get('transformer') or {}
+        self._winding_preview_state=dict(core=transformer.get('core'),
+            gap=copy.deepcopy(transformer.get('gap_design')))
+        lengths=(transformer.get('winding_lengths') or {}).get('windings') or {}
+        lines=[f"{key}  导线 {row['length_m']*1e3:.4g} mm   MLT {row['mlt_m']*1e3:.4g} mm · {row['source']}"
+               for key,row in lengths.items()]
+        if hasattr(self,'_winding_length_note'):
+            self._winding_length_note.set('\n'.join(lines) if lines else '当前没有绕组长度结果。')
         self._winding_row_signature=None
         self._refresh_winding()
 
@@ -591,6 +613,10 @@ class WindingUI:
             text=self.winding_summary.get()
             if not text.startswith(note):
                 self.winding_summary.set(note+'\n'+text)
+            if hasattr(self,'_winding_length_note'):
+                self._winding_length_note.set('绕组长度和平均匝长 MLT 待更新。')
+        from transformer_preview_ui import mark_preview_stale
+        mark_preview_stale(self)
 
     def _refresh_winding(self):
         self._cancel_winding_redraw()
@@ -634,6 +660,8 @@ class WindingUI:
         self._update_winding_insulation_readout()
         self.canvas_winding.request_draw()
         self._winding_view.sync()
+        from transformer_preview_ui import refresh_preview
+        refresh_preview(self)
 
     def _update_winding_insulation_readout(self):
         assessment=self._winding_assessment
@@ -671,6 +699,7 @@ class WindingUI:
                 self._render_winding_plan()
             self._winding_positions.setdefault(point['section_id'],{})[point['position_key']]=float(center)
         finally:self._winding_loading=False
+        self._winding_geometry_changed()
         self._cancel_winding_redraw()
         self._winding_job=self.root.after(90,self._refresh_winding)
 
@@ -684,6 +713,7 @@ class WindingUI:
             for key,style in state['styles'].items():self._winding_override_vars(key)['winding_style'].set(style)
             self._render_winding_plan()
         finally:self._winding_loading=False
+        self._winding_geometry_changed()
         self._refresh_winding()
 
     def _uniform_winding_positions(self):
@@ -696,4 +726,5 @@ class WindingUI:
             for values in self._winding_overrides.values():values['winding_style'].set('sparse')
             self._render_winding_plan()
         finally:self._winding_loading=False
+        self._winding_geometry_changed()
         self._refresh_winding()

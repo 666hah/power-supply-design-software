@@ -446,17 +446,20 @@ class MultiOutputResultsUI:
             card['frame'].configure(text=f"OUT{rail_id} · {row['name']}"+(' ★ 主反馈/PSR基准' if feedback else ''))
             if kind == 'power':
                 solved = row['op']
+                ripple = (f"按导入阻抗纹波 {wf['ripple_pp_total']*1000:.4g} mVpp" if wf.get('ripple_impedance_model') == 'curve'
+                          else f"低频纹波 {wf['ripple_pp']*1000:.4g} mVpp")
                 demand = (f"反馈设定/匝比估算 {row['spec']['V_out']:g} V / {row['spec']['P_out']:g} W；解算 {solved['V_out']:.4g} V / {solved['P_out']:.4g} W"
                           if op.get('coupled_model') else f"{row['spec']['V_out']:g} V / {row['spec']['P_out']:g} W")
                 card['detail'].set(demand+f" · {solved.get('branch_mode',solved['mode'])} · "
-                                   f"副边电流 {row['op']['I_d_rms']:.4g} A rms · 低频纹波 {row['ripple_pp']*1000:.4g} mVpp。"
+                                   f"副边电流 {row['op']['I_d_rms']:.4g} A rms · {ripple}。"
                                    +('输出电感电流为本路独立 Lout。' if op['topology'] == 'ACF-FORWARD' else '本路为副边波形，原边励磁电感与主开关由所有输出共享。'))
                 card['draw'] = draw_output_power
             elif kind == 'cap':
                 caps = row['capacitors']['output']['caps']
+                full_label = '按导入阻抗' if wf.get('ripple_impedance_model') == 'curve' else '含 ESL'
                 card['detail'].set(f"输出银行 {row['capacitors']['total_out']:.4g} A rms · "
-                                   f"{len(caps)} 只电容 · ESR 损耗合计 {row['P_cap']:.5g} W · "
-                                   f"低频纹波 {wf['ripple_pp']*1000:.4g} mVpp / 含ESL {wf['ripple_pp_total']*1000:.4g} mVpp。")
+                                   f"{len(caps)} 只电容 · 耗散合计 {row['P_cap']:.5g} W · "
+                                   f"标称不含 ESL {wf['ripple_pp']*1000:.4g} mVpp / {full_label} {wf['ripple_pp_total']*1000:.4g} mVpp。")
                 card['draw'] = draw_output_capacitors
             else:
                 stress = device_stress(row['op'])

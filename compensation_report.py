@@ -278,6 +278,6 @@ def add_compensation_report(doc, p, op, state, *, psr=False):
         paragraph(doc,'光耦自身极点：'+value(parts['fp_opto'],'Hz')+'；负电容不能作为实现该目标极点的方法。',True)
     for note in data['notes']: paragraph(doc,'需复核：'+note,True)
     paragraph(doc,'回代表使用⑨页同一组 comp_design 求解与回代函数。标准二型只核验KP、fz1、fp1；'
-              '旧版省略高频极点的简化支路单独保留。第 6 节 Bode 仍使用⑤页参数，'
+              '旧版省略高频极点的简化支路单独保留。本章波特图仍使用⑤页参数，'
               '不会因导出而替换为本节网络，也不因 KP 匹配而认定实物电路完全匹配。',True)
     return True

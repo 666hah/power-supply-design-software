@@ -1,4 +1,4 @@
-"""One desktop launch centre for magnetic, calculation and circuit evidence.
+"""Joint-run panel with magnetic, calculation and circuit evidence.
 
 The Tk thread snapshots inputs and consumes a mailbox. The worker owns only
 plain data and a cancellation event; it never reads widgets or changes a unit.
@@ -65,21 +65,26 @@ def _readable(value):
 class JointSimulationDialog:
     """Single instance per calculator, with explicit adopt-after-run semantics."""
 
-    def __init__(self, app, config):
+    def __init__(self, app, config, *, container=None, settings_context=None, navigate=None):
         from spice_runtime import find_ltspice
         from transformer_sim_ui import _core_name, _matching_template
         from transformer_sim_ui import _read_settings as field_settings
         self.app = app
+        self.embedded = container is not None
+        self.navigate = navigate
         self.settings = _read_settings()
         self.field_settings = field_settings()
         self.core = _core_name(config)
-        self.win = win = tk.Toplevel(app.root)
-        win.title('电磁仿真，电路仿真，设计计算联合报告')
-        win.transient(app.root)
-        width = max(650, min(1180, win.winfo_screenwidth() - 70))
-        height = max(450, min(830, win.winfo_screenheight() - 100))
-        win.geometry(f'{width}x{height}')
-        win.minsize(min(780, width), min(540, height))
+        if self.embedded:
+            self.win = win = container.winfo_toplevel()
+        else:
+            self.win = win = tk.Toplevel(app.root)
+            win.title('电磁仿真，电路仿真，设计计算联合报告')
+            win.transient(app.root)
+            width = max(650, min(1180, win.winfo_screenwidth() - 70))
+            height = max(450, min(830, win.winfo_screenheight() - 100))
+            win.geometry(f'{width}x{height}')
+            win.minsize(min(780, width), min(540, height))
         self.job = None
         self.poll_id = None
         self.mailbox = queue.Queue()
@@ -99,12 +104,13 @@ class JointSimulationDialog:
         self.output = tk.StringVar(win, self.settings.get('output_directory') or
                                   str(Path.home() / '联合仿真报告'))
         self.factor = tk.StringVar(win, str(self.settings.get('leakage_factor', 1.2)))
-        self.executable = tk.StringVar(win, find_ltspice() or '')
+        self.executable = settings_context.executable if self.embedded else tk.StringVar(win, find_ltspice() or '')
         self.prepare_missing = tk.BooleanVar(win, self.settings.get('prepare_reference_inputs', True))
-        self.status = tk.StringVar(win, '首次登记本机 Elmer、磁芯模型及 LTspice；以后可直接开始。')
+        self.auto_circuit_plan = tk.BooleanVar(win, self.settings.get('auto_circuit_plan', not self.embedded))
+        self.status = tk.StringVar(win, '准备就绪。工具路径和电磁模型使用配置中心当前设置。')
         self.legacy = tk.BooleanVar(win, False)
 
-        frame = ttk.Frame(win, padding=14)
+        self.frame = frame = ttk.Frame(container if self.embedded else win, padding=14)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
@@ -116,19 +122,23 @@ class JointSimulationDialog:
         self.design = ttk.Label(frame, text=self.describe(config), wraplength=980,
                                 style='Muted.TLabel', justify='left')
         self.design.grid(row=1, column=0, sticky='ew', pady=(7, 12))
-        self.notebook = tabs = ttk.Notebook(frame)
-        tabs.grid(row=2, column=0, sticky='nsew')
         from scrollable_results import ScrollableResults
-        run_tab = ttk.Frame(tabs)
+        self.notebook = None
+        if self.embedded:
+            run_tab = ttk.Frame(frame)
+            run_tab.grid(row=2, column=0, sticky='nsew')
+        else:
+            self.notebook = tabs = ttk.Notebook(frame)
+            tabs.grid(row=2, column=0, sticky='nsew')
+            run_tab = ttk.Frame(tabs)
+            tools_page = ttk.Frame(tabs)
+            tabs.add(run_tab, text='联合运行与结果')
+            tabs.add(tools_page, text='设备与模型')
         run_scroll = ScrollableResults(run_tab)
         run_scroll.pack(fill='both', expand=True)
         run_page = run_scroll.content
         run_page.columnconfigure(1, weight=1)
         run_page.rowconfigure(6, weight=1)
-        tools_page = ttk.Frame(tabs)
-        tabs.add(run_tab, text='联合运行与结果')
-        tabs.add(tools_page, text='工具与模型 · 集中配置')
-
         ttk.Label(run_page, text='报告保存目录').grid(row=0, column=0, sticky='w', padx=(0, 10))
         output_entry = ttk.Entry(run_page, textvariable=self.output)
         output_entry.grid(row=0, column=1, sticky='ew')
@@ -144,10 +154,20 @@ class JointSimulationDialog:
         factor.grid(row=0, column=1, padx=10)
         self.controls.append(factor)
         self.policy_text = ttk.Label(policy, wraplength=940, justify='left', text=
-            '默认1.2倍为项目经验余量，可修改。先校验自感/互感矩阵，再按原边全部其他绕组短路的漏感倍数映射耦合参数，'
-            '保留自感并检查矩阵有效性；不会把 k 直接乘倍数。'
-            '\n自动回填只作用于本次导出的设计副本。完成后可选择采用到当前单元。')
+            '以原边短路漏感为基准，按指定倍数求取裕量矩阵并保留各绕组自感。'
+            '默认 1.2 倍。完成后可将结果采用到当前单元。')
         self.policy_text.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(7, 0))
+        plan = ttk.Checkbutton(policy, text='按当前设计自动安排完整电路试验',
+                               variable=self.auto_circuit_plan)
+        plan.grid(row=2, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        self.controls.append(plan)
+        if self.embedded and self.navigate:
+            navigation = ttk.Frame(policy)
+            navigation.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(7, 0))
+            for label, page in (('设备与模型', 'tools'), ('变压器电磁配置', 'field'), ('电路仿真配置', 'circuit')):
+                link = ttk.Button(navigation, text=label, command=lambda page=page:self.navigate(page))
+                link.pack(side='left', padx=(0, 7))
+                self.controls.append(link)
 
         self.stage_frame = stages = ttk.Frame(run_page)
         self.stage_boxes = []
@@ -174,15 +194,20 @@ class JointSimulationDialog:
         scroll.grid(row=6, column=2, sticky='nsw')
         self.log.configure(yscrollcommand=scroll.set)
 
-        scroll_tools = ScrollableResults(tools_page)
-        scroll_tools.pack(fill='both', expand=True)
-        tools = scroll_tools.content
+        if self.embedded:
+            self.environment = settings_context
+            tools = ttk.Frame(run_page)
+            tools.grid(row=7, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+        else:
+            scroll_tools = ScrollableResults(tools_page)
+            scroll_tools.pack(fill='both', expand=True)
+            tools = scroll_tools.content
+            from simulation_environment_ui import EnvironmentPanel
+            self.environment = EnvironmentPanel(tools, config)
+            self.environment.grid(row=0, columnspan=3, sticky='ew', padx=8, pady=8)
+            self.executable = self.environment.executable
+            self.controls.extend(self.environment.controls)
         tools.columnconfigure(1, weight=1)
-        from simulation_environment_ui import EnvironmentPanel
-        self.environment = EnvironmentPanel(tools, config)
-        self.environment.grid(row=0, columnspan=3, sticky='ew', padx=8, pady=8)
-        self.executable = self.environment.executable
-        self.controls.extend(self.environment.controls)
         compatibility = ttk.Checkbutton(tools, text='兼容已有外部提取器与旧提取设置（新电脑无需启用）',
                                          variable=self.legacy, command=self.toggle_legacy)
         compatibility.grid(row=1, columnspan=3, sticky='w', padx=10, pady=8)
@@ -190,10 +215,11 @@ class JointSimulationDialog:
         self.legacy_frame = legacy = ttk.LabelFrame(tools, text='已有外部工程的兼容路径', padding=8)
         legacy.grid(row=2, columnspan=3, sticky='ew', padx=10)
         legacy.columnconfigure(1, weight=1)
-        for row, label, variable, command in (
-                (1, '变压器提取工具目录', self.tool, self.pick_tool),
-                (2, '同型号磁芯提取设置 JSON', self.template, self.pick_template),
-                (3, 'LTspice 可执行程序', self.executable, self.pick_executable)):
+        legacy_entries = [(1, '变压器提取工具目录', self.tool, self.pick_tool),
+                          (2, '同型号磁芯提取设置 JSON', self.template, self.pick_template)]
+        if not self.embedded:
+            legacy_entries.append((3, 'LTspice 可执行程序', self.executable, self.pick_executable))
+        for row, label, variable, command in legacy_entries:
             ttk.Label(legacy, text=label, wraplength=220).grid(row=row, column=0, sticky='w', padx=8, pady=6)
             entry = ttk.Entry(legacy, textvariable=variable)
             entry.grid(row=row, column=1, sticky='ew', pady=8)
@@ -204,18 +230,14 @@ class JointSimulationDialog:
             text='自动准备缺失的参考输入')
         check.grid(row=4, columnspan=3, sticky='w', padx=10, pady=(12, 3))
         self.controls.append(check)
-        self.tool_hint = ttk.Label(tools, wraplength=930, justify='left', text=
-            '默认使用随程序携带的提取内核；提取设置 JSON 由当前设计自动生成，不需要另一个工具目录。'
-            '已有窗口、匝数、层序、手调位置、接线、磁材和气隙优先保留；缺少几何定位会明确提示。'
-            '\n场仿真或稳态检查未通过时，报告会明确标记失败/部分完成，不以旧结果冒充本次结果。')
-        self.tool_hint.grid(row=3, columnspan=3, sticky='ew', padx=10, pady=(6, 15))
-        actions = ttk.LabelFrame(tools, text='独立调试入口', padding=10)
-        actions.grid(row=4, columnspan=3, sticky='ew', padx=10, pady=(4, 12))
-        field = ttk.Button(actions, text='旧提取设置 / 独立调试…', command=self.open_field)
-        field.pack(side='left', padx=(0, 10))
-        circuit = ttk.Button(actions, text='控制器设置 / 单独电路仿真…', command=self.open_circuit)
-        circuit.pack(side='left')
-        self.controls.extend((field, circuit))
+        if not self.embedded:
+            actions = ttk.LabelFrame(tools, text='独立调试入口', padding=10)
+            actions.grid(row=4, columnspan=3, sticky='ew', padx=10, pady=(4, 12))
+            field = ttk.Button(actions, text='变压器电磁…', command=self.open_field)
+            field.pack(side='left', padx=(0, 10))
+            circuit = ttk.Button(actions, text='电路仿真…', command=self.open_circuit)
+            circuit.pack(side='left')
+            self.controls.extend((field, circuit))
         self.toggle_legacy()
 
         self.footer = footer = ttk.Frame(frame)
@@ -230,12 +252,13 @@ class JointSimulationDialog:
         self.write('只需一次开始：输入检查 → 场解 → 带裕量参数复算 → 电路仿真 → 联合 Word 报告。')
         if self.result:
             self.write('已载入本单元保存的联合报告记录。该记录是历史证据，重新运行会建立独立目录。')
-        win.bind('<Configure>', self.resize, add='+')
+        frame.bind('<Configure>', self.resize, add='+')
         stages.bind('<Configure>', self.schedule_reflow, add='+')
         footer.bind('<Configure>', self.schedule_reflow, add='+')
         self.schedule_reflow()
-        win.bind('<Destroy>', self.destroyed, add='+')
-        win.protocol('WM_DELETE_WINDOW', self.close)
+        frame.bind('<Destroy>', self.destroyed, add='+')
+        if not self.embedded:
+            win.protocol('WM_DELETE_WINDOW', self.close)
 
     def describe(self, config):
         return ('当前单元：' + _readable(config.get('topology', '未选择拓扑')) +
@@ -243,9 +266,9 @@ class JointSimulationDialog:
                 '  ·  芯片与补偿沿用当前工程。Vin min / Vin max 按同一套回填后硬件验证。')
 
     def resize(self, event):
-        if event.widget is self.win:
-            width = max(420, event.width - 85)
-            for label in (self.heading, self.design, self.message, self.policy_text, self.tool_hint):
+        if event.widget is self.frame:
+            width = max(400, event.width - 55)
+            for label in (self.heading, self.design, self.message, self.policy_text):
                 label.configure(wraplength=width)
             self.schedule_reflow()
 
@@ -313,8 +336,25 @@ class JointSimulationDialog:
             save_field_settings(self.field_settings)
         self.settings = dict(output_directory=self.output.get().strip(),
                              leakage_factor=float(self.factor.get()),
+                             auto_circuit_plan=self.auto_circuit_plan.get(),
                              prepare_reference_inputs=self.prepare_missing.get())
         _save_settings(self.settings)
+
+    def set_config(self, config):
+        """Refresh the design header when this tab becomes current."""
+        from transformer_sim_ui import _core_name, _matching_template
+        core = _core_name(config)
+        if core != self.core:
+            self.core = core
+            self.template.set(_matching_template(self.tool.get(), self.core, self.field_settings))
+        self.design.configure(text=self.describe(config))
+
+    def show_equipment(self):
+        if self.embedded:
+            if self.navigate:
+                self.navigate('tools')
+        else:
+            self.notebook.select(1)
 
     def write(self, message):
         self.log.configure(state='normal')
@@ -352,24 +392,24 @@ class JointSimulationDialog:
             portable = not self.legacy.get()
             environment = None
             if not portable and (not tool or not Path(tool).is_dir() or not template or not Path(template).is_file()):
-                self.notebook.select(1)
-                raise ValueError('请在“工具与模型”选择本机提取工具和同型号磁芯的提取设置。')
+                if not self.embedded:
+                    self.show_equipment()
+                raise ValueError('请在旧提取设置中选择本机提取工具和同型号磁芯的提取设置。')
             if not exe or not Path(exe).is_file():
-                self.notebook.select(1)
-                raise ValueError('请在“工具与模型”选择 LTspice 可执行程序。')
+                self.show_equipment()
+                raise ValueError('请在“设备与模型”选择 LTspice 可执行程序。')
             if not output:
                 raise ValueError('请选择联合报告保存目录。')
             config = copy.deepcopy(self.app._config_dict())
-            from transformer_sim_ui import _core_name
-            self.core = _core_name(config)
-            self.design.configure(text=self.describe(config))
+            self.set_config(config)
             if portable:
-                self.notebook.select(1)
                 self.environment.set_config(config)
                 environment = self.environment.snapshot(require_spice=True)
                 tool, template = 'builtin', None
             source_id = _input_id(config)
             prepare = bool(self.prepare_missing.get())
+            auto_circuit_plan = bool(self.auto_circuit_plan.get())
+            save_environment_locally = not self.embedded
         except (ValueError, OSError, tk.TclError) as exc:
             self.status.set('尚未开始：' + str(exc))
             self.write(self.status.get())
@@ -388,13 +428,14 @@ class JointSimulationDialog:
             value.set('等待')
         self.bar['value'] = 0
         self.status.set('正在冻结输入并检查工具…')
-        self.notebook.select(0)
+        if self.notebook is not None:
+            self.notebook.select(0)
         self.refresh()
         mailbox = self.mailbox
         def work():
             try:
                 current_environment = environment
-                if current_environment is not None:
+                if current_environment is not None and save_environment_locally:
                     from simulation_environment import save_environment
                     try:
                         current_environment = save_environment(config, current_environment)
@@ -403,7 +444,8 @@ class JointSimulationDialog:
                 from joint_simulation import run_joint_simulation
                 options = dict(tool_root=tool, project_file=template,
                     output_directory=output, leakage_factor=factor, executable=exe,
-                    prepare_reference_inputs=prepare, cancelled=cancel.is_set,
+                    prepare_reference_inputs=prepare, auto_circuit_plan=auto_circuit_plan,
+                    cancelled=cancel.is_set,
                     progress=lambda event:mailbox.put(('progress', event)))
                 if current_environment is not None:
                     options['environment'] = current_environment
@@ -541,10 +583,10 @@ class JointSimulationDialog:
         if self.job is not None:
             self.cancel()
             return
-        self.win.destroy()
+        (self.frame if self.embedded else self.win).destroy()
 
     def destroyed(self, event):
-        if event.widget is self.win:
+        if event.widget is self.frame:
             self.closed = True
             if self.job is not None:
                 self.job.set()
@@ -567,6 +609,8 @@ class JointSimulationDialog:
 def show(app):
     previous = getattr(app, '_joint_simulation_dialog', None)
     if previous is not None and previous.win.winfo_exists():
+        if previous.embedded and previous.navigate:
+            previous.navigate('joint')
         previous.win.deiconify()
         previous.win.lift()
         return previous.win

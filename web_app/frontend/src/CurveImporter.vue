@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onBeforeUnmount } from "vue";
 import { post } from "./api";
 import type { CurveTarget, Spec } from "./types";
 import Icon from "./Icon.vue";
 import CurvePlot from "./CurvePlot.vue";
 const props = defineProps<{ target: CurveTarget; spec: Spec }>();
-const emit = defineEmits<{ close: []; applied: [spec: Spec] }>();
+const emit = defineEmits<{ close: []; applied: [curve: Spec] }>();
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
 const filename = ref(""),
   content = ref(""),
   info = ref<any>(null),
@@ -74,7 +76,7 @@ async function apply() {
       plateau_start: start.value,
       plateau_end: end.value,
     });
-    emit("applied", result.spec);
+    if (!disposed) emit("applied", result.curve);
   } catch (e: any) {
     error.value = e.message;
   } finally {

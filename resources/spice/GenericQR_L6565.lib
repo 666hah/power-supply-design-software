@@ -9,7 +9,10 @@ Bss SS COM V=limit(idt(1/{TSS},0,V(active,COM)<.5),0,1)
 Berr err COM V={VSET}*V(SS,COM)-V(FB,COM)
 Xcomp err active COMP COM GCOMP TYPE={TYPE} KP={KP} FZ1={FZ1} FP1={FP1} FZ2={FZ2} FP2={FP2} CMAX={A_CS*CS0*(1-VFF/3)}
 Bchip chip_comp COM V=2.5+3*V(COMP,COM)/{A_CS*CS0}
-Rcs CS filtered 1
+* High-impedance equivalent CS filter: preserve tau without loading the sense
+* resistor with the arbitrary 1-ohm realization used for the transfer function.
+Bcs_buffer cs_drive COM V=V(CS,COM)
+Rcs cs_drive filtered 1
 Ccs filtered COM {CS_TAU}
 Bramp RAMP COM V={A_CS}*V(filtered,COM)
 Boff offage COM V=idt(1,0,(V(q,COM)>.5)|(V(active,COM)<.5))

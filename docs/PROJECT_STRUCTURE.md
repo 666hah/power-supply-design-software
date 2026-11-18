@@ -10,8 +10,15 @@
 | `coupled_flyback.py`、`qr_coupled.py`、`cross_regulation.py` | 定频/QR矩阵换流与周期电荷平衡、固定硬件负载角点扫描；QR的谷底时序独立于定频PWM，小信号环路不冒充完整矩阵线性化 |
 | `parallel_wires.py`、`winding_layout.py`、`winding_positions.py` | 完整线并绕校验、共享截面排布与逐匝中心/碰撞检查；绘图、报告及建模共同消费 |
 | `winding_drag_ui.py`、`web_app/frontend/src/WindingCanvas.vue` | 桌面单图元拖动及网页 SVG 交互，不包含电气求解 |
+| `transformer_preview_scene.py`、`transformer_preview_ui.py`、`transformer_preview_host.py` | 共享绕制几何到毫米制预览数据、Tk 非模态入口、隔离 WebView2 宿主；不运行电气或场求解 |
+| `core_shape_catalog.py`、`core_mesh_library.py`、`resources/core_shapes/`、`resources/transformer_preview/` | 带原厂三视图来源的尺寸目录、67 型号内置网格及完整性校验、离线 WebGL 显示；与电气磁芯库分别维护 |
 | `joint_simulation.py`、`joint_simulation_ui.py`、`joint_simulation_report.py` | 联合仿真调度与可实现裕量矩阵、桌面集中入口、单一Word证据报告；复用场解桥接和共享计算快照 |
+| `system_sequence_config.py`、`system_sequence_behavior.py`、`system_sequence_units.py`、`system_sequence_export.py` | 电源树启停SI配置、源保护/分阶段负载/多轨条件行为、现有开关电路隔离封装与整网连接；移除单元额定夹具后只放声明负载 |
+| `system_sequence_runtime.py`、`system_sequence_analysis.py`、`system_sequence_report.py`、`system_sequence_ui.py` | 自有LTspice任务与取消、完整RAW观察、Word/HTML/CSV共享投影及集中桌面配置 |
+| `examples/SYSTEM_STAGED_STARTUP.json`、`tools/validate_sequence_realistic.py` | 独立分阶段电源树及同硬件正常/弱源打嗝/热重启/慢上电工况生成与实跑入口；依据声明配置和本次证据判断，不改用户画布 |
 | `system_workspace.py`、`power_network.py` | 供电架构与预算 |
+| `software_architecture_ui.py`、`software_architecture_data.py`、`software_architecture_help.py` | 桌面功能架构的布局、卡片与离线章节链接 |
+| `docs/tutorials/build_operation_tutorial.py`、`resources/help/operations/` | 共用章节数据生成的 HTML 教程与 Word 手册。更新后运行 `tests/architecture_tutorial_check.py` |
 | `shared/power_architecture.js` | 个人网页版共用的图形与连接交互 |
 | `web_app/frontend/` | Vue 界面与 TypeScript 计算模块 |
 | `resources/`、`examples/` | 参考图、SPICE 资源与可复用配置 |
@@ -23,6 +30,8 @@
 桌面运行 `python desktop_entry.py`。本地网页版先执行 `tools/setup_web.ps1`，再运行 `python run_web.py --open`。依赖清单与完整命令见根目录 README。
 
 前端在 `web_app/frontend` 执行 `npm ci`、`npm run build`。计算模型放在内核模块中，界面消费计算快照，不应在图表或组件里另写一套不一致的公式。
+
+修改操作教程时先更新 `docs/tutorials/operation_topics_*.py`。使用运行环境里的 Python 执行 `docs/tutorials/build_operation_tutorial.py --screens resources/help/operations/screens`，由同一份章节内容重建 Word 和离线网页。界面更新后用新的真实截图替换对应文件。
 
 ## 发布
 

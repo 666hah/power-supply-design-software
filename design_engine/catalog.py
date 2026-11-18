@@ -34,7 +34,7 @@ def parameter_catalog(topology=None):
                    topologies=list(meta.topologies) if meta else [],
                    enabled_by=meta.enabled_by if meta else '',
                    auto_zero=bool(meta and meta.auto),
-                   deprecated=key in ('Rd_diode', 'Rd_din', 'Rd_dout', 'tr', 'tf', 'Vf', 'gfs', 'le_core'))
+                   deprecated=key in ('Rd_diode', 'Rd_din', 'Rd_dout', 'tr', 'tf', 'Vf', 'gfs', 'le_core', 'MLT'))
         if topology is not None:
             row['applicable'] = applicable(key, topology, 'Peak Current Mode') if meta else True
         rows.append(row)
@@ -42,14 +42,36 @@ def parameter_catalog(topology=None):
 
 
 def specification_schema():
+    from capacitor_impedance import MAX_CURVE_POINTS
     from power_stage import TOPOLOGIES
     from isolated_outputs import RAIL_KEYS
+    impedance_point = {
+        'type': 'array', 'minItems': 3, 'maxItems': 3,
+        'prefixItems': [{'type': 'number', 'exclusiveMinimum': 0},
+                        {'type': 'number', 'exclusiveMinimum': 0},
+                        {'type': 'number', 'minimum': -90, 'maximum': 90}],
+    }
+    capacitor = {
+        'type': 'object', 'required': ['C'], 'additionalProperties': False,
+        'properties': {
+            **{key: {'type': 'number', 'minimum': 0} for key in ('C', 'ESR', 'ESL')},
+            'impedance_mode': {'enum': ['fixed', 'curve']},
+            'impedance_curve': {
+                'type': 'object', 'required': ['points'], 'additionalProperties': False,
+                'properties': {'source': {'type': 'string', 'maxLength': 256},
+                               'points': {'type': 'array', 'minItems': 2, 'maxItems': MAX_CURVE_POINTS,
+                                          'items': impedance_point}},
+            },
+            'thermal_resistance_K_per_W': {'type': 'number', 'exclusiveMinimum': 0},
+        },
+        'if': {'required': ['impedance_mode'], 'properties': {'impedance_mode': {'const': 'curve'}}},
+        'then': {'required': ['impedance_curve']},
+    }
     properties = {}
     for row in parameter_catalog():
         raw = {'type': row['type']}
         if row['name'] in ('input_capacitors','output_capacitors'):
-            raw={'type':['array','null'],'minItems':1,'items':{'type':'object','required':['C'],
-                'additionalProperties':False,'properties':{k:{'type':'number','minimum':0} for k in ('C','ESR','ESL')}}}
+            raw = {'type': ['array', 'null'], 'minItems': 1, 'items': copy.deepcopy(capacitor)}
         if row['name'] == 'topology':
             # load_spec also accepts case-insensitive legacy aliases.
             raw['examples'] = list(TOPOLOGIES)

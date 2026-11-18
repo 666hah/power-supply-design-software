@@ -104,6 +104,29 @@ class MultiQRModelChecks(unittest.TestCase):
         self.assertGreater(second['I_sw_pk'],first['I_sw_pk'])
         self.assertGreater(second['Ts'],first['Ts'])
 
+    def test_nominal_branch_charge_and_output_power_with_unequal_diode_drops(self):
+        from waveforms import make_waveforms
+        for feedback in (1,2):
+            p=fixture(feedback)
+            p['outputs'][0].update(Vf_diode=1.3,Vf_dout=.8)
+            p['outputs'][1].update(Vf_diode=.8,Vf_dout=.8,P_out=.5)
+            op=compute_design(p)['op']
+            # Independently integrate fine samples rather than reading the
+            # declared I_d_avg. A DC capacitor residual is not valid ripple.
+            wf=make_waveforms(op,n_cycles=2,n_pts=32768)
+            power=0.
+            for child,wave in zip(op['output_ops'],wf['outputs']):
+                mean=float(np.mean(wave['i_d']))
+                self.assertAlmostEqual(mean,child['I_out'],delta=max(1e-9,child['I_out']*2e-4))
+                self.assertLess(abs(float(np.mean(wave['i_c']))),max(1e-9,child['I_out']*2e-4))
+                self.assertAlmostEqual(float(np.sqrt(np.mean(wave['i_d']**2))),child['I_d_rms'],
+                                       delta=child['I_d_rms']*2e-4)
+                power+=mean*child['V_out']
+            self.assertAlmostEqual(power,op['P_out'],delta=op['P_out']*2e-4)
+            self.assertAlmostEqual(.5*p['L']*op['I_sw_pk']**2*op['f_sw'],
+                                   op['P_out']/p['eta_guess'],places=8)
+            self.assertFalse(op['qr_multi_model']['independent_winding_commutation'])
+
     def test_explicit_banks_keep_all_capacitors_and_reject_incomplete_measurements(self):
         p=fixture()
         p['outputs'][1]['output_capacitors']=[dict(C=cap,ESR=esr,ESL=0.)

@@ -59,10 +59,10 @@ def cache_key(files, case, settings, executable, processors):
     # Include helper implementations as well as the top-level functions. Load
     # code through the module loader so source and frozen PyInstaller builds
     # both invalidate evidence when RAW parsing or quality checks change.
-    modules = ['spice_runtime', 'spice_analysis']
+    modules = ['spice_runtime', 'spice_analysis', 'spice_white_box', 'spice_black_box']
     topology = parameters.get('topology')
     if topology == 'FLYBACK':modules.append('flyback_cap_boundary')
-    if topology == 'QR-FLYBACK':modules.append('qr_spice_analysis')
+    if topology in ('QR-FLYBACK','FLYBACK'):modules.append('qr_spice_analysis')
     if topology == 'ACF-FORWARD':modules.append('acf_spice')
     for name in modules:
         spec = importlib.util.find_spec(name)

@@ -64,6 +64,34 @@ def magnetics_design(op, p):
                     P_total=xfmr.get('P_total', np.inf), inductor=None,
                     reason=xfmr.get('reason', None))
     # buck / boost / buck-boost: one inductor
+    if op.get('cot'):
+        hardware = op['cot'].get('inductor_hardware')
+        if hardware:
+            p = dict(p, _fixed_inductor=hardware)
+        rows=op['cot'].get('phase_data')
+        if rows:
+            per_phase=[]
+            for row in rows:
+                po=dict(op,L=row['L_H'],I_L_avg=row['current_avg_A'],I_L_pk=row['current_peak_A'],
+                        I_L_min=row['current_valley_A'],I_L_rms=row['current_rms_A'],dI_L=row['ripple_A'],D=row['duty'])
+                pp=dict(p,L=row['L_H'],inductor_dcr=row['dcr_ohm'])
+                if p.get('_fixed_inductor'):
+                    pp['_fixed_inductor']=dict(p['_fixed_inductor'],inductor_dcr=row['dcr_ohm'])
+                ind=mag.design_inductor(po,pp)
+                if ind.get('ok') and ind.get('design_enabled') is not False:
+                    old=ind['P_total']; ind['R_dc']=row['dcr_ohm']
+                    ind['P_cu']=ind['Fr']*row['dcr_ohm']*row['current_rms_A']**2
+                    ind['P_total']=ind['P_cu']+ind['P_core']
+                    ind['dT']=ind['dT']*ind['P_total']/old if old>0 else 0.
+                per_phase.append(dict(id=row['id'],**ind))
+            okay=all(r['ok'] for r in per_phase)
+            return dict(ok=okay,inductor=per_phase[0],phase_inductors=per_phase,quantity=len(rows),
+                        P_total=sum(r['P_total'] for r in per_phase) if okay else np.nan,
+                        reason=next((r.get('reason') for r in per_phase if not r['ok']),None))
+        ind = mag.design_inductor(op, p)
+        phases = op['cot']['phases']
+        return dict(ok=ind['ok'], inductor=ind, quantity=phases,
+                    P_total=phases*ind['P_total'] if ind['ok'] else np.nan, reason=ind.get('reason'))
     if op.get('niso_model'):
         hardware=op['niso_model']['inductor']
         if hardware.get('ok') and hardware.get('design_enabled') is not False:
@@ -104,8 +132,8 @@ def total_losses(op, p, wf=None):
     # One spectral result feeds the loss ledger and every presentation path.
     from capripple import analyze_capacitors
     capacitors = analyze_capacitors(p, op, wf)
-    P_cap = sum(c['ESR'] * c['total']**2 for c in capacitors['output']['caps'])
-    P_cap_in = sum(c['ESR'] * c['total']**2 for c in capacitors['input']['caps'])
+    P_cap = capacitors['output']['loss_W']
+    P_cap_in = capacitors['input']['loss_W']
     outputs = []
     if op.get('outputs'):
         for rail,child,child_wf in zip(op['outputs'],op['output_ops'],wf['outputs']):
@@ -117,7 +145,7 @@ def total_losses(op, p, wf=None):
             curve_rail = rail['id'] if source_p.get('outputs') else None
             sc = semiconductor_losses(child,_device_params(rp,curve_rail),wf=child_wf)
             ca = analyze_capacitors(rp,child,child_wf)
-            cap_loss = sum(c['ESR']*c['total']**2 for c in ca['output']['caps'])
+            cap_loss = ca['output']['loss_W']
             block_model=conduction([child['I_out']],bank.get(refs(rp,curve_rail)[2]),rp['Vf_dout']) if rp['d_out_enable'] else None
             blocking=block_model['P_cond'] if block_model else 0.
             outputs.append(dict(id=rail['id'],name=rail['name'],spec=rail,op=child,
@@ -127,7 +155,11 @@ def total_losses(op, p, wf=None):
         P_cap = sum(x['P_cap'] for x in outputs)
         semi['P_total'] = semi['switch']['P_total']+semi.get('auxiliary',{}).get('P_total',0)+sum(x['P_rectifier'] for x in outputs)
         semi['output_rectifiers'] = outputs
-    P_sense = op.get('Rs', 0.0) * _sense_rms(op, wf) ** 2 if op.get('Rs', 0.0) else 0.0
+    if op.get('cot'):
+        rows=op['cot'].get('phase_data')
+        P_sense = sum(r['rs_ohm']*r['high_rms_A']**2 for r in rows) if rows else op['Rs']*op['cot']['phases']*op['I_sw_rms']**2
+    else:
+        P_sense = op.get('Rs', 0.0) * _sense_rms(op, wf) ** 2 if op.get('Rs', 0.0) else 0.0
 
     # RCD (RC) clamp snubber loss for the flyback primary leakage.  When the
     # user chose a clamp ratio Kc > 1 on the RCD tab, the snubber resistor
@@ -182,9 +214,11 @@ def total_losses(op, p, wf=None):
             frozen_aux = source_p.get('_fixed_auxiliary') or {}
             dw = frozen_aux.get('d_wire') or max(50e-6,mag.wire_diameter(rms,p['J']))
             area = np.pi*dw**2/4
-            raux = p['rho']*tr['MLT']*psr['Na']/area
+            length = tr['winding_lengths']['windings']['AUX']
+            raux = p['rho']*length['length_m']/area
             loss = mag.ac_factor(dw,op['f_sw'],p['rho'])*raux*rms**2
-            tr['auxiliary'] = dict(Na=psr['Na'],I_rms=rms,d_wire=dw,R_dc=raux,P_cu=loss)
+            tr['auxiliary'] = dict(Na=psr['Na'],I_rms=rms,d_wire=dw,R_dc=raux,P_cu=loss,
+                                   MLT=length['mlt_m'],MLT_source=length['source'],copper_length_m=length['length_m'])
             tr['P_cu']+=loss; tr['P_total']+=loss
             tr['fill']+=psr['Na']*area/tr['Wa']
             tr.update(mag.transformer_temperature(tr['P_total'], p))
@@ -194,6 +228,11 @@ def total_losses(op, p, wf=None):
     P_clamp = (op.get('I_clamp_rms', 0)**2 * p.get('ESR_clamp', .03)
                if op['topology'] == 'ACF-FORWARD' else 0.0)
     P_parasitic=float(op.get('P_parasitic',0.))
+    P_source=0.
+    if op.get('cot'):
+        source_r=op['cot']['engineering']['configuration']['source_resistance_ohm']
+        P_source=source_r*op['I_in_avg']**2
+        P_parasitic+=P_source
     P_total = P_semi + P_mag + P_cap + P_cap_in + P_sense + P_rcd + P_din + P_dout + P_clamp + P_controller + P_parasitic
     P_in = op['P_out'] + P_total
     eta = op['P_out'] / max(P_in, 1e-30)
@@ -213,7 +252,7 @@ def total_losses(op, p, wf=None):
     return dict(semi=semi, mag=magd, P_cap=P_cap, P_cap_in=P_cap_in,diode_models=diode_models,
                 capacitors=capacitors, P_sense=P_sense,
                 P_rcd=P_rcd, P_din=P_din, P_dout=P_dout, P_clamp=P_clamp, P_parasitic=P_parasitic,
-                P_semi=P_semi, P_mag=P_mag, P_total=P_total, eta=eta,
+                P_semi=P_semi, P_mag=P_mag, P_total=P_total, eta=eta,P_source=P_source,
                 P_in=P_in, P_out=op['P_out'], wf=wf, op=op,
                 eta_guess=op['eta_guess'], P_in_est=op['P_in_est'],
                 P_loss_budget=op['P_loss_budget'],
@@ -250,10 +289,6 @@ def compute_design(p):
     p=dict(p,Rd_diode=0.,Rd_din=0.,Rd_dout=0.,diode_curves=validate_bank(p.get('diode_curves',{})))
     validate_design_inputs(p)
     op = compute_operating_point(p)
-    op['output_capacitors']=__import__('copy').deepcopy(__import__('isolated_outputs').selected_params(p).get('output_capacitors'))
-    if op.get('output_ops'):
-        for child,rail in zip(op['output_ops'],__import__('isolated_outputs').output_specs(p)):
-            child['output_capacitors']=__import__('copy').deepcopy(rail.get('output_capacitors'))
     check_calculation_cancelled()
     wf = make_waveforms(op)
     from parasitic_ringing import attach

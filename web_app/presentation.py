@@ -2,6 +2,21 @@
 import copy
 
 
+def _ripple_comparison(waveform):
+    if waveform.get('ripple_impedance_model') == 'curve':
+        return dict(curve=waveform['ripple_pp_total'], reference=waveform['ripple_pp'])
+    return None
+
+
+def _load_step_summary(case, result):
+    step = (result.get('loop') or {}).get('load_step') or {}
+    if not step.get('available'):
+        return dict(available=False, reason=step.get('reason') or case.get('loop_error')
+                    or '当前工况未提供反馈路负载阶跃。')
+    return {key: step.get(key) for key in ('available', 'feedback_output', 'output_voltage_V',
+        'current_low_A', 'current_high_A', 'rise', 'fall', 'notes', 'warning')}
+
+
 def present(run):
     from design_engine.contracts import json_value
     from topology_diagram import topology_components
@@ -23,7 +38,7 @@ def present(run):
         for kind,device in devices:
             if device:
                 magnetics.append(dict(kind=kind, **{key: copy.deepcopy(device.get(key)) for key in
-                    ('ok','core','core_label','core_geometry','Ae','Ve','Wa','MLT','MLT_source',
+                    ('ok','core','core_label','core_geometry','Ae','Ve','Wa','MLT','MLT_source','copper_length_m',
                      'Np','Ns','N','B_pk','dB','gap','gap_design','P_core','P_cu','P_total','dT','fill',
                      'R_dc_p','R_dc_s','R_dc','J_actual_p','J_actual_s','J_actual','windings','reason',
                      'I_rms_p','I_rms_s','I_rms','d_wire','d_wire_p','d_wire_s','n_strand_p','n_strand_s',
@@ -47,6 +62,9 @@ def present(run):
             rcd = rcd_components(result['op'],case['p'])
         scalar_op = {key:value for key,value in result['op'].items()
                      if isinstance(value,(str,int,float,bool)) or value is None}
+        outputs = result.get('outputs', [])
+        output_ripples = {rail['id']: _ripple_comparison(wf)
+                          for rail, wf in zip(outputs, result['wf'].get('outputs', []))}
         from component_management import evaluate_components, compact_projection
         displays.append(dict(id=case['id'], components=topology_components(case['p'], result['op']),
             component_management=compact_projection(evaluate_components(case['p'], result), with_row_checks=True),
@@ -54,6 +72,7 @@ def present(run):
             stress=device_stress(result['op']),semiconductors={key:result['semi'].get(key) for key in
                 ('switch','diode','auxiliary','freewheel','n_switches','n_diodes','P_total')},
             operating_point=scalar_op,capacitors=result.get('capacitors',{}),
+            capacitor_voltage_ripple=_ripple_comparison(result['wf']),
             winding_rows=windings,winding_assessment=winding_assessment,
             rcd=rcd,clamp=result['op'].get('clamp'),
             capacitor_rms={key:result.get('capacitors',{}).get(key) for key in ('total_in','total_out')},
@@ -63,8 +82,10 @@ def present(run):
                 mode=rail['op'].get('branch_mode', rail['op']['mode']),
                 ripple_pp=rail['ripple_pp'],P_rectifier=rail['P_rectifier'],P_cap=rail['P_cap'],
                 P_dout=rail['P_dout'],stress=device_stress(rail['op']),semiconductors={key:rail.get(key) for key in ('diode','freewheel','blocking')},
-                capacitors=rail.get('capacitors'),spec=rail.get('spec')) for rail in result.get('outputs', [])],
+                capacitors=rail.get('capacitors'),spec=rail.get('spec'),
+                capacitor_voltage_ripple=output_ripples.get(rail['id'])) for rail in outputs],
             loop_available=result.get('loop') is not None,
+            load_step=_load_step_summary(case, result),
             waveform_points=len(result['wf']['t'])))
     compact['display'] = json_value(displays)
     from engineering_acceptance import report_snapshot

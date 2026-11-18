@@ -69,8 +69,50 @@ class LoopUIChecks(unittest.TestCase):
         self.app._redraw_loop_view(); self.root.update()
         self.assertTrue(all(len(a.lines) == 3 for a in self.app.ax_loop.flat))
         self.assertIn('OUT2', self.app.ax_loop[1, 0].get_title())
+        self.app.loop_view.set('反馈路负载阶跃'); self.app._redraw_loop_view(); self.root.update()
+        self.assertTrue(self.app.canvas_loop_step.get_tk_widget().winfo_ismapped())
+        self.assertFalse(self.app.loop_load_combo.winfo_ismapped())
+        self.assertIn('10% → 90%', self.app.ax_loop_step[0].get_title())
+        self.assertIn('90% → 10%', self.app.ax_loop_step[1].get_title())
         self.app.loop_view.set('主反馈 Bode'); self.app._redraw_loop_view()
+        self.assertFalse(self.app.canvas_loop_step.get_tk_widget().winfo_manager())
         self.assertIn('开环', self.app.ax_loop[1, 0].get_title())
+
+    def test_compact_loop_keeps_load_step_button_and_waveforms_visible(self):
+        app = self.app
+        self.addCleanup(self.root.geometry, self.root.winfo_geometry())
+        self.addCleanup(app._apply_scale, app._font_k)
+        self.root.geometry('1000x600')
+        app._apply_scale(26/13)
+        app.nb.select(app.tab_loop)
+        self.root.update()
+        self.wait_loop()
+
+        # A long model explanation may wrap in a narrow results panel.
+        # It must never consume the space needed for view selection.
+        note = app.esr_note_label
+        self.addCleanup(note.configure, wraplength=note.cget('wraplength'))
+        note.configure(wraplength=185)
+        app.loop_esr_note.set('反馈路使用平均模型。' * 35)
+        self.root.update()
+        self.assertIs(app.tab_loop.pack_slaves()[0], app.loop_view_row)
+        self.assertTrue(app.loop_step_button.winfo_ismapped())
+        self.assertGreaterEqual(app.loop_step_button.winfo_width(),
+                                app.loop_step_button.winfo_reqwidth())
+
+        app.loop_step_button.invoke()
+        self.root.update()
+        self.assertFalse(app.loop_bode_controls.winfo_ismapped())
+        canvas = app.canvas_loop_step.get_tk_widget()
+        self.assertTrue(canvas.winfo_ismapped())
+        self.assertGreater(canvas.winfo_height(), app.tab_loop.winfo_height() * .55)
+        self.assertIn('10% → 90%', app.ax_loop_step[0].get_title())
+        self.assertIn('90% → 10%', app.ax_loop_step[1].get_title())
+
+        app.loop_bode_button.invoke()
+        self.root.update()
+        self.assertTrue(app.loop_bode_controls.winfo_ismapped())
+        self.assertFalse(canvas.winfo_ismapped())
 
     def test_auto_tune_preserves_requested_crossover_and_verifies_before_write(self):
         self.app.nb.select(self.app.tab_loop); self.root.update(); self.wait_loop()

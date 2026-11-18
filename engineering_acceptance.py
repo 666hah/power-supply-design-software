@@ -225,25 +225,28 @@ def _cases(bundle):
 
 def _default_rows(parameters, calculation_cases):
     """Metric registration and thresholds project existing checks, not formulas."""
+    from cot_settings import active as cot_active
+    cot = cot_active(parameters)
     result = []
     def add(key, name, unit='', comparison='<=', limit=None, note=''):
         result.append(dict(id=key, metric=key, name=name, unit=unit, comparison=comparison,
             limit=limit, lower=None, upper=None, note=note, enabled=True, required_sources=list(SOURCES)))
-    add('eta', '模型效率', '', '>=', parameters.get('target_eta'), '比例值，例如0.93表示93%；未计热态/未建模附加损耗。')
-    add('primary_rms', '电感/原边电流 RMS', 'A')
-    add('primary_peak', '电感/原边电流峰值', 'A')
-    add('vds_peak', 'MOS 稳态最大 Vds', 'V', note='计算包络与实际瞬态模型可能不同；另查全启动极值。')
-    add('startup_vds_peak', 'MOS 全启动 Vds 峰值', 'V', note='缺少全程极值时不以稳态峰值代替。')
+    add('eta', '模型效率', '', '>=', parameters.get('target_eta'), '按已计算损耗求得，比例值 0.93 表示 93%。')
+    add('primary_rms', '每相电感电流 RMS' if cot else '电感/原边电流 RMS', 'A')
+    add('primary_peak', '每相电感电流峰值' if cot else '电感/原边电流峰值', 'A')
+    add('vds_peak', 'MOS 稳态最大 Vds', 'V', note='取稳态工况的峰值。')
+    add('startup_vds_peak', 'MOS 全启动 Vds 峰值', 'V', note='取启动全过程的峰值。')
     add('fc', '环路穿越频率', 'Hz')
     add('phase_margin', '全部穿越最小相位裕度', 'deg', '>=', parameters.get('pm_target'))
-    add('gain_margin', '测得频带内有限增益裕度', 'dB', '>=' , 0., '无相位交越不等于无限裕度。')
-    add('temperature_rise', '磁件最高估算温升', 'K', '<=', parameters.get('temp_rise_limit'), '给定热阻/对流的模型值，不是热点实测。')
+    add('gain_margin', '测得频带内有限增益裕度', 'dB', '>=' , 0., '频带内有相位交越时取有限值。')
+    add('temperature_rise', '磁件最高估算温升', 'K', '<=', parameters.get('temp_rise_limit'), '按给定热阻或对流条件估算。')
     rails = parameters.get('outputs') or [dict(V_out=parameters.get('V_out'), ripple_target=parameters.get('ripple_target'))]
     for index, rail in enumerate(rails, 1):
-        add(f'out{index}_voltage', f'OUT{index} 端口平均电压', 'V', note='防反管后端口；用户填写允许范围。')
-        add(f'out{index}_ripple', f'OUT{index} 低频输出纹波', 'V', note='已有低频纹波检查阈值；不含未建模尖峰。')
-        add(f'out{index}_rms', f'OUT{index} 整流/副边电流 RMS', 'A')
-        add(f'out{index}_peak', f'OUT{index} 整流/副边电流峰值', 'A')
+        add(f'out{index}_voltage', f'OUT{index} 端口平均电压', 'V', note='取防反管后端口电压。填写允许范围。')
+        add(f'out{index}_ripple', f'OUT{index} 低频输出纹波', 'V', note='取低频峰峰值。')
+        if not cot:
+            add(f'out{index}_rms', f'OUT{index} 整流/副边电流 RMS', 'A')
+            add(f'out{index}_peak', f'OUT{index} 整流/副边电流峰值', 'A')
     # Reuse unified engineering check thresholds, including the actual ripple
     # target evaluated by that model. Unknown/NA check limits remain unknown.
     for case in calculation_cases.values():
@@ -279,10 +282,10 @@ def _calculation_values(case):
     outputs = res.get('outputs') or [dict(op=op, ripple_pp=wf.get('ripple_pp'))]
     for index, rail in enumerate(outputs, 1):
         child = rail.get('op') or {}
-        values.update({f'out{index}_voltage': child.get('V_out'),
-            f'out{index}_ripple': rail.get('ripple_pp'),
-            f'out{index}_rms': child.get('I_s_rms', child.get('I_d_rms')),
-            f'out{index}_peak': child.get('I_s_pk', child.get('I_d_pk'))})
+        values.update({f'out{index}_voltage': child.get('V_out'), f'out{index}_ripple': rail.get('ripple_pp')})
+        if not op.get('cot'):
+            values.update({f'out{index}_rms': child.get('I_s_rms', child.get('I_d_rms')),
+                           f'out{index}_peak': child.get('I_s_pk', child.get('I_d_pk'))})
     return {k: _number(v) for k, v in values.items()}
 
 
@@ -346,7 +349,7 @@ def _spice_binding(p, fingerprint, joint_record, spice_evidence, notes):
         if isinstance(evidence, dict):
             return evidence, True, '联合任务当前采用硬件 / ' + str(joint.get('directory') or '内存记录')
     if envelope or joint:
-        notes.append('既有电路/联合证据未与当前采用输入匹配；未借用旧数据通过。联合原输入与回填后硬件不同，请先采用硬件或打开其工程。')
+        notes.append('已有仿真未与当前输入匹配。请采用仿真硬件或打开其工程。')
     return {}, False, '未取得匹配配置的仿真证据'
 
 
@@ -358,12 +361,11 @@ def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None
         spice_evidence = range_result.get('engineering_acceptance_evidence')
     fingerprint = input_fingerprint(p)
     config = normalize(p.get('engineering_acceptance'))
-    notes = ['计算/通用行为仿真/手工录入分别列示；满足仅针对所选目标，不是硬件认证。',
-             '手工实测为用户录入，软件不证明仪器校准、接法、带宽或数据真实性。']
+    notes = []
     matched = _matches(_base_spec(range_result), fingerprint)
     calculation_cases = _cases(range_result) if matched else {}
     if range_result is not None and not matched:
-        notes.append('两端计算快照与当前真实输入不同，计算数据已失效；请显式刷新两端。')
+        notes.append('输入已变，请刷新计算快照。')
     criteria = _default_rows(p, calculation_cases)
     by_id = {row['id']: row for row in criteria}
     for override in config['criteria']:
@@ -394,7 +396,7 @@ def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None
                 if legacy_shared:
                     sim = next((c for c in simulated if _number(c.get('voltage')) == _number(vin)), {})
                     if sim:
-                        shared_note = '同电压且MOS事件相同，复用 ' + str(sim.get('id') or '原单工况') + '；未重新仿真'
+                        shared_note = '同电压、同 MOS 事件，沿用 ' + str(sim.get('id') or '原单工况') + ' 的仿真'
             measurement = measurements.get((criterion['id'], case_id))
             values = _calculation_values(case) if case and not case.get('error') else {}
             simvalues = _simulation_values(sim)
@@ -434,8 +436,8 @@ def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None
                 margin=min(usable_margins) if len(usable_margins) == len(required) else None,
                 delta_simulation=delta(available['simulation']) if states['calculation'] != 'stale' else None,
                 delta_measurement=delta(available['measurement']) if 'stale' not in (states['calculation'], states['measurement']) else None,
-                status=status, reason='；'.join(dict.fromkeys(reasons)),
-                sources=dict(calculation='当前双端共享计算快照' if matched else '未取得匹配双端快照',
+                status=status, reason='。'.join(dict.fromkeys(reasons)),
+                sources=dict(calculation='当前计算快照' if matched else '待更新计算快照',
                              simulation=origin, measurement=measurement['source'] if measurement else ''),
                 measurement_record=copy.deepcopy(measurement),
                 calculation_error=case.get('error') or case.get('loop_error'))
@@ -453,7 +455,7 @@ def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None
         rows=rows, criteria=copy.deepcopy(criteria), issues=issues, evidence_notes=notes,
         calculation_matched=matched, simulation_matched=bound,
         summary=dict(state=summary_state, counts=counts, unresolved_issues=open_issues,
-            label=STATE_LABELS[summary_state], scope='仅覆盖本页启用指标、指定来源和Vin两端；不等于所有负载/温度/容差/安规验收'),
+            label=STATE_LABELS[summary_state], scope='评审范围为已启用的指标、指定数据来源和所列输入工况。'),
         config=config)
 
 

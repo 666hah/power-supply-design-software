@@ -1,8 +1,7 @@
 """Layer-winding fit with equivalent round/flattened bundles, in SI units.
 
-This is a user-controlled construction estimate, not a manufacturing or
-insulation certification. No mechanical setting changes electrical strands,
-copper area, DCR, losses, or the coupling matrix.
+The layout keeps the specified electrical turn count and copper cross-section.
+The length model consumes this shared geometry to calculate winding resistance.
 """
 import copy
 import math
@@ -323,7 +322,7 @@ def assess_winding_window(windings, config=None):
         base['warnings'].append(f'径向叠厚超出窗口 {(required-height)*1e3:.4g} mm')
     if any(r['layout_model']=='legacy_rectangular' for r in base['windings']):
         base['warnings'].append('包含旧配置的显式矩形束列数，沿用其宽高；切换等效线束前请清除旧列数。')
-    base['warnings'].append('利兹线压扁按截面积不变估算；默认填充系数与压扁比例不是实测值。仅作分层几何预评估，不含引线、跨线、公差和安规认证，不回写 DCR、漏感或 kij。')
+    base['warnings'].append('利兹线压扁按截面积不变估算。分层截面用于计算绕组匝长。漏感与耦合系数按电磁仿真或其余工程设置取值。')
     from winding_positions import prepare
     prepare(base)
     return base

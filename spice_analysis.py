@@ -72,7 +72,10 @@ def window(time,values,start,end):
 def statistics(time,values,start,end):
     axis,values=window(time,values,start,end);span=end-start
     mean=float(np.trapezoid(values,axis)/span)
-    square=float(np.trapezoid(values*values,axis)/span)
+    # RAW interpolation is piecewise linear in the signal, not its square.
+    # Integrate the quadratic exactly; adaptive sparse ramps otherwise have
+    # an upward RMS bias even when their average value is exact.
+    square=float(np.sum(np.diff(axis)*(values[:-1]**2+values[:-1]*values[1:]+values[1:]**2)/3)/span)
     return dict(mean=mean,rms=math.sqrt(max(0,square)),ac_rms=math.sqrt(max(0,square-mean*mean)),
         minimum=float(np.min(values)),maximum=float(np.max(values)),pp=float(np.ptp(values)))
 

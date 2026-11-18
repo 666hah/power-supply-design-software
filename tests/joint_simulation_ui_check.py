@@ -154,6 +154,40 @@ class JointDesktopChecks(unittest.TestCase):
         self.assertEqual(captured[0]['environment'], environment)
         self.assertFalse(dialog.run_button.instate(['disabled']))
 
+    def test_embedded_joint_uses_shared_equipment_and_saved_circuit_plan(self):
+        calls = []
+        def runner(config, **options):
+            calls.append((config, options))
+            return dict(status='complete', directory=str(self.directory))
+        self.stack.enter_context(patch.dict(sys.modules, joint_simulation=SimpleNamespace(run_joint_simulation=runner)))
+        persist = self.stack.enter_context(patch('simulation_environment.save_environment'))
+        self.config['spice_config'] = dict(stop_ms=41., step_ms=36., fra_enabled=False)
+        environment = SimpleNamespace(
+            executable=tk.StringVar(self.root, str(self.exe)),
+            set_config=lambda config: self.assertEqual(config, self.config),
+            snapshot=lambda *, require_spice: dict(ltspice=str(self.exe), elmer_home='local-elmer'))
+        container = ttk.Frame(self.root)
+        container.pack()
+        navigation = []
+        dialog = ui.JointSimulationDialog(self.app, self.config, container=container,
+                                          settings_context=environment, navigate=navigation.append)
+        self.assertIs(dialog.win, self.root)
+        self.assertIsNone(dialog.notebook)
+        dialog.output.set(str(self.directory))
+        dialog.start()
+        self.drain(dialog)
+        self.assertEqual(navigation, [])
+        self.assertEqual(calls[0][0]['spice_config'], self.config['spice_config'])
+        self.assertFalse(calls[0][1]['auto_circuit_plan'])
+        self.assertEqual(calls[0][1]['environment']['elmer_home'], 'local-elmer')
+        persist.assert_not_called()
+        environment.executable.set('')
+        dialog.start()
+        self.assertIsNone(dialog.job)
+        self.assertEqual(navigation, ['tools'])
+        container.destroy()
+        self.assertTrue(dialog.closed)
+
     def test_edits_during_run_cannot_be_overwritten(self):
         started = threading.Event()
         release = threading.Event()
@@ -250,10 +284,13 @@ class JointDesktopChecks(unittest.TestCase):
         app = shell.calculator
         try:
             win = app._export_joint_ui()
-            self.assertEqual(win.title(),'电磁仿真，电路仿真，设计计算联合报告')
+            self.assertEqual(win.title(),'仿真配置中心')
             dialog = app._joint_simulation_dialog
+            center = app._simulation_center
+            self.assertEqual(center.tabs.select(), str(center.pages['joint']))
             app.mag_simulation_button.invoke()
             self.assertIs(app._joint_simulation_dialog,dialog)
+            self.assertEqual(center.tabs.select(), str(center.pages['field']))
             def menu_with_label(widget,caption):
                 for child in widget.winfo_children():
                     if isinstance(child,tk.Menu):
@@ -267,10 +304,12 @@ class JointDesktopChecks(unittest.TestCase):
                     if found:
                         return found
                 return None
-            item = menu_with_label(app.root,'电磁仿真，电路仿真，设计计算联合报告…')
+            item = menu_with_label(app.root,'仿真配置中心…')
             self.assertIsNotNone(item)
             item[0].invoke(item[1])
             self.assertIs(app._joint_simulation_dialog,dialog)
+            self.assertEqual(center.tabs.select(), str(center.pages['circuit']))
+            self.assertIs(center.window, win)
             record = dict(directory=str(self.directory),report_path=str(self.directory/'结果.docx'),
                           manifest_path=str(self.directory/'manifest.json'),status='partial',
                           input_id='fixed',summary='单元历史')

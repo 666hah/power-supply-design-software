@@ -77,8 +77,9 @@ def number(x, digits=6):
 
 
 class Writer:
-    def __init__(self,doc,kind):
+    def __init__(self,doc,kind,figures=None):
         self.doc=doc;self.kind=kind;self.equations=0;self.heading=0
+        self.figures=figures or {}
         self.prefix='19' if kind=='reference' else '16'
         self.math_prefix='CR' if kind=='reference' else '练习'
         aliases={
@@ -86,7 +87,7 @@ class Writer:
             'Vref2':'V_ref,2','Vref3':'V_ref,3','Vrect1':'V_F,1','Vrectj':'V_F,j',
             'Vblock1':'V_B,1','Vblockj':'V_B,j','Vdin':'V_D,in','Psetj':'P_set,j',
             'Rloadj':'R_load,j','Pactualj':'P_actual,j','Li':'L_ii','Lj':'L_jj',
-            'Mij':'M_ij','kij':'k_ij','Ni':'N_i','Np':'N_p','Ns1':'N_s,1','Nsj':'N_s,j',
+            'Mij':'M_ij','kij':'k_ij','Ni':'N_i','Nj':'N_j','Np':'N_p','Ns1':'N_s,1','Nsj':'N_s,j',
             'Lp':'L_p','Lsigma':'L_σ,p','Lpp':'L_pp','Lps':'L_ps','Lss':'L_ss','Lsp':'L_sp',
             'Acu':'A_Cu','Rdcj':'R_dc,j','npar':'n_par','dwire':'d_wire','lMLT':'l_MLT',
             'iA':'i_A','LA':'L_A','RA':'R_A','uA':'u_A','Lmat':'L','Rmat':'R','umat':'u',
@@ -139,18 +140,21 @@ class Writer:
                         for run in p.runs:run.font.size=Pt(9)
         return t
 
-    def F(self,name,caption):figure(self.doc,(QA/name).read_bytes(),caption,width=6.95)
+    def F(self,name,caption):
+        blob=self.figures.get(name)
+        figure(self.doc,blob if blob is not None else (QA/name).read_bytes(),caption,width=6.95)
 
 
-def add_worked_example(doc,kind,data=None):
-    data=data or load_data();w=Writer(doc,kind)
+def add_worked_example(doc,kind,data=None,*,symbols=None,figures=None):
+    data=data or load_data();w=Writer(doc,kind,figures)
+    describe = symbols if symbols and kind=='reference' else lambda *rows: None
     focus=data['focus'];inputs=focus['inputs'];final=focus['final'];cases=data['result']['cases']
     refs=inputs['target'];geom=data['geometry'];summary=data['result']['summary']
     if kind=='reference':
         title=doc.add_heading('19  三路反激交叉调整率的完整求解算例',1)
         title.paragraph_format.page_break_before=True
         for run in title.runs:_font(run,18,True,'000000')
-        w.P('本章把输入参数、绕组方程、二极管换流、周期稳态迭代和交叉调整率统计连成一个可复算的例程。采用 examples/3_OUTPUT_CROSS_REGULATION.json；2026 年 11 月 2 日用当前 Python 内核复算，16 个角点均收敛。所列小数用于核对算法，不代表硬件具有同等精度。')
+        w.P('本章从输入参数和绕组方程出发，求二极管换流与周期稳态，最后统计交叉调整率。算例使用 2026 年 11 月 2 日冻结的输入与求解记录，16 个角点均收敛。保留足够的小数位便于核对残差和计算步骤。')
     else:
         w.P('下面把第 5 章的耦合模型和本章的角点扫描完整串起来。原教程前面的 33 W 算例及结果保留；本练习另用 40 W 交叉调整率算例，三路最大功率改为 30、0.5、9.5 W。请不要把下面的 X004 与前面 33 W 案例的同名角点混用。')
     w.H('先确定算例和测量位置')
@@ -167,6 +171,10 @@ def add_worked_example(doc,kind,data=None):
     w.P('电压、负载与交叉调整率都在输出防反管之后的端口统计；SSR 在 OUT1 防反管之前的电容端取样。输入 Vin 指输入连接器；输入防反管之后才是原边功率母线。所有方程内部使用 SI 单位。')
     w.E('Vcap1 = 30+0.7 = 30.7')
     w.E('Vinbus = Vin-Vdin = 20-0.7 = 19.3')
+    describe(
+        ('Vcap1','OUT1 防反管之前的滤波电容电压，也是 SSR 的取样点','V'),
+        ('Vin，Vdin，Vinbus','输入连接器电压、输入防反管压降及防反后的母线电压','V'),
+    )
     w.P('以上数值单位为 V。主路电容固定在 30.7 V，扣去 0.7 V 固定防反压降后，端口为 30 V。这是模型的理想直流反馈约束，不包含基准、分压、光耦和真实控制器的误差。')
 
     w.H('用匝数和压降得到参考电压及负载')
@@ -177,6 +185,13 @@ def add_worked_example(doc,kind,data=None):
     w.P('OUT2 和 OUT3 的名称仍可叫“12 V”“5 V”，但名称不参与计算。本练习的参考值实际是 11.683333 V 和 3.833333 V。负载功耗设置定义恒定电阻；输出电压变化时，实际功耗随之变化。')
     w.E('Rloadj = Vrefj²/Psetj')
     w.E('Iloadj = Voutj/Rloadj ; Pactualj = Voutj²/Rloadj')
+    describe(
+        ('j','输出路号，代入本例时为 1、2 或 3','—'),
+        ('Nsj，Ns1','第 j 路及主反馈路副边匝数','匝'),
+        ('Vrefj，Vrectj，Vblockj','第 j 路端口参考电压、整流压降和输出防反压降','V'),
+        ('Voutj，Rloadj，Iloadj','第 j 路解得的端口电压、恒阻负载及负载电流','V；Ω；A'),
+        ('Psetj，Pactualj','用来换算电阻的功率档位及电阻实际耗散功率','W'),
+    )
     w.T(['输出','参考 / V','轻载设置 / W','重载设置 / W','轻载 R / Ω','重载 R / Ω'],[
         (f'OUT{j+1}',f'{refs[j]:.6f}',s['P_min'],s['P_max'],
          f'{refs[j]**2/s["P_min"]:.6f}',f'{refs[j]**2/s["P_max"]:.6f}') for j,s in enumerate(summary)
@@ -193,7 +208,16 @@ def add_worked_example(doc,kind,data=None):
     w.P('矩阵单位为 H，括号内按 μH 列出；显示值经过舍入，求解使用原始浮点精度。矩阵必须对称且正定。此例特征值约为 0.005726、0.032227、0.073657、46.332834 μH。k=1 的奇异理想矩阵不用于这套非理想交叉调整率求解。')
     w.E('Lsigma = Lpp-Lps·Lss⁻¹·Lsp = 0.053311·10⁻⁶')
     w.P('上式是其余副边全部短路时折算到原边的漏感，用于解释与检查。完整电感矩阵已包含这部分漏磁影响，不能再串入同一份漏感，否则会重复计算。')
-    w.E('Acu = npar·π·dwire²/4 ; Rdcj = ρ·lMLT·Ni/Acu')
+    w.E('Acu = npar·π·dwire²/4 ; Rdcj = ρ·lMLT·Nj/Acu')
+    describe(
+        ('i，j，Li，Lj','绕组编号及第 i、j 绕组的开路自感','—；—；H；H'),
+        ('Lp，Ni，Np','原边开路自感、第 i 绕组匝数及原边匝数','H；匝；匝'),
+        ('Lmat，Mij，kij','电感矩阵、两绕组互感及逐对耦合系数','H；H；—'),
+        ('Lsigma，Lpp，Lss','原边全副边短路漏感、原边自感和副边自感互感子矩阵','H'),
+        ('Lps，Lsp','原边到副边和副边到原边的互感矩阵块，彼此转置','H'),
+        ('Acu，npar，dwire','一个绕组每匝的裸铜总面积、并绕铜股数和单股裸铜直径','m²；股；m'),
+        ('Rdcj，ρ，lMLT，Nj','第 j 绕组直流电阻、铜电阻率、平均每匝长度及该绕组匝数','Ω；Ω·m；m；匝'),
+    )
     w.T(['绕组','匝数','裸铜直径 / mm','股数','MLT / mm','DCR / mΩ'],[
         (label,int(geom['turns'][j]),f'{geom["diameter_m"][j]*1e3:g}',int(geom['strands'][j]),
          f'{geom["MLT_m"]*1e3:g}',f'{inputs["dcr"][j]*1e3:.6f}')
@@ -213,6 +237,12 @@ def add_worked_example(doc,kind,data=None):
     w.P('A 表示当前正在导通的绕组集合。软件只解 L 的 A×A 子矩阵，截止绕组电流固定为零。导通二极管电流下降到零时退出；截止二极管的电压条件允许正向电流时加入。MOS 在 ON 段按控制命令导通，其条件与被动二极管不同。')
     w.E('w = Lmat·(di/dt)+Rmat·i-umat')
     w.E('i_j ≥ 0 ; w_j ≥ 0 ; i_j·w_j = 0')
+    describe(
+        ('i，t，Rmat，umat','绕组电流向量、时间、导通态电阻矩阵及外施端电压向量','A；s；Ω；V'),
+        ('Rpon，Rpoff，Vclamp','ON 段原边总串阻、OFF 段原边铜阻及相对输入母线的钳位电压','Ω；Ω；V'),
+        ('A，iA，LA，RA，uA','导通绕组集合及只保留这些绕组时的电流、电感、电阻和外施电压','—；A；H；Ω；V'),
+        ('w，i_j，w_j','互补条件的电压余量向量、第 j 支路电流及该支路电压余量','V；A；V'),
+    )
     w.P('这组三个条件称为二极管互补条件：导通支路电压余量为零；截止支路不能产生负的禁止电压余量。每次遇到事件后重新确定导通集合，因此允许原边开通后的短暂副边换流，也允许不同副边分别进入 CCM 或 DCM。')
 
     w.H('每一段怎样精确推进电流并积分电荷')
@@ -224,6 +254,14 @@ def add_worked_example(doc,kind,data=None):
     w.E('qend = q0·exp(-lambda·hstep)+g·amodal')
     w.E('iA(hstep) = Cmat^(-T)·Umat·qend')
     w.E('Q = Cmat^(-T)·Umat·(q0·amodal+g·bmodal)')
+    describe(
+        ('Cmat，Hmat','L_A 的 Cholesky 下三角因子及换基后的衰减矩阵','√H；s⁻¹'),
+        ('Umat，Λ，λ','衰减矩阵的正交特征向量阵、特征值对角阵及单个特征值','—；s⁻¹；s⁻¹'),
+        ('q0，qend，g','段初、段末的模态坐标及模态驱动向量','A·√H；A·√H；A·√H/s'),
+        ('hstep，zmodal，amodal，bmodal','区间时长、无量纲模态步长及两项解析积分系数','s；—；s；s²'),
+        ('Q','本段所有导通绕组的电流时间积分','C'),
+        ('T，−T，exp','矩阵转置、矩阵逆转置、自然指数函数','—'),
+    )
     w.P('Λ 是特征值对角矩阵；上式的 λ、a、b 和 exp 在每个模态逐元素计算，h 为区间时长。λ 趋近于零时用 a→h、b→h²/2；代码在 |λh|<10⁻⁴ 时用相应级数，其他情况用 expm1 减少消减误差。RMS 所需的电流平方积分使用每段 20 点 Gauss 积分；电荷 Q 使用上面的解析积分。')
     w.P('为找下一个二极管事件，当前实现先在剩余相位区间作 12 段探测，再用 Brent 求根定位边界。电流判零容差为 10⁻⁹ A，电压容差为 10⁻⁸×max(Vinbus,Vclamp,1) V，最小时段为 Ts×10⁻¹²。这些是数值参数，不是硬件测量分辨率。')
     w.P('可以先核对只有原边导通的一段，暂不看矩阵：初始电流为 1.761599 A，持续 1.817142 μs，L=8 μH，R=0.078139832 Ω，电源为 19.3 V。')
@@ -238,6 +276,12 @@ def add_worked_example(doc,kind,data=None):
     w.E('ΔIp = (20·Dseed)/(250000·8·10⁻⁶) = 4.464286')
     w.E('Iminseed = Ionavg-ΔIp/2 = 1.501190')
     w.E('Ipkseed = Ionavg+ΔIp/2 = 5.965476')
+    describe(
+        ('U，Pseed','用于起步的等效主输出电压和估算输入功率','V；W'),
+        ('Dseed','按理想伏秒平衡得到的初始占空比','—'),
+        ('Ionavg，ΔIp','导通段原边平均电流及峰峰值摆幅的初猜','A'),
+        ('Iminseed，Ipkseed','原边谷值、峰值电流的初猜','A'),
+    )
     w.P('初猜把原边谷值按各路功耗占比和 Np/Nsj 暂时分配到副边，得到周期起始副边电流 0.726382、0.002906、0.138013 A。OUT2/OUT3 电压先取 11.683333/3.833333 V。这个功率比例只用来启动求解；后面的电流由完整 RL 方程决定。初猜阶段使用 Vin=20 V 的旧预设计模型，正式电路使用扣掉输入防反后的 19.3 V，不再叠加效率压降。')
 
     w.H('六个未知量同时满足七个平衡残差')
@@ -249,6 +293,14 @@ def add_worked_example(doc,kind,data=None):
     w.E('rend = Ipend/(max(Ipkseed,0.01))')
     w.P('前三项要求副边周期首末电流相等，接着三项要求整流平均电流等于负载平均电流，最后一项要求钳位原边电流在下一次开通之前已归零。这是六变量、七残差的有界非线性最小二乘问题，冗余物理约束也用于验收。')
     w.E('min (Robj^T·Robj/2)')
+    describe(
+        ('xvec，D','归一化待求向量、导通占空比','—'),
+        ('I0j，Iendj，Ipend','第 j 路期初、期末电流以及原边期末钳位电流','A'),
+        ('Iscalej，Jscalej','第 j 路周期电流、电荷折算电流的归一化尺度','A'),
+        ('Ts，Qj','开关周期、第 j 路一个周期的整流电荷','s；C'),
+        ('rperj，rqj，rend','周期电流残差、电荷平衡残差、原边末值残差','—'),
+        ('Robj','上述七项归一化残差组成的列向量','—'),
+    )
     w.P('当前内核调用 SciPy least_squares，使用默认 trf 方法和二点差分 Jacobian。归一化副边初值范围为 0–30，非反馈电压与参考之比为 0.05–5，占空比为 0.005–0.9；xtol、ftol、gtol 均为 2×10⁻¹⁰，差分相对步长为 2×10⁻⁵，max_nfev=180。达到优化器停止条件之后，还要求七项归一化残差的最大绝对值不超过 2×10⁻⁵，并检查二极管与能量一致性。')
     w.P('边界值是求解域，不代表“最大允许输出电压已被证明”。如果解落到边界、角点不收敛或不支持，必须保留失败原因，不能用匝比参考值填补空缺。')
 
@@ -302,6 +354,11 @@ def add_worked_example(doc,kind,data=None):
     w.P(f'第七项原边期末归零残差为 {final["normalized_residual"][6]:.3g}。输入净取电只使用原边 ON 电荷，钳位返回 Vin 的 OFF 回流不再次计入净输入电流。')
     w.E('Pin = Vin·Qon/Ts ; Pclamp = Vclamp·Qclamp/Ts')
     w.E('Ebal = Pin-Σ_(j=1)^3 Pactualj-PlossRL')
+    describe(
+        ('Idavgj','第 j 路整流电流在整个开关周期内的平均值','A'),
+        ('Qon，Qclamp','原边导通段输入电荷、钳位支路关断换流电荷','C'),
+        ('Pin，Pclamp，PlossRL，Ebal','输入功率、钳位耗散功率、已建模 RL 损耗之和、平均功率平衡误差','W'),
+    )
     names={'winding_dcr':'绕组 DCR','rectifiers':'三路整流管','output_blocking':'三路输出防反管',
            'input_blocking':'输入防反管','mos_conduction':'MOS 导通','sense':'采样电阻','clamp':'理想钳位吸收'}
     w.T(['RL 模型损耗项目','功率 / W'],[(names[k],f'{v:.9f}') for k,v in final['rl_losses_W'].items()], [4.3,2.8])
@@ -320,6 +377,11 @@ def add_worked_example(doc,kind,data=None):
     w.H('分别计算包络和纯交叉调整率')
     w.P('先把两个不同问题分开。全包络允许 Vin、本路负载和其他路负载一起改变；纯交叉调整率则固定 Vin 和本路电阻，仅比较其他路轻重载组合。两者都用匝比及固定压降得到的参考电压作分母。')
     w.E('Senv = 100·(Vmax-Vmin)/Vref')
+    describe(
+        ('Vmax，Vmin','所选一路在全体有效角点中的最高、最低直流电压','V'),
+        ('Vref','所选一路根据匝比和固定压降算出的参考电压','V'),
+        ('Senv，Scross','端点全包络跨度、固定输入及本路负载时的最大交叉调整跨度','%'),
+    )
     w.P('纯交叉按固定 Vin 和固定本路电阻分组，每组求最大电压减最小电压，除以本路参考，再取各组结果的最大值。注意“固定本路电阻”不等于固定本路实际功率。')
     group_rows=[]
     for rail in (1,2):
@@ -338,7 +400,7 @@ def add_worked_example(doc,kind,data=None):
     w.P('OUT3 的纯交叉跨度为 5.897786%，全包络为 8.287491%。OUT1 显示零是主反馈理想约束的结果，不代表真实产品零误差。电压范围为直流稳态值，不包含开关纹波、负载突变过冲或短路保护。')
 
     w.H('在软件中复现并判断结果是否可信')
-    w.P('打开 examples/3_OUTPUT_CROSS_REGULATION.json，确认固定频率 FLYBACK、SSR、OUT1 主反馈和启用耦合矩阵。检查 6/12/5/2 匝、各对 k=0.995、20–30 V 输入，以及三路轻重载设置 3–30、0.05–0.5、0.95–9.5 W。在“拓扑”的“交叉调整率与电压范围”中扫描最小/最大负载组合，再查看两端工况报告。此路径不需要启动 LTspice。')
+    w.P('打开 examples/3_OUTPUT_CROSS_REGULATION.json，确认固定频率 FLYBACK、SSR、OUT1 主反馈，并启用耦合矩阵。检查 6/12/5/2 匝、各对 k=0.995、20–30 V 输入，以及三路轻载到满载功率 3–30、0.05–0.5、0.95–9.5 W。在与“环路”并列的“交叉调整率”页点击“扫描负载角点”，查看输入端点对比和角点明细。此步骤由设计计算内核求解。')
     w.P('源码仓库中的复算证据为 docs/examples/cross_regulation_worked_example.json；生成入口为 docs/examples/collect_cross_regulation_example.py。它调用 cross_regulation.scan_cross_regulation、coupled_flyback._periodic_solution 和 _Circuit，记录优化器实际接受步，不另写一套电流求解公式。图表和本章表格都读取这份数据；记录中含源配置与关键源码 SHA256，便于发现版本变化。')
     w.P('本练习不包含真实控制器动态限流与跳周期、输出电容的大纹波反馈、Coss/Cj 完整换流谐振、反向恢复、布线寄生、温度变化和磁芯非线性。导入二极管 If–Vf 曲线当前主要用于损耗后处理，本练习的耦合换流仍用固定 0.7 V，不声称已经做非线性二极管共同迭代。')
     w.P('0 W 真空载没有泄放与间歇控制模型，当前标记为未计算，不用微小功率替代。任何角点失败都应显示原因，剩余成功点只能称为不完整观察范围。小残差表示这套假设下的数学平衡，是否满足产品指标仍需逐路看电压偏差，并与同节点、同负载的仿真及实测复核。')
@@ -363,11 +425,11 @@ def remove_previous(doc):
         if END in names:break
 
 
-def update_document(doc,kind,data=None):
+def update_document(doc,kind,data=None,*,symbols=None,figures=None):
     remove_previous(doc)
     anchor=next(p for p in doc.paragraphs if p.text.startswith('附录 A' if kind=='reference' else '17  '))._p
     before=set(doc.element.body)
-    mark(doc,START);writer=add_worked_example(doc,kind,data);mark(doc,END)
+    mark(doc,START);writer=add_worked_example(doc,kind,data,symbols=symbols,figures=figures);mark(doc,END)
     new_nodes=[e for e in doc.element.body if e not in before and e.tag!=qn('w:sectPr')]
     for node in new_nodes:anchor.addprevious(node)
     # Cross links live at the point where the reader first meets the model.
@@ -378,7 +440,7 @@ def update_document(doc,kind,data=None):
             p.text='b 为唯一 SSR 主反馈路，或 PSR 标称采样基准路。实际整数 Np 与各 Ns 决定匝比；本节上式仅为不含压降的理想关系。当前固定频率 SSR 的端口参考电压须先加主路整流与防反压降、按副边匝比换算，再扣本路两项压降；负载位于防反管后，主反馈取样在防反管前。完整代入与非反馈电压求解见第 19 章；参考电压不是另一独立稳压目标。'
         if kind=='reference' and p.text.startswith('本文件对应 2026-10-21'):
             p.text='本文件原有章节保留既有模型说明；2026-11-02 新增第 19 章三路反激交叉调整率完整求解算例，并按当前源码明确节点、恒阻负载和收敛定义。新增算例不改变计算内核和原有默认参数。帮助菜单继续打开本文，完整程序目录须保留 _internal。'
-    if kind=='reference':
+    if kind=='reference' and symbols is None and doc.tables[0].cell(0,0).text=='章节':
         for p in doc.paragraphs:
             if p.style.name=='Subtitle':
                 p.text='软件计算内核详解  三路反激交叉调整率算例增补  2026-11-02';break
@@ -388,7 +450,7 @@ def update_document(doc,kind,data=None):
         row=next(r for r in nav.rows if r.cells[0].text=='19') if any(r.cells[0].text=='19' for r in nav.rows) else nav.rows[-1]
         for cell,text in zip(row.cells,['19','三路反激交叉调整率完整求解算例','cross_regulation / coupled_flyback']):
             cell.paragraphs[0].clear();_font(cell.paragraphs[0].add_run(text),10)
-    else:
+    elif kind=='tutorial':
         for t in doc.tables:
             for row in t.rows:
                 if row.cells[0].text=='16  交叉调整率':

@@ -219,10 +219,11 @@ def _compare_verified(config, package, result_dir, directory, *, cancelled=None,
                 proposed_config=proposal, notes=notes, input_id=_input_id(config), record=record)
 
 
-def run_transformer_simulation(config, *, tool_root, project_file, output_directory,
-                               cancelled=None, progress=None):
+def run_transformer_simulation(config, *, tool_root='builtin', project_file=None, output_directory,
+                               environment=None, cancelled=None, progress=None):
     from transformer_sim_runner import run_field_solver
     config = copy.deepcopy(config)
+    original_id = _input_id(config)
     base = Path(output_directory).expanduser().resolve()
     directory = base / ('变压器仿真-' + datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid4().hex[:8])
     directory.mkdir(parents=True, exist_ok=False)
@@ -234,6 +235,16 @@ def run_transformer_simulation(config, *, tool_root, project_file, output_direct
             progress(message)
     try:
         stage('正在冻结当前工况并导出本次变压器几何')
+        preparation = None
+        if environment is not None:
+            from portable_transformer_project import prepare_portable_reference
+            prepared = prepare_portable_reference(config, environment=environment, output_directory=directory,
+                                                  cancelled=cancelled)
+            config, project_file = prepared['config'], prepared['project_file']
+            preparation = prepared['summary']
+            tool_root = 'builtin'
+        elif not project_file:
+            raise ValueError('请自动准备当前设计，或选择已有场解提取设置。')
         package = directory / '当前变压器.zip'
         exported = export_geometry_package(_calculate(config, cancelled), package, config, cancelled=cancelled)
         if not exported['ready']['cross_section']:
@@ -245,6 +256,9 @@ def run_transformer_simulation(config, *, tool_root, project_file, output_direct
         # run_field_solver publishes only after checking every field and input hash.
         result = _compare_verified(config, package, field_dir, directory, cancelled=cancelled,
                                    project_file=project_file)
+        result['input_id'] = original_id
+        if preparation:
+            result['preparation'] = preparation
         stage('仿真报告和电源端点对比已生成')
         status.write_bytes(json_bytes(dict(state='complete' if result['proposed_config'] else 'review_only',
                                            comparison=result['comparison_path'])))

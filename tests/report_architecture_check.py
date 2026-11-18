@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from docx import Document
 from docx_layout import new_document,table,equation,paragraph
 from report_architecture import (comparison_rows,capture_document,write_paired_modules,
-    add_acceptance_report,add_paired_figure,available_width)
+    add_acceptance_report,add_paired_figure,available_width,acceptance_columns,report_cases)
 
 
 class ReportArchitectureChecks(unittest.TestCase):
@@ -48,7 +48,7 @@ class ReportArchitectureChecks(unittest.TestCase):
             result=add_acceptance_report(doc,{}, {})
         self.assertIs(result,snapshot)
         cells='\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells)
-        self.assertIn('仿真 —',cells);self.assertIn('实测 —',cells)
+        self.assertIn('仿真待补，实测待补','\n'.join(p.text for p in doc.paragraphs))
         self.assertIn('待补目标或证据',cells)
         self.assertNotIn('仿真 0',cells)
 
@@ -61,6 +61,28 @@ class ReportArchitectureChecks(unittest.TestCase):
         self.assertIn('Vinmax 图像未提供','\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells))
         from docx.oxml.ns import qn
         self.assertIsNotNone(doc.tables[0]._tbl.getnext().find(qn('w:pPr')).find(qn('w:keepNext')))
+
+    def test_fixed_vin_keeps_different_measurement_evidence(self):
+        case_result = {'op': {'D': .25}}
+        bundle = dict(base_spec={'V_in': 30}, cases=[
+            dict(id=case_id, voltage=30, result=case_result) for case_id in ('Vinmin','Vinmax')])
+        cell = dict(calculation=.02, simulation=.021, measurement=None, status='undefined')
+        row = dict(name='输出纹波', comparison='<=', limit=.1, unit='V',
+                   cases={case_id: dict(cell) for case_id in ('Vinmin','Vinmax')})
+        snapshot = dict(rows=[row])
+        self.assertEqual(len(report_cases(bundle)),1)
+        self.assertEqual(acceptance_columns(snapshot,bundle)[0],['固定输入'])
+        self.assertEqual(acceptance_columns(snapshot,None,bundle['base_spec'])[0],['固定输入'])
+        row['cases']['Vinmax'].update(measurement=.024,measurement_record={'source':'QA source'})
+        self.assertEqual(acceptance_columns(snapshot,bundle)[0],['Vinmin','Vinmax'])
+
+    def test_fixed_vin_different_mos_event_parameters_retains_two_cases(self):
+        shared = {'op': {'D': .25}}
+        bundle = dict(base_spec={'V_in':30,'mos_miller_mode':'manual',
+                                 'mos_manual_events':{'min':{'on':{'Vgp':3.8}},
+                                                      'max':{'on':{'Vgp':4.0}}}}, cases=[
+            dict(id=case_id, voltage=30, result=shared) for case_id in ('Vinmin','Vinmax')])
+        self.assertEqual(len(report_cases(bundle)),2)
 
     def test_mos_platform_and_envelope_have_distinct_labels_without_mutation(self):
         from report_architecture import component_check_label

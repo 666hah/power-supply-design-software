@@ -9,6 +9,7 @@ output ripple — and run FFT / THD analysis on them.
 
 import numpy as np
 
+from capacitor_impedance import bank_uses_curves, impedance, parallel_response
 from power_stage import (TOPO_BUCK, TOPO_BOOST, TOPO_BUCKBOOST, TOPO_FLYBACK,
                          TOPO_QRFLYBACK)
 
@@ -23,31 +24,51 @@ def _time_axis(Ts, n_cycles, n_pts):
 def cap_bank_ripple(t, i_c, caps):
     """Output ripple voltage across a parallel capacitor bank.
 
-    caps: list of (C, R, L) tuples (up to two).  The ripple voltage is the
-    voltage across the bank impedance Z_eq = Z1||Z2 driven by the capacitor
-    current, computed in the frequency domain:
+    Caps are normalized bank rows or legacy (C, R, L) tuples. Compute the
+    AC voltage from the parallel-bank impedance and the given current:
 
         V(f) = I_c(f) * Z_eq(f),  Z_j(f) = R_j + j*(2*pi*f*L_j - 1/(2*pi*f*C_j))
 
-    This captures the combined effect of both capacitors (total capacitance,
-    ESR, ESL and the anti-resonance between a bulk cap and a HF bypass cap)
-    exactly, without the sample-rate-dependent ESL-spike artefact.
+    At an in-band frequency a measured sweep supplies that branch's Z.
     """
     i_c = np.asarray(i_c, dtype=float) - np.mean(i_c)
     N = len(i_c)
     dt = float(t[1] - t[0])
     Ic = np.fft.rfft(i_c)
-    freqs = np.fft.rfftfreq(N, dt)
-    Z = np.zeros(len(freqs), dtype=complex)
-    for k in range(1, len(freqs)):
-        w = 2.0 * np.pi * freqs[k]
-        zj = [R + 1j * (w * L - 1.0 / (w * max(C, 1e-30)))
-              for (C, R, L) in caps]
-        z = zj[0]
-        for z2 in zj[1:]:
-            z = z * z2 / (z + z2)
-        Z[k] = z
-    return np.fft.irfft(Ic * Z, N)
+    f = np.fft.rfftfreq(N, dt)[1:]
+    branches = [cap if isinstance(cap, dict) else dict(zip(('C', 'ESR', 'ESL'), cap))
+                for cap in caps]
+    equivalent, _ = parallel_response(np.array([impedance(f, cap) for cap in branches]))
+    Ic[0] = 0
+    Ic[1:] *= equivalent
+    return np.fft.irfft(Ic, N)
+
+
+def cap_bank_ripple_fields(t, current, op):
+    """Keep the nominal no-ESL design reference alongside total AC ripple."""
+    from capacitor_banks import bank
+
+    caps = bank(op)
+    nominal = [(c['C'], c['ESR'], c['ESL']) for c in caps]
+    low = cap_bank_ripple(t, current, [(c, r, 0.) for c, r, _ in nominal])
+    has_curve = bank_uses_curves(caps)
+    full = cap_bank_ripple(t, current, nominal)
+    esl = full - low
+    fields = dict(
+        vout_ripple=low,
+        vout=op['V_out'] + low,
+        vcap=op.get('V_out_cap', op['V_out']) + low,
+        v_esl=esl,
+        ripple_pp=float(np.ptp(low)),
+        ripple_pp_total=float(np.ptp(full)),
+        esl_spike_pp=float(np.max(np.abs(esl))),
+        ripple_impedance_model='curve' if has_curve else 'fixed_rlc',
+        i_c_rms=float(np.sqrt(np.mean(current ** 2))),
+    )
+    if has_curve:
+        ripple = cap_bank_ripple(t, current, caps)
+        fields.update(vout_ripple_impedance=ripple, ripple_pp_total=float(np.ptp(ripple)))
+    return fields
 
 
 def _tri_phase(tt, T, D_on, D_off, I_pk, I_min):
@@ -83,31 +104,22 @@ def make_waveforms(op, n_cycles=2, n_pts=2048):
     topo = op['topology']
     T = op['Ts']
     f_sw = op['f_sw']
+    if op.get('cot'):
+        phases = op['cot']['phases']
+        # Use an integer number of samples per phase offset to preserve the
+        # exact symmetry of aggregate current and its interleaved spectrum.
+        n_pts = ((n_pts+phases-1)//phases)*phases
     t = _time_axis(T, n_cycles, n_pts)
     dt = t[1] - t[0]
     wf = {'t': t, 'dt': dt, 'f_sw': f_sw, 'topology': topo}
 
-    _pwm_waveforms(op, t, wf)
+    if op.get('cot'):
+        from cot_buck import phase_waveforms
+        phase_waveforms(op, t, n_pts, wf)
+    else:
+        _pwm_waveforms(op, t, wf)
 
-    # output ripple: voltage across the parallel capacitor bank.  The bank
-    # (cap1 = C_out/Rc/ESL, plus cap2 C_out2/Rc2/ESL2 when enabled) is
-    # modelled in the frequency domain as Z1||Z2, so both capacitors'
-    # capacitance, ESR and ESL act together (including the HF bypass of a
-    # small parallel cap).  The low-frequency ripple (ESL = 0) is used for
-    # the ripple target; the ESL switching spike is reported separately.
-    i_c = wf['i_c']
-    from capacitor_banks import tuples
-    caps = tuples(op)
-    v_rip = cap_bank_ripple(t, i_c, caps)
-    v_lf = cap_bank_ripple(t, i_c, [(C, R, 0.0) for (C, R, _L) in caps])
-    wf['vout_ripple'] = v_lf                      # LF ripple (both caps, no ESL)
-    wf['v_esl'] = v_rip - v_lf                    # ESL-induced switching spike
-    wf['vout'] = op['V_out'] + wf['vout_ripple']
-    wf['vcap'] = op.get('V_out_cap',op['V_out']) + wf['vout_ripple']
-    wf['ripple_pp'] = float(v_lf.max() - v_lf.min())
-    wf['ripple_pp_total'] = float(v_rip.max() - v_rip.min())
-    wf['esl_spike_pp'] = float(np.max(np.abs(wf['v_esl']))) if len(wf['v_esl']) else 0.0
-    wf['i_c_rms'] = float(np.sqrt(np.mean(i_c ** 2)))
+    wf.update(cap_bank_ripple_fields(t, wf['i_c'], op))
     # input-side current drawn from the source (for input-cap ripple analysis)
     wf['i_cin'] = wf['i_in'] - np.mean(wf['i_in'])
     wf['i_cin_rms'] = float(np.sqrt(np.mean(wf['i_cin'] ** 2)))

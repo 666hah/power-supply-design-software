@@ -8,6 +8,7 @@ import copy
 import math
 
 from spice_export import SETTINGS, CHOICES, setting_group
+from controller_schematics import cot_schematic, pwm_schematic, qr_schematic
 
 SOURCE_URL = 'https://www.monolithicpower.com/en/mp6005.html'
 SHORT_LABELS = dict(frequency_hz='fs',duty_max='Dmax',soft_start_mode='SS模式',soft_start_ms='Tss',
@@ -15,7 +16,8 @@ SHORT_LABELS = dict(frequency_hz='fs',duty_max='Dmax',soft_start_mode='SS模式'
     slope_mode='斜坡',delay_ns='延时',driver_resistance='Rdrv',feedback_scale='H',kp='KP',
     comp_voltage_max='COMP上限',include_cap_esl='ESL',diode_cj_pf='Cj',stop_ms='Tstop',simulation_threads='线程')
 SHORT_CHOICES = dict(soft_start_mode={0:'参考缓升',1:'限流缓升',2:'COMP缓升'},
-    short_mode={0:'逐周期限流',1:'打嗝',2:'锁存'},slope_mode={0:'跟随设计',1:'自动建议',2:'手动'},include_cap_esl={0:'不含',1:'包含'})
+    short_mode={0:'逐周期限流',1:'打嗝',2:'锁存'},slope_mode={0:'跟随设计',1:'自动建议',2:'手动'},include_cap_esl={0:'不含',1:'包含'},
+    qr_zcd_winding={-1:'自动绕组',0:'历史原边端电压',**{i:f'OUT{i}' for i in range(1,7)}})
 
 # key -> (diagram block, purpose, interpretation). Every editable setting has
 # an explicit explanation; a newly added setting must be mapped deliberately.
@@ -55,8 +57,8 @@ HELP = {
     'include_cap_esl': ('power','决定输出/输入电容模型是否包含已配置的ESL。','这是外部电容寄生电感，不是芯片内部量；包含ESL通常使开关仿真更慢。'),
     'diode_cj_pf': ('power','给通用二极管模型添加固定等效结电容。','用于外部功率级振铃近似；不含真实Cj随电压变化及完整反向恢复过程。'),
     'stop_ms': ('test','设置瞬态仿真观察到的结束时间。','需要覆盖启动、稳态和被测事件；打嗝关断较长时应留足观察窗口。'),
-    'step_ms': ('test','设置全部输出同时执行负载阶跃的时刻。','应晚于软启动且早于仿真结束；不属于芯片内部定时器。'),
-    'load_after': ('test','设置阶跃后的负载电流比例。','1保持额定；0.5为半载；这改变仿真负载，不修改控制器额定参数。'),
+    'step_ms': ('test','设置报告中反馈路首次升载时刻。','降载前后各保留一段观察时间，时长为原结束时刻减首次阶跃时刻；满载开机另测。'),
+    'load_after': ('test','设置单独导出 ASC 的阶跃后负载比例。','报告优先按反馈路最小至最大功率双向测试；未定义范围时用 10% ↔ 90%，或更大的额定以内阶跃。其他输出满载。'),
     'short_test': ('test','向所选输出并联短路等效电阻，以测试保护。','只是外部故障注入开关，不代表开启或关闭芯片SCP逻辑。'),
     'short_output': ('test','选择短路注入的输出编号。','需要该路实际存在；与主反馈路编号相互独立。'),
     'short_start_ms': ('test','设置外部短路开始时刻。','只在短路注入开启时生效，需早于仿真结束。'),
@@ -81,7 +83,7 @@ HELP = {
 }
 
 from qr_spice_settings import QR_SETTINGS
-SHORT_LABELS.update(qr_cds_pf='Cds',qr_aux_ratio='Naux/Np',qr_zcd_r='Rz',qr_zcd_c_pf='Cz',
+SHORT_LABELS.update(qr_cds_pf='Cds',qr_aux_ratio='Naux/Np',qr_zcd_winding='检测绕组',qr_zcd_r='Rz',qr_zcd_c_pf='Cz',
     qr_zcd_delay_ns='延时',qr_zcd_arm_v='预备',qr_zcd_trigger_v='触发',qr_off_min_us='Toff',
     qr_off_light_us='轻载Toff',qr_starter_us='启动',qr_vcc_v='VCC',qr_uvlo_on_v='UVon',
     qr_uvlo_off_v='UVoff',qr_vff_v='VFF',qr_cs_clamp_v='CS0',qr_ocp_v='OCP',qr_max_on_us='Tonmax')
@@ -95,6 +97,8 @@ HELP.update({
     'acf_dead_ns':('drive','主 N-MOS 与辅助 P-MOS 交替导通时保留双边沿死区。','0 使用左栏正激死区；MP6005 MODE 可选 100／150／200／300 ns。SYNC 高为 P 管关断，辅助栅极为 AC 移位后的负电压。'),
     'acf_sync_resistance':('drive','辅助 P-MOS 的等效栅极驱动串联电阻。','与 Qg_aux/Vgs 等效门电容共同影响边沿；不是原厂 0.8 A 驱动的完整非线性模型。'),
     'qr_cds_pf':('power','决定退磁后的漏极谐振周期与谷底电压波形。','0 使用设计 Coss；非零为显式仿真假设，不代表实际 Coss(Vds)。'),
+    'qr_zcd_winding':('sense','选择送入退磁检测的绕组电压，避免把原边漏感尖峰当作退磁。','自动优先非反馈路中匝数最少的绕组，单路使用 OUT1；1–6 指定 OUTn。0 重现旧原边端电压复制。均为隔离电压副本，不改变负载，也不提供 VCC。'),
+    'qr_aux_ratio':('sense','定义等效检测辅助绕组与原边的匝数比 Naux/Np。','从 OUTn 取信号时再乘 Np/Ns_n，因此更换检测绕组不重复改变电压比例。实际辅助供电绕组的匝比可按实际值填写。'),
     'qr_zcd_delay_ns':('sense','补偿退磁电压过零到漏极谷底之间的时间。','-1 按 π/2√(Lm·Cds) 减去锁存延时估算；RC、Cj、漏感会使谷底偏移，应按波形校核。'),
     'qr_ocp_v':('protect','异常 CS 超过该阈值后关断并锁存。','仅 VCC 欠压复位；理想 VCC 不会自动跌落，不能声称模拟完整供电打嗝。'),
     'qr_vff_v':('pwm','按输入前馈降低逐周期电流上限。','近似 CS上限=CS0×(1−VFF/3)；固定测试电压，尚未连接输入分压网络。'),
@@ -137,6 +141,7 @@ EDGES = [
 
 def definition():
     return dict(width=720,height=1100,source=SOURCE_URL,nodes=copy.deepcopy(NODES),edges=copy.deepcopy(EDGES),short_labels=copy.deepcopy(SHORT_LABELS),short_choices={key:{str(k):v for k,v in choices.items()} for key,choices in SHORT_CHOICES.items()},
+        schematic=pwm_schematic(), schematic_voltage=pwm_schematic(voltage=True),
         parameters={k:dict(node=v[0],purpose=v[1],meaning=v[2],label=SETTINGS[k][3],unit=SETTINGS[k][4],group=setting_group(k)) for k,v in HELP.items()})
 
 
@@ -145,6 +150,7 @@ def nonisolated_definition():
     from nonisolated import SETTINGS as extra
     d=definition();keys=applicable_keys('BUCK')
     d['source']='https://www.ti.com/product/LM5022'
+    d['schematic_variants']={str(profile):pwm_schematic(profile) for profile in (1, 2, 3)}
     d['parameters']={k:v for k,v in d['parameters'].items() if k in keys}
     for k,v in extra.items():
         d['parameters'][k]=dict(node='clock' if k=='niso_ramp_ratio' else 'power' if k=='niso_inductor_dcr' else 'pwm',purpose=v[3],
@@ -201,12 +207,14 @@ def state_note(key,values):
 def qr_definition():
     from qr_spice_settings import applicable_keys
     d=definition();d['source']='https://www.st.com/resource/en/datasheet/l6565.pdf'
+    d['schematic'] = qr_schematic()
+    del d['schematic_voltage']
     d['parameters']={k:v for k,v in d['parameters'].items() if k in applicable_keys('QR-FLYBACK')}
     overrides={
         'feedback':('外部 SSR 等效补偿与电流命令',['防反管前取样；采用计算器 KP 与零极点','外部参考缓升，不是芯片内置软启动'],['kp','soft_start_ms']),
         'clock':('退磁事件与关断消隐',['ZCD 下降沿置位；无固定频率时钟','COMP 降低时延长关断消隐，可跳谷'],['qr_off_min_us','qr_starter_us']),
         'start':('VCC 欠压迟滞与启动许可',['13.5 V 启动 / 9.5 V 关断','外部理想 VCC；不模拟辅助供电'],['qr_vcc_v','qr_uvlo_on_v']),
-        'sense':('辅助绕组电压到 ZCD',['RC / 钳位 / 上升预备 / 下降触发','附加延时用于靠近谷底，须核对波形'],['qr_zcd_arm_v','qr_zcd_delay_ns']),
+        'sense':('辅助绕组电压到 ZCD',['所选绕组 → RC / 钳位 → 边沿检测','附加延时用于靠近谷底，须核对波形'],['qr_zcd_winding','qr_zcd_delay_ns']),
         'protect':('异常 CS 关断锁存',['CS 超限关断；VCC 欠压复位','不使用 MP6005 定时打嗝逻辑'],['qr_ocp_v','cs_filter_ns']),
         'pwm':('CS 比较关断与 VFF 限流',['CS×增益 与 COMP 命令比较','COMP 为软件量纲；芯片电压另行换算'],['qr_cs_clamp_v','qr_vff_v']),
         'drive':('SR 锁存与驱动',['S：ZCD / 无信号启动定时器','R：CS 比较 / 保护 / 看门狗'],['delay_ns','qr_max_on_us']),
@@ -219,13 +227,38 @@ def qr_definition():
         'soft_start_ms':('外部参考从0缓升到设定值。','为通用闭环验证添加，不代表芯片内置软启动。'),
         'delay_ns':('ZCD 置位与 CS 复位的锁存传播延时。','影响开通谷底位置及峰值电流超调。'),
         'cs_filter_ns':('原始 CS 到比较器的一阶滤波。','滤波会使实际关断峰值超过静态命令。'),
+        'qr_zcd_r':('等效绕组电压与 ZCD 检测端之间的串联电阻。',
+                    '与输入电容及钳位共同决定检测沿的延时。'),
+        'qr_zcd_c_pf':('与 ZCD 串联电阻组成检测滤波的等效输入电容。',
+                       '增大后检测端斜率减缓，触发时刻会改变。'),
+        'qr_zcd_arm_v':('ZCD 上升超过此阈值后，允许本周期检测下降沿。',
+                        '需要先预备，再在关断消隐结束后响应下降触发。'),
+        'qr_zcd_trigger_v':('已预备时，ZCD 下降穿过此阈值产生触发沿。',
+                            '预备阈值与下降阈值构成迟滞。触发还受消隐、COMP 和 RUN 约束。'),
+        'qr_off_min_us':('设定重载下相邻脉冲的最短关断消隐时间。',
+                         '未到消隐结束的 ZCD 边沿不置位。'),
+        'qr_off_light_us':('低 COMP 命令下使用更长的关断消隐时间。',
+                           '消隐随等效芯片 COMP 电压变化，可跳过较早的谷底。'),
+        'qr_starter_us':('关断时间超过此值时，可在没有 ZCD 有效边沿的情况下置位。',
+                         '仍要求 RUN 有效且 COMP 请求导通。'),
+        'qr_vcc_v':('外部理想电源施加在 VCC 节点的电压。',
+                    '决定欠压许可，供电耗尽和辅助绕组回供需独立建模。'),
+        'qr_uvlo_on_v':('VCC 上升到该阈值后才允许启动。',
+                        '与下行关断阈值组成欠压迟滞。'),
+        'qr_uvlo_off_v':('VCC 下降低于该阈值后停止驱动并清除异常 CS 锁存。',
+                         '重新开机仍须达到上行启动阈值。'),
+        'qr_cs_clamp_v':('VFF 为 0 时的正常峰值电流命令上限，采用 CS 电压量纲。',
+                          '正常限流命令与异常 CS 故障锁存阈值分别设置。'),
     }.items():d['parameters'][key].update(purpose=purpose,meaning=meaning)
+    d['parameters']['qr_cs_clamp_v']['node'] = 'pwm'
     return d
 
 
 def acf_definition():
     from qr_spice_settings import applicable_keys
     d=definition()
+    d['schematic'] = pwm_schematic('acf')
+    d['schematic_voltage'] = pwm_schematic('acf', voltage=True)
     d['parameters']={k:v for k,v in d['parameters'].items() if k in applicable_keys('ACF-FORWARD')}
     d['short_labels'].update(acf_dead_ns='死区',acf_sync_resistance='Rsync')
     for row in d['nodes']:
@@ -233,4 +266,38 @@ def acf_definition():
             row.update(title='锁存 / GATE / SYNC / 死区',body=['主 N-MOS：正 Vgs 开通','SYNC 高→P 管关断；低→负 Vgs 开通','两管之间保留双边沿死区'],values=['acf_dead_ns','acf_sync_resistance'])
         if row['id']=='power':
             row.update(title='外部有源钳位正激功率级',body=['P-MOS＋钳位电容复位变压器','每路整流 / 续流 / 输出电感 / 并联电容'],values=['include_cap_esl','diode_cj_pf'])
+    return d
+
+
+def cot_definition():
+    from cot_buck_spice import FRA_KEYS, normalize_cot_settings
+
+    d = definition()
+    keys = ('enable_delay_ms', 'soft_start_ms', 'step_ms', 'stop_ms', 'load_after',
+            'simulation_threads', 'simulation_timeout_s', 'comparison_tolerance_pct',
+            'include_cap_esl', *FRA_KEYS)
+    defaults = normalize_cot_settings(None, 400_000.)
+    d['parameters'] = {k: dict(d['parameters'][k], default=defaults[k]) for k in keys}
+    d['parameters']['enable_delay_ms'].update(purpose='仿真开始后延迟允许切换并开始参考电压缓升。',
+                                            meaning='与软启动时长分别设置。')
+    d['parameters']['soft_start_ms'].update(purpose='参考电压由零缓升至设定值的时长。',
+                                           meaning='电压反馈 PI 调整脉冲触发频率。')
+    d['source'] = ''
+    d['schematic'] = cot_schematic()
+    del d['schematic_voltage']
+    contents = {
+        'start': ('启动与参考缓升', ['启动延时结束后，参考电压按软启动时间线性上升。']),
+        'feedback': ('反馈误差与 PI 调节', ['输出电容端电压与参考比较，PI 调节脉冲触发频率。']),
+        'clock': ('导通时间与频率限制', ['Ton 取设定值或由输入电压及目标频率前馈计算。',
+                                          '最短关断时间限制最高触发频率。']),
+        'pwm': ('触发与各相分配', ['共享相位累加器依序分配触发，各相采用独立恒定导通脉冲。']),
+        'drive': ('同步 Buck 门极驱动', ['各相分别产生对应的高侧和低侧门极信号。']),
+        'power': ('外部功率级与寄生', ['各相电感连接到公共输出电容端，电容可计入已启用的 ESL。']),
+        'test': ('仿真工况与测量', ['可比较软启动、稳定后的负载阶跃，以及额定工况开关 FRA。']),
+    }
+    d['nodes'] = [node for node in d['nodes'] if node['id'] in contents]
+    for node in d['nodes']:
+        node['title'], node['body'] = contents[node['id']]
+        node['values'] = [k for k in keys if d['parameters'][k]['node'] == node['id']][:2]
+    d['edges'] = []
     return d

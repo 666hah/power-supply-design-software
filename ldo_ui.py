@@ -1,57 +1,220 @@
 """Small desktop LDO editor; shares all equations and reports with the web UI."""
 import copy
 import tkinter as tk
-from tkinter import ttk,filedialog,messagebox
+from tkinter import ttk, filedialog, font, messagebox
 from ldo import normalize,calculate,FIELDS,OPTIONAL
 from ldo_report import fmt,STATE
+
 CHOICES={'output_mode':{'fixed':'固定输出','adjustable':'可调输出（计算分压）'},
          'reverse_blocking':{'unknown':'待核对','yes':'具备（按芯片条件）','no':'不具备'}}
 
+BG, INK, MUTED, BLUE = '#f1f5f9', '#102238', '#526987', '#1469d8'
+
+
 class LdoDesigner:
-    def __init__(self,root,initial_config=None,on_return=None):
-        self.root,self.on_return=root,on_return;self.spec=normalize(initial_config);self.result=None;self.vars={};self.items={}
-        root.title('LDO 线性稳压器设计');root.geometry('1320x850');root.minsize(1000,650)
-        head=ttk.Frame(root,padding=16);head.pack(fill='x')
-        ttk.Label(head,text='LDO 线性稳压器 · 压差 / 损耗 / 温升',font=('Microsoft YaHei UI',18,'bold')).pack(side='left')
-        ttk.Button(head,text='返回系统架构并保存',command=self.close).pack(side='right',padx=5)
-        ttk.Button(head,text='计算 LDO',command=self.compute).pack(side='right',padx=5)
-        self.status=tk.StringVar(value='静态线性模型；未知额定值和规格书条件留空')
-        ttk.Label(root,textvariable=self.status,padding=(16,5)).pack(fill='x')
-        split=ttk.Panedwindow(root,orient='horizontal');split.pack(fill='both',expand=True,padx=16,pady=8)
-        left=ttk.Frame(split);split.add(left,weight=2);canvas=tk.Canvas(left,width=360,highlightthickness=0);scroll=ttk.Scrollbar(left,command=canvas.yview);canvas.configure(yscrollcommand=scroll.set);scroll.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
-        form=ttk.Frame(canvas,padding=12);win=canvas.create_window((0,0),window=form,anchor='nw');form.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')));canvas.bind('<Configure>',lambda e:canvas.itemconfigure(win,width=e.width))
-        for k,label in [('manufacturer','厂家'),('model','型号'),('package','封装'),('notes','资料来源与条件')]:self.field(form,k,label)
-        self.choice(form,'output_mode','输出类型');self.choice(form,'reverse_blocking','反向电流保护')
-        for k,label in [('follow_input','跟随上游输入范围'),('thermal_verified','有效热阻已按实际PCB核对'),('enable_pin','具有 EN 引脚'),('power_good','具有 PG 引脚')]:
-            v=tk.BooleanVar(value=self.spec[k]);self.vars[k]=(v,1);ttk.Checkbutton(form,text=label,variable=v).pack(anchor='w',pady=6)
-        self.adjustable_frame=None
-        for section,fields in FIELDS:
-            group=ttk.Frame(form);group.pack(fill='x')
-            if section=='可调输出分压':self.adjustable_frame=group
-            ttk.Label(group,text=section,font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w',pady=(16,6))
-            for k,label,unit,scale in fields:self.field(group,k,label+' / '+unit,scale)
-        canvas.bind('<Enter>',lambda e:canvas.focus_set())
-        canvas.bind('<MouseWheel>',lambda e:canvas.yview_scroll(-int(e.delta/120),'units'))
-        right=ttk.Frame(split);split.add(right,weight=5)
-        self.book=ttk.Notebook(right);self.book.pack(fill='both',expand=True)
-        self.corner=self.tree('四角点结果',['工况','Vin/V','Iout/A','压差裕量/V','芯片W','效率%','结温°C'])
-        self.checks=self.tree('检查与降额',['检查项','计算值','限值','状态','说明'])
-        bom=ttk.Frame(self.book,padding=12);self.book.add(bom,text='器件BOM资料')
-        ttk.Label(bom,text='U1 厂家/型号/封装在左侧；电容与分压电阻资料在此填写。').pack(anchor='w')
-        self.bom_form=ttk.Frame(bom);self.bom_form.pack(fill='both',expand=True);self.bom_frames={}
+    def __init__(self, root, initial_config=None, on_return=None, *, container=None):
+        self.root = root
+        self.container = container if container is not None else root
+        self.on_return = on_return
+        self._embedded = container is not None
+        self.spec = normalize(initial_config)
+        self.result = None
+        self.vars = {}
+        self.items = {}
+        self._field_labels = []
+        self._field_groups = []
+        self._result_pages = {}
+        from ui_preferences import font_size
+
+        if not self._embedded:
+            from software_architecture_ui import add_architecture_menu
+            from project_identity import GITHUB_LABEL, add_github_menu_item, open_github
+
+            root.title('LDO 线性稳压器设计')
+            root.geometry('1320x850')
+            root.minsize(1000, 650)
+            ttk.Style(root).theme_use('clam')
+            menubar = tk.Menu(root)
+            add_architecture_menu(menubar, root)
+            help_menu = tk.Menu(menubar, tearoff=False)
+            add_github_menu_item(help_menu, root)
+            menubar.add_cascade(label='帮助', menu=help_menu)
+            root.configure(menu=menubar)
+            root.protocol('WM_DELETE_WINDOW', self.close)
+
+        self._body_font = font.Font(root=root, family='Microsoft YaHei UI', size=-14)
+        self._section_font = font.Font(root=root, family='Microsoft YaHei UI', size=-14, weight='bold')
+        self._heading_font = font.Font(root=root, family='Microsoft YaHei UI', size=-20, weight='bold')
+        self.set_font_size(font_size())
+        style = ttk.Style(root)
+        style.configure('Ldo.TFrame', background=BG)
+        style.configure('LdoCard.TFrame', background='white')
+        style.configure('Ldo.TLabel', foreground=INK, background='white', font=self._body_font)
+        style.configure('LdoMuted.TLabel', foreground=MUTED, background='white', font=self._body_font)
+        style.configure('LdoSection.TLabel', foreground=BLUE, background='white', font=self._section_font)
+        style.configure('LdoTitle.TLabel', foreground=INK, background='white', font=self._heading_font)
+        style.configure('Ldo.TButton', foreground=INK, background='white', bordercolor='#cedbea',
+                        padding=(11, 6), font=self._body_font)
+        style.map('Ldo.TButton', background=[('active', '#e7f0ff')])
+        style.configure('Ldo.TCheckbutton', foreground=INK, background='white', font=self._body_font)
+        style.configure('Ldo.TEntry', padding=5, bordercolor='#cedbea', fieldbackground='white')
+        style.configure('Ldo.TCombobox', padding=5, bordercolor='#cedbea')
+        style.configure('Ldo.Treeview', font=self._body_font, background='white', fieldbackground='white')
+        style.configure('Ldo.Treeview.Heading', font=self._section_font, foreground=INK,
+                        background='#edf3fa', padding=(6, 5))
+        style.configure('Ldo.TNotebook', background=BG, borderwidth=0)
+        style.configure('Ldo.TNotebook.Tab', padding=(12, 7), font=self._body_font)
+        style.map('Ldo.TNotebook.Tab', foreground=[('selected', BLUE)])
+
+        self.frame = ttk.Frame(self.container, padding=(16, 12), style='Ldo.TFrame')
+        self.frame.pack(fill='both', expand=True)
+        head = ttk.Frame(self.frame, padding=(14, 8), style='LdoCard.TFrame')
+        head.pack(fill='x', pady=(0, 10))
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text='LDO 线性稳压器', style='LdoTitle.TLabel').grid(row=0, column=0, sticky='w')
+        if not self._embedded:
+            ttk.Button(head, text='重新计算', command=self.compute, style='Ldo.TButton').grid(row=0, column=1, sticky='e')
+            if on_return:
+                ttk.Button(head, text='返回系统架构', command=self.close, style='Ldo.TButton').grid(row=0, column=2, padx=(8, 0))
+            ttk.Button(head, text=GITHUB_LABEL, command=lambda: open_github(root),
+                       style='Ldo.TButton').grid(row=0, column=3, padx=(8, 0))
+        self.status = tk.StringVar(value='静态线性模型。未知的规格书限值可留空。')
+        ttk.Label(head, textvariable=self.status, style='LdoMuted.TLabel').grid(row=1, column=0, columnspan=3, sticky='ew')
+        split = ttk.Panedwindow(self.frame, orient='horizontal')
+        split.pack(fill='both', expand=True)
+        left = ttk.Frame(split, style='LdoCard.TFrame')
+        split.add(left, weight=1)
+        canvas = tk.Canvas(left, width=350, highlightthickness=0, background='white')
+        scroll = ttk.Scrollbar(left, command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        form = ttk.Frame(canvas, padding=(12, 6), style='LdoCard.TFrame')
+        win = canvas.create_window((0, 0), window=form, anchor='nw')
+        form.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
+        def resize_form(event):
+            canvas.itemconfigure(win, width=event.width)
+            wrap = max(90, int(event.width*.45)-16)
+            for label in self._field_labels:
+                label.configure(wraplength=wrap)
+        canvas.bind('<Configure>', resize_form)
+
+        basic = self.group(form, '器件与控制')
+        for k, label in [('manufacturer', '厂家'), ('model', '型号'), ('package', '封装'), ('notes', '资料来源与条件')]:
+            self.field(basic, k, label)
+        self.choice(basic, 'output_mode', '输出类型')
+        self.choice(basic, 'reverse_blocking', '反向电流保护')
+        for k,label in [('follow_input','跟随上游电压'),('thermal_verified','热阻已按 PCB 核对'),
+                        ('enable_pin','具有 EN 引脚'),('power_good','具有 PG 引脚')]:
+            value = tk.BooleanVar(value=self.spec[k])
+            self.vars[k] = (value, 1)
+            ttk.Checkbutton(form, text=label, variable=value, style='Ldo.TCheckbutton').pack(anchor='w', pady=3)
+        self.adjustable_frame = None
+        for section, fields in FIELDS:
+            group = self.group(form, section)
+            if section == '可调输出分压':
+                self.adjustable_frame = group
+            for k, label, unit, scale in fields:
+                self.field(group, k, label, unit, scale)
+        self.bind_form_scroll(canvas, canvas)
+
+        right = ttk.Frame(split, style='Ldo.TFrame', padding=(8, 0, 0, 0))
+        split.add(right, weight=3)
+        self.book = ttk.Notebook(right, style='Ldo.TNotebook')
+        self.book.pack(fill='both', expand=True)
+        self.corner = self.tree('corners', '四角点结果', ['工况','Vin / V','Iout / A','压差裕量 / V','芯片 / W','效率 / %','结温 / °C'])
+        self.checks = self.tree('checks', '检查与降额', ['检查项','计算值','限值','状态','说明'])
+        bom = ttk.Frame(self.book, padding=12, style='LdoCard.TFrame')
+        self.book.add(bom, text='器件 BOM')
+        self._result_pages['bom'] = bom
+        ttk.Label(bom, text='电容与分压电阻', style='LdoSection.TLabel').pack(anchor='w')
+        bom_body = ttk.Frame(bom, style='LdoCard.TFrame')
+        bom_body.pack(fill='both', expand=True)
+        bom_view = tk.Canvas(bom_body, background='white', highlightthickness=0)
+        bom_scroll = ttk.Scrollbar(bom_body, command=bom_view.yview)
+        bom_view.configure(yscrollcommand=bom_scroll.set)
+        bom_scroll.pack(side='right', fill='y')
+        bom_view.pack(side='left', fill='both', expand=True)
+        self.bom_form = ttk.Frame(bom_view, style='LdoCard.TFrame')
+        self.bom_frames = {}
+        bom_window = bom_view.create_window((0, 0), window=self.bom_form, anchor='nw')
+        self.bom_form.bind('<Configure>', lambda event: bom_view.configure(scrollregion=bom_view.bbox('all')))
+        def resize_bom(event):
+            bom_view.itemconfigure(bom_window, width=event.width)
+            self.bom_note.configure(wraplength=max(100, event.width-12))
+        bom_view.bind('<Configure>', resize_bom)
         self.draw_bom()
+        self.bind_form_scroll(bom_view, bom_view)
         self.vars['output_mode'][0].trace_add('write',lambda *args:self.update_mode());self.update_mode()
-        self.info=tk.Text(right,height=7,wrap='word',font=('Microsoft YaHei UI',11));self.info.pack(fill='x',pady=8)
-        bar=ttk.Frame(right);bar.pack(fill='x')
-        for kind in ('docx','xlsx','json'):ttk.Button(bar,text='导出 '+kind.upper(),command=lambda k=kind:self.report(k)).pack(side='left',padx=5)
-        root.protocol('WM_DELETE_WINDOW',self.close);self.compute()
+        notes = ttk.Frame(right, style='LdoCard.TFrame')
+        notes.pack(fill='x', pady=(8, 0))
+        ttk.Label(notes, text='计算说明', style='LdoSection.TLabel').pack(anchor='w', padx=9, pady=(7, 0))
+        content = ttk.Frame(notes, style='LdoCard.TFrame')
+        content.pack(fill='x')
+        self.info = tk.Text(content, height=3, wrap='word', font=self._body_font, background='white',
+                            foreground=INK, relief='flat', padx=9, pady=5)
+        info_scroll = ttk.Scrollbar(content, command=self.info.yview)
+        self.info.configure(yscrollcommand=info_scroll.set)
+        info_scroll.pack(side='right', fill='y')
+        self.info.pack(side='left', fill='x', expand=True)
+        if not self._embedded:
+            bar = ttk.Frame(right, style='Ldo.TFrame')
+            bar.pack(fill='x', pady=(8, 0))
+            for kind in ('docx', 'xlsx', 'json'):
+                ttk.Button(bar, text='导出 '+kind.upper(), command=lambda k=kind:self.report(k),
+                           style='Ldo.TButton').pack(side='left', padx=(0, 8))
+        self.compute()
 
-    def field(self,parent,key,label,scale=1):
-        ttk.Label(parent,text=label).pack(anchor='w');v=self.spec.get(key);variable=tk.StringVar(value='' if v is None else str(v/scale) if isinstance(v,(int,float)) else v)
-        self.vars[key]=(variable,scale);ttk.Entry(parent,textvariable=variable).pack(fill='x',pady=(3,9))
+    def set_font_size(self, size):
+        self._body_font.configure(size=-size)
+        self._section_font.configure(size=-size)
+        self._heading_font.configure(size=-min(32, round(size*1.43)))
+        ttk.Style(self.root).configure('Ldo.Treeview', rowheight=max(26, self._body_font.metrics('linespace')+8))
+        self._unit_width = max(self._body_font.measure(unit) for _, fields in FIELDS for _, _, unit, _ in fields)+7
+        for group in self._field_groups:
+            group.columnconfigure(2, minsize=self._unit_width)
 
-    def choice(self,parent,key,label):
-        ttk.Label(parent,text=label).pack(anchor='w');v=tk.StringVar(value=CHOICES[key][self.spec[key]]);self.vars[key]=(v,1);ttk.Combobox(parent,textvariable=v,values=list(CHOICES[key].values()),state='readonly').pack(fill='x',pady=(3,9))
+    def bind_form_scroll(self, canvas, widget):
+        def scroll(event):
+            canvas.yview_scroll(-int(event.delta/120), 'units')
+            return 'break'
+
+        widget.bind('<MouseWheel>', scroll, add='+')
+        for child in widget.winfo_children():
+            self.bind_form_scroll(canvas, child)
+
+    def group(self, parent, title):
+        group = ttk.Frame(parent, style='LdoCard.TFrame')
+        group.columnconfigure(0, weight=2, uniform='field')
+        group.columnconfigure(1, weight=2, uniform='field')
+        group.columnconfigure(2, minsize=self._unit_width)
+        self._field_groups.append(group)
+        group.pack(fill='x', pady=(6, 4))
+        ttk.Label(group, text=title, style='LdoSection.TLabel').grid(row=0, column=0, columnspan=3, sticky='w', pady=(5, 4))
+        return group
+
+    def layout_field(self, parent, label, control, unit):
+        row = parent.grid_size()[1]
+        title = ttk.Label(parent, text=label, style='Ldo.TLabel', wraplength=145)
+        title.grid(row=row, column=0, sticky='ew', padx=(0, 8), pady=4)
+        self._field_labels.append(title)
+        control.grid(row=row, column=1, columnspan=1 if unit else 2, sticky='ew', pady=4)
+        if unit:
+            ttk.Label(parent, text=unit, style='LdoMuted.TLabel').grid(row=row, column=2, sticky='w', padx=(7, 0))
+
+    def field(self, parent, key, label, unit='', scale=1):
+        value = self.spec.get(key)
+        variable = tk.StringVar(value='' if value is None else str(value/scale) if isinstance(value, (int,float)) else value)
+        self.vars[key] = (variable, scale)
+        control = ttk.Entry(parent, textvariable=variable, width=8, font=self._body_font, style='Ldo.TEntry')
+        self.layout_field(parent, label, control, unit)
+
+    def choice(self, parent, key, label):
+        variable = tk.StringVar(value=CHOICES[key][self.spec[key]])
+        self.vars[key] = (variable, 1)
+        control = ttk.Combobox(parent, textvariable=variable, values=list(CHOICES[key].values()), width=10,
+                               state='readonly', font=self._body_font, style='Ldo.TCombobox')
+        self.layout_field(parent, label, control, '')
 
     def update_mode(self):
         active=self.vars['output_mode'][0].get() in ('adjustable',CHOICES['output_mode']['adjustable'])
@@ -61,19 +224,62 @@ class LdoDesigner:
             if active:self.bom_frames[ref].pack(fill='x',pady=5,before=self.bom_note)
             else:self.bom_frames[ref].pack_forget()
 
-    def tree(self,title,headers):
-        f=ttk.Frame(self.book);self.book.add(f,text=title);t=ttk.Treeview(f,columns=list(range(len(headers))),show='headings');sy=ttk.Scrollbar(f,command=t.yview);sx=ttk.Scrollbar(f,orient='horizontal',command=t.xview);t.configure(yscrollcommand=sy.set,xscrollcommand=sx.set);sy.pack(side='right',fill='y');sx.pack(side='bottom',fill='x');t.pack(fill='both',expand=True)
-        for j,label in enumerate(headers):t.heading(j,text=label);t.column(j,width=125 if j<len(headers)-1 else 240,stretch=True)
-        t.tag_configure('review',background='#fff3df');return t
+    def tree(self, key, title, headers):
+        frame = ttk.Frame(self.book, style='LdoCard.TFrame')
+        self.book.add(frame, text=title)
+        self._result_pages[key] = frame
+        table = ttk.Treeview(frame, columns=list(range(len(headers))), show='headings', style='Ldo.Treeview')
+        ybar = ttk.Scrollbar(frame, command=table.yview)
+        xbar = ttk.Scrollbar(frame, orient='horizontal', command=table.xview)
+        table.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        table.grid(row=0, column=0, sticky='nsew')
+        ybar.grid(row=0, column=1, sticky='ns')
+        xbar.grid(row=1, column=0, sticky='ew')
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        for column, label in enumerate(headers):
+            table.heading(column, text=label)
+            width = 230 if label == '说明' else 126 if label == '检查项' else 88
+            table.column(column, width=width, anchor='w' if label in ('检查项', '说明') else 'center')
+        table.tag_configure('review', background='#fff3df')
+        return table
+
+    def selected_result_page(self):
+        selected = self.book.select()
+        return next((key for key, frame in self._result_pages.items() if selected == str(frame)), None)
+
+    def restore_result_page(self, key):
+        frame = self._result_pages.get(key)
+        if frame is not None:
+            self.book.select(frame)
 
     def draw_bom(self):
         for ref in ('C_IN1','C_OUT1','R1','R2'):
-            f=ttk.LabelFrame(self.bom_form,text=ref,padding=8);f.pack(fill='x',pady=5);self.bom_frames[ref]=f;self.items[ref]={};saved=self.spec['component_management']['items'].get(ref,{})
-            for j,(k,label) in enumerate([('manufacturer','厂家'),('model','型号'),('package','封装')]+([('voltage_V','耐压/V')] if ref.startswith('C_') else [('power_W','额定功率/W')])):
-                ttk.Label(f,text=label).grid(row=0,column=j,sticky='w');v=tk.StringVar(value=saved.get(k) or '');self.items[ref][k]=v;ttk.Entry(f,textvariable=v,width=15).grid(row=1,column=j,sticky='ew',padx=3);f.columnconfigure(j,weight=1)
-            if ref.startswith('C_'):
-                v=tk.StringVar(value=saved.get('capacitor_type','unknown'));self.items[ref]['capacitor_type']=v;ttk.Label(f,text='电容类型').grid(row=2,column=0);ttk.Combobox(f,textvariable=v,values=['unknown','mlcc','electrolytic','film','other'],state='readonly',width=15).grid(row=2,column=1,columnspan=2,sticky='w')
-        self.bom_note=ttk.Label(self.bom_form,text='固定输出不使用 R1/R2；可调输出的下电阻自动计算。电阻按20%额定功率初查。\n有效电容/ESR在左侧填写；本模块不预测瞬态纹波电流。',wraplength=650);self.bom_note.pack(anchor='w',pady=8)
+            card = ttk.Frame(self.bom_form, style='LdoCard.TFrame', padding=(0, 6))
+            card.pack(fill='x', pady=5)
+            self.bom_frames[ref] = card
+            self.items[ref] = {}
+            saved = self.spec['component_management']['items'].get(ref, {})
+            is_capacitor = ref.startswith('C_')
+            rating = ('voltage_V', '耐压 / V') if is_capacitor else ('power_W', '额定功率 / W')
+            ttk.Label(card, text=ref, style='LdoSection.TLabel').grid(row=0, column=0, columnspan=4, sticky='w')
+            for column, (key, label) in enumerate([('manufacturer','厂家'), ('model','型号'), ('package','封装'), rating]):
+                ttk.Label(card, text=label, style='Ldo.TLabel').grid(row=1, column=column, sticky='w', pady=(6, 3))
+                variable = tk.StringVar(value=saved.get(key) or '')
+                self.items[ref][key] = variable
+                ttk.Entry(card, textvariable=variable, width=7, font=self._body_font, style='Ldo.TEntry').grid(
+                    row=2, column=column, sticky='ew', padx=(0, 8))
+                card.columnconfigure(column, weight=1)
+            if is_capacitor:
+                variable = tk.StringVar(value=saved.get('capacitor_type', 'unknown'))
+                self.items[ref]['capacitor_type'] = variable
+                ttk.Label(card, text='电容类型', style='Ldo.TLabel').grid(row=3, column=0, sticky='w', pady=5)
+                ttk.Combobox(card, textvariable=variable, values=['unknown','mlcc','electrolytic','film','other'],
+                             state='readonly', width=10, font=self._body_font, style='Ldo.TCombobox').grid(
+                                 row=3, column=1, columnspan=2, sticky='ew', padx=(0, 8), pady=5)
+        self.bom_note = ttk.Label(self.bom_form, text='可调输出的 R2 自动计算，电阻按 20% 额定功率初查。有效电容与 ESR 在左侧填写。',
+                                  style='LdoMuted.TLabel', wraplength=600)
+        self.bom_note.pack(fill='x', pady=8)
 
     def _config_dict(self):
         p=copy.deepcopy(self.spec)
@@ -106,7 +312,12 @@ class LdoDesigner:
                 export_report(self.result,path);self.status.set('已导出：'+path)
             except Exception as e:messagebox.showerror('LDO 报告',str(e),parent=self.root)
 
+    def export_report(self):
+        """Default report command when hosted by the system workspace."""
+        self.report('docx')
+
     def close(self):
-        if self.on_return:
-            if self.on_return(self) is False:return
-        self.root.destroy()
+        if self.on_return and self.on_return(self) is False:
+            return
+        if not self._embedded:
+            self.root.destroy()

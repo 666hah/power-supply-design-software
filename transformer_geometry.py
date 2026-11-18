@@ -185,7 +185,8 @@ def resolve_geometry(cases,snapshot_id,input_hash,design_id,profile=None,*,cance
         other_tr=other['result']['mag']['transformer']
         if (assess_winding_window(transformer_windings(other['result']),other['p'].get('winding_config'))!=assessment
                 or transformer_windings(other['result'])!=wires or other_tr['core']!=tr['core']
-                or other_tr['MLT']!=tr['MLT'] or other_tr['core_geometry']!=tr['core_geometry']):
+                or other_tr['MLT']!=tr['MLT'] or other_tr['core_geometry']!=tr['core_geometry']
+                or other_tr.get('winding_lengths')!=tr.get('winding_lengths')):
             raise ValueError('输入端点的绕组或磁芯几何不一致，不能合并导出')
     profile=profile if profile is not None else (cfg or {}).get('model_3d') or profile_template()
     validate_profile(profile)
@@ -234,6 +235,7 @@ def resolve_geometry(cases,snapshot_id,input_hash,design_id,profile=None,*,cance
         windings=windings,physical_sections=sections,connections=ports,connection_matrix=matrix,
         terminals=profile.get('terminals',[]),leads=profile.get('leads',[]),
         assumptions=['图中挡墙为示意；线束尺寸默认按等效包络估算。','轨迹从 +Z 看按逆时针定义，v 沿内边界外法向，电气正电流流入同名端。',
+                     'core.mean_length_per_turn_m 为计算器记录的原边平均匝长。windings 中的 DCR 来自各自绕组的等效线长。',
                      *profile.get('assumptions',[])],
         checks=dict(two_dimensional_fit=assessment['fits'],height_margin_m=assessment.get('height_margin'),
                     same_endpoint_geometry=True,three_dimensional_interference='not_run',mesh='not_run',

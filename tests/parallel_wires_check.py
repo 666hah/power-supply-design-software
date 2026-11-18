@@ -16,12 +16,13 @@ class ParallelWires(unittest.TestCase):
             'd_wire_p':.3e-3,'d_wire_s':.2e-3,'n_strand_p':1,'n_strand_s':3})
         a=compute_design(p);q=dict(p,parallel_wires_p=2,parallel_wires_s=2);b=compute_design(q)
         x,y=(r['mag']['transformer'] for r in (a,b))
-        for side in ('p','s'):
-            self.assertAlmostEqual(y['R_dc_'+side],x['R_dc_'+side]/2)
+        for side,length in (('p','copper_length_m'),('s','copper_length_s_m')):
+            self.assertAlmostEqual(y['R_dc_'+side]/y[length],x['R_dc_'+side]/(2*x[length]))
             self.assertAlmostEqual(y['J_actual_'+side],x['J_actual_'+side]/2)
         self.assertEqual(y['Np'],6);self.assertEqual(y['Ns'],12)
         self.assertAlmostEqual(y['fill'],2*x['fill'])
-        self.assertAlmostEqual(y['P_cu'],x['P_cu']/2)
+        expected = sum(y['Fr_'+side]*y['R_dc_'+side]*y['I_rms_'+side]**2 for side in ('p','s'))
+        self.assertAlmostEqual(y['P_cu'],expected)
         rows=transformer_windings(b)
         assessment=assess_winding_window(rows,dict(window_width=.02,window_height=.02))
         primary=assessment['windings'][0]
@@ -41,9 +42,9 @@ class ParallelWires(unittest.TestCase):
         t=r['mag']['transformer'];hw=r['op']['coupled_model']['transformer_hardware']
         self.assertEqual(t['Np'],6)
         self.assertEqual(t['windings'][1]['parallel_wires_s'],3)
-        self.assertAlmostEqual(t['R_dc_p'],p['rho']*t['MLT']*t['Np']/(2*t['n_strand_p']*math.pi*t['d_wire_p']**2/4))
+        self.assertAlmostEqual(t['R_dc_p'],p['rho']*t['copper_length_m']/(2*t['n_strand_p']*math.pi*t['d_wire_p']**2/4))
         w=t['windings'][1]
-        self.assertAlmostEqual(w['R_dc'],p['rho']*t['MLT']*w['Ns']/(3*w['n_strand_s']*math.pi*w['d_wire_s']**2/4))
+        self.assertAlmostEqual(w['R_dc'],p['rho']*w['copper_length_m']/(3*w['n_strand_s']*math.pi*w['d_wire_s']**2/4))
         self.assertAlmostEqual(hw['windings'][1]['R_dc'],w['R_dc'])
         fixed=pin_hardware(p,r)
         self.assertEqual(fixed['outputs'][1]['parallel_wires_s'],3)
@@ -67,7 +68,7 @@ class ParallelWires(unittest.TestCase):
                 if p.get('outputs'):p['outputs'][0]['parallel_wires_s']=3
                 p=load_spec(p);r=compute_design(p);t=r['mag']['transformer']
                 self.assertEqual(t['parallel_wires_p'],2)
-                expected=p['rho']*t['MLT']*t['Np']/(2*t['n_strand_p']*math.pi*t['d_wire_p']**2/4)
+                expected=p['rho']*t['copper_length_m']/(2*t['n_strand_p']*math.pi*t['d_wire_p']**2/4)
                 self.assertAlmostEqual(t['R_dc_p'],expected)
                 if t.get('windings'):
                     self.assertEqual(t['windings'][0]['parallel_wires_s'],3)

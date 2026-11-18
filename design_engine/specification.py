@@ -9,6 +9,7 @@ import plants
 _SPEC_KEYS = sorted(set(DEFAULT_PARAMS) | {'V_in_min', 'V_in_max', 'input_voltage_case'})
 _TOPO_ALIAS = {k.upper(): k for k in TOPOLOGIES}
 _CTRL_ALIAS = {'VM': 'Voltage Mode', 'PCM': 'Peak Current Mode',
+               'COT': 'Constant On-Time', 'CONSTANT ON-TIME': 'Constant On-Time',
                'VOLTAGE MODE': 'Voltage Mode',
                'PEAK CURRENT MODE': 'Peak Current Mode'}
 
@@ -64,8 +65,6 @@ def load_spec(spec):
     if p.get('parasitic_config'):
         p['parasitic_config'] = normalize_parasitics(p['parasitic_config'])
     p['component_management'] = normalize_management(p.get('component_management'))
-    from spice_export import normalize_settings
-    p['spice_config'] = normalize_settings(p.get('spice_config'))
     from device_curve_sources import effective_sources
     stored_diodes=p.get('diode_curves',{})
     p=dict(effective_sources(p),diode_curves=stored_diodes)
@@ -96,6 +95,20 @@ def load_spec(spec):
         p['winding_config'] = validate_winding_config(p['winding_config'])
     if p['topology'] not in TOPOLOGIES:
         raise ValueError(f'topology must be one of {TOPOLOGIES}')
+    from cot_settings import validate as validate_cot, active as cot_active, COT_MODE
+    p['buck_phases'] = validate_cot(p)
+    if cot_active(p):
+        p['control_mode'] = COT_MODE
+        from cot_settings import configuration as cot_configuration
+        cot_explicit_phases = 'phase_parameters' in (p.get('cot_config') or {})
+        p['cot_config'] = cot_configuration(p)
+        if not cot_explicit_phases:
+            p['cot_config'].pop('phase_parameters',None)
+        from cot_buck_spice import normalize_cot_settings
+        p['spice_config'] = normalize_cot_settings(p.get('spice_config'), p['f_sw'])
+    else:
+        from spice_export import normalize_settings
+        p['spice_config'] = normalize_settings(p.get('spice_config'))
     p['controller_type'] = plants.normalize_controller_type(p['controller_type'])
     # RCD clamp entries ride on top of DEFAULT_PARAMS like the GUI does
     for k in ('K', 'Kc', 'dC'):

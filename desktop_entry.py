@@ -5,6 +5,9 @@ import multiprocessing
 def main():
     multiprocessing.freeze_support()
     import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--transformer-preview':
+        from transformer_preview_host import main as preview_main
+        raise SystemExit(preview_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == '--field-worker':
         from field_worker import main as field_main
         raise SystemExit(field_main(sys.argv[2:]))

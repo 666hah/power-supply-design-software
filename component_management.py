@@ -8,8 +8,7 @@ import copy
 import math
 
 SOURCE = '器件降额规范速查表.xlsx'
-SOURCE_NOTE = ('用户提供的整理版速查表；I/II 区定义须按原规范确认。'
-               '表2注4～10缺失；仅作初筛，不覆盖温度、寿命、浪涌、SOA或安规。')
+SOURCE_NOTE = 'I/II 区和表2注4～10请查原规范。热态、浪涌和寿命另行核查。'
 STATUS = {'pass': '模型内满足', 'review': '超出限值', 'undefined': '待补充/复核', 'na': '不适用'}
 CAP_TYPES = {'unknown': '未选类型', 'electrolytic': '非固体铝电解', 'mlcc': 'MLCC', 'film': '薄膜', 'other': '其他/自定义'}
 # (label, I, II, workbook cell range). Merged D:E cells apply to both zones.
@@ -33,6 +32,9 @@ RATING_FIELDS = ('voltage_V', 'ripple_A', 'power_W')
 
 def primary_mos_role(p):
     """Identity projection only: polarity does not change the amplitude model."""
+    from cot_settings import active
+    if active(p):
+        return '各相高侧 N-MOS'
     item = ((p.get('component_management') or {}).get('items') or {}).get('Q1') or {}
     condition = str(item.get('conditions', '')).casefold()
     if any(token in condition for token in ('p-channel', 'p channel', 'p沟道', 'p 沟道')):
@@ -42,6 +44,15 @@ def primary_mos_role(p):
 
 def controller_reference(p):
     """A selected IC reference, never an invented pin-level circuit."""
+    from cot_settings import active
+    if active(p):
+        config=p.get('cot_config') or {}
+        enhanced=config.get('model')=='current_feedback'
+        item=((p.get('component_management') or {}).get('items') or {}).get('U_CTRL') or {}
+        identity=' '.join(str(item.get(k) or '').strip() for k in ('manufacturer','model')).strip()
+        structure='总电流反馈 · 逐相均流 · 导通定时' if enhanced else '输出反馈触发 · 导通定时 · 逐相调度'
+        return dict(ref='U_CTRL', role='COT 控制结构参考',
+                    values=(identity+'；' if identity else '')+structure, keys=())
     if p.get('feedback_mode') == 'PSR-MP6005':
         return None
     item = ((p.get('component_management') or {}).get('items') or {}).get('U_CTRL')
@@ -108,11 +119,15 @@ def component_registry(p, res=None):
     checked. Multi-output capacitors/rectifiers have independent identities.
     """
     rows = []
+    from cot_settings import active
+    cot = active(p)
+    phases = int(p.get('buck_phases', 1)) if cot else 1
     def add(ref, kind, role, value=''):
         rows.append(dict(ref=ref, kind=kind, role=role, values=value))
     add('J1', 'connector', '输入端口')
     add('Q1', 'mos', primary_mos_role(p))
-    add('R_S1', 'resistor', '主开关采样电阻', f"Rs={p.get('Rs', 0):g} Ω")
+    if not cot or p.get('Rs', 0) > 0:
+        add('R_S1', 'resistor', '每相高侧采样电阻' if cot else '主开关采样电阻', f"Rs={p.get('Rs', 0):g} Ω")
     controller = controller_reference(p)
     if controller is not None:
         add(controller['ref'], 'controller', controller['role'], controller['values'])
@@ -122,7 +137,9 @@ def component_registry(p, res=None):
         add('T1', 'magnetic', '共享变压器')
     if not isolated or (topo == 'ACF-FORWARD' and not p.get('outputs')):
         add('L1', 'magnetic', '储能/输出电感')
-    if topo == 'ACF-FORWARD':
+    if cot:
+        add('Q2', 'mos', '各相低侧同步 N-MOS')
+    elif topo == 'ACF-FORWARD':
         add('Q2', 'mos', '有源钳位 MOS')
         add('C_CL1', 'capacitor', '有源钳位电容')
     from capacitor_banks import bank,output_ref
@@ -143,7 +160,8 @@ def component_registry(p, res=None):
         i = rail['id']
         label = f'OUT{i} · ' if multi_refs else ''
         add(f'J_O{i}' if multi_refs else 'J2', 'connector', label+'输出端口')
-        add(f'D_O{i}' if multi_refs else 'D1', 'diode', label+'整流/续流二极管')
+        if not cot:
+            add(f'D_O{i}' if multi_refs else 'D1', 'diode', label+'整流/续流二极管')
         for j,_ in enumerate(bank(rail),1):add(output_ref(i,j,multi_refs),'capacitor',label+'输出电容 '+str(j))
         if rail.get('d_out_enable'):
             add(f'D_B{i}' if multi_refs else 'D_OUT', 'diode', label+'输出防反二极管')
@@ -160,6 +178,10 @@ def component_registry(p, res=None):
             add(ref, 'capacitor', 'MP6005 '+ref)
     elif isolated and p.get('outputs'):
         add('U_FB', 'block', '主反馈通路（模块参考，非展开 BOM）')
+    if cot:
+        for row in rows:
+            if row['ref'] in ('Q1', 'Q2', 'L1', 'R_S1'):
+                row['quantity'] = phases
     if res:
         from topology_diagram import topology_components
         mapped = {x['ref']: x for x in topology_components(p, res['op'])}
@@ -200,6 +222,8 @@ def stress_map(p, res):
     from semiconductor import device_stress
     op = res['op']
     s = device_stress(op)
+    edges = {edge['ref'].split('（', 1)[0]: edge
+             for edge in (op.get('parasitics') or {}).get('edges', [])}
     data = {}
     def put(ref, key, val, note=''):
         data[(ref, key)] = (_finite(val), note)
@@ -207,22 +231,36 @@ def stress_map(p, res):
     for ref, key in [('Q1', 'switch'), ('Q2', 'auxiliary')]:
         if key not in s:
             continue
-        put(ref, 'voltage', s[key].get('V_block', s[key]['V_max']),
+        plateau = s[key].get('V_block', s[key]['V_max'])
+        put(ref, 'voltage', plateau,
             s[key].get('blocking_voltage_note', '模型稳态阻断平台，不含未建模寄生振铃。'))
-        if ref == 'Q1' and c:
+        edge = edges.get(ref)
+        if edge and edge['peak'] > plateau:
+            put(ref, 'peak_regular', max(edge['peak'], c.get('V_peak', plateau)),
+                '采用局部换流与钳位模型中的较高峰值。按稳态因数检查。')
+        elif ref == 'Q1' and c and c.get('V_peak', plateau) > plateau:
             width = c.get('t_pulse')
-            narrow = width is not None and width < min(1e-6, op['Ts']/50)
+            narrow = width is not None and 0 < width < min(1e-6, op['Ts']/50)
             put(ref, 'spike' if narrow else 'peak_regular', c.get('V_peak'),
-                ('模型尖峰宽度满足 <min(1µs,Ts/50)；' if narrow else '未证明窄尖峰宽度条件，按稳态因数；')+'三温耐压和实测振铃仍须复核。')
+                ('模型尖峰宽度 <min(1µs,Ts/50)。' if narrow else '按稳态因数检查。')+'样机复测尖峰与脉宽。')
+        elif op['topology'] == 'ACF-FORWARD' and s[key]['V_max'] > plateau:
+            put(ref, 'peak_regular', s[key]['V_max'],
+                '周期模型峰值，按稳态因数检查。' if op.get('acf_solution') else
+                '按钳位隆起和设定裕量估算选型包络，按稳态因数检查。')
         else:
             put(ref, 'spike', None, '无可用于窄尖峰放宽因数的已验证包络/宽度。')
-    put('R_S1', 'power', res.get('P_sense'), '平均耗散 I_rms²·Rs；未覆盖脉冲曲线/热态降额。')
+    sense = res.get('P_sense')
+    if sense is not None and op.get('cot'):
+        sense /= op['cot']['phases']
+    put('R_S1', 'power', sense, '单个采样电阻平均耗散 I_rms²·Rs。脉冲功率及热态额定另行核对。')
     if p.get('topology') in ('FLYBACK', 'QR-FLYBACK') and p.get('Kc', 0) > 1:
         put('R_SN1', 'power', res.get('P_rcd'), '同一钳位模型的平均电阻耗散；脉冲功率仍须按厂家曲线复核。')
-        put('C_SN1', 'voltage', c.get('V_clamp', 0)*(1+p.get('dC', .1)/2), '钳位电容直流+半峰峰纹波近似，不含振铃。')
+        voltage = c.get('V_clamp')
+        put('C_SN1', 'voltage', voltage*(1+p.get('dC', .1)/2) if voltage is not None else None,
+            '钳位电容直流加半峰峰纹波估算。')
         put('D_SN1', 'voltage', None, '钳位二极管反压未单独求解，不套用主整流二极管应力。')
     if p.get('topology') == 'ACF-FORWARD':
-        put('C_CL1', 'voltage', op.get('V_clamp'), '仅钳位电容稳态直流电压，未求解电压纹波峰值。')
+        put('C_CL1', 'voltage', op['V_clamp'] + op['V_clamp_hump'], '钳位电容直流与纹波峰值之和。')
         put('C_CL1', 'ripple', op.get('I_clamp_rms'), '钳位电流 RMS，未含未建模振铃。')
     vi = _input_cap_voltage(p, res)
     for i, cap in enumerate(res.get('capacitors', {}).get('input', {}).get('caps', []), 1):
@@ -234,9 +272,14 @@ def stress_map(p, res):
         i, rop = rail['id'], rail['op']
         rs = device_stress(rop)
         rect = f'D_O{i}' if multi else 'D1'
-        put(rect, 'voltage', rs['diode']['V_max'], '未考虑寄生尖峰；具体反压须实测，选型留有余量。')
+        reverse_basis = ('含局部换流峰值' if rect in edges else
+                         '周期模型峰值' if op.get('acf_solution') else '未考虑寄生尖峰')
+        if 'diode' in rs:
+            put(rect, 'voltage', rs['diode']['V_max'],
+                reverse_basis + '，样机复测。')
         if 'freewheel' in rs:
-            put(f'D_F{i}' if multi else 'D2', 'voltage', rs['freewheel']['V_max'], '未考虑寄生尖峰，须实测。')
+            put(f'D_F{i}' if multi else 'D2', 'voltage', rs['freewheel']['V_max'],
+                ('周期模型峰值' if op.get('acf_solution') else '未考虑寄生尖峰') + '，样机复测。')
         # Blocking reverse voltage depends on external back-feed conditions.
         put(f'D_B{i}' if multi else 'D_OUT', 'voltage', None, '防反二极管需外部反接/回灌最大电压，不能用正向输出电压代替。')
         wf = res['wf']['outputs'][i-1] if res.get('outputs') else res['wf']
@@ -258,7 +301,7 @@ def evaluate_components(p, res=None):
         ref, kind = component['ref'], component['kind']
         item = config['items'].get(ref, {})
         row = dict(component, **{key:copy.deepcopy(item.get(key)) for key in (*TEXT_FIELDS, *RATING_FIELDS, 'capacitor_type')})
-        row['quantity'] = 0 if kind == 'block' or ref == 'N_A' else 1
+        row['quantity'] = component.get('quantity', 0 if kind == 'block' or ref == 'N_A' else 1)
         row_checks = []
         def check(metric, rule_key, rating_key, unit, actual_key=None, note=''):
             rule = rule_for(config, rule_key)
@@ -307,7 +350,21 @@ def evaluate_components(p, res=None):
     return dict(version=1, zone=config['zone'], source=SOURCE, note=SOURCE_NOTE, rows=rows, checks=checks,
                 counts={s:sum(c['state']==s for c in checks) for s in STATUS},
                 inactive_refs=sorted(set(config['items'])-active),
-                scope='当前输入/负载模型内初筛；非完整物料清单，非全角点/温度或合规认证')
+                scope='核查范围为本工况的关键功率器件。')
+
+
+def stress_groups(data):
+    """Group the report projection while keeping full per-device API evidence."""
+    groups = []
+    for kind, title in (('mos', 'MOS 应力与降额'), ('diode', '二极管应力与降额'),
+                        ('capacitor', '电容应力与降额'), ('resistor', '电阻功耗与降额')):
+        checks = [check for row in data['rows'] if row['kind'] == kind
+                  for check in row.get('checks', [])
+                  if not ((kind == 'diode' and check['metric'] == 'spike') or
+                          (kind == 'mos' and check['metric'] == 'peak' and check['value'] is None))]
+        if checks:
+            groups.append(dict(kind=kind, title=title, checks=checks))
+    return groups
 
 
 def rating_text(row):

@@ -35,7 +35,11 @@ class EngineChecks(unittest.TestCase):
         self.assertEqual(snap['op']['mode'],'CCM')
         lcheck=next(c for c in snap['checks'] if c['id']=='L_min')
         self.assertIn('40%',lcheck['note'])
-        self.assertIn('不是 CCM 临界值',lcheck['note'])
+        self.assertIn('原边谷值',lcheck['note'])
+        self.assertLess(lcheck['value'], lcheck['limit'])
+        self.assertEqual(lcheck['state'], 'reference')
+        self.assertIsNone(lcheck['margin'])
+        self.assertNotIn('L_min', run_design(DEFAULT_PARAMS)['failed_checks'])
         # The saved compensator is preserved; the changed plant needs review,
         # not a silent retune to its historical target.
         from design_api import loop_margins_for
@@ -136,7 +140,7 @@ class EngineChecks(unittest.TestCase):
         strip=main.PowerSupplyAnalyzer._power_checks(res['op'],res['wf'],res,p)
         self.assertIn('不适用',strip)
         markdown=main.build_markdown_report(p,res['op'],res['wf'],res)
-        self.assertIn('电感量与设计初选建议',markdown)
+        self.assertIn('励磁电感 Lm 初选参考',markdown)
         self.assertIn('不适用',markdown)
 
 

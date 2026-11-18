@@ -44,9 +44,12 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
         warnings.append(f"反激 CCM 存在右半平面零点 f_RHPZ = {op['rhp_zero']:.0f} Hz, fc 应远低于它")
     if p.get('Kc') and p['Kc'] > 1.0 and op['topology'] in ('FLYBACK','QR-FLYBACK'):
         warnings.append('RCD 钳位电压为设定上限，实际包络峰值及钳位功耗来自同一模型；零漏感不产生虚假尖峰')
-    warnings.append('效率为模型计算值，未计温度/辅助电路/整流桥/EMI 等附加损耗；误差需实测确定，不保证实测上限')
-    warnings.append('逐对耦合模型以预设效率初始化，显式支路压降参与求解；最终效率仍汇总额外工程损耗，不覆盖预设。' if op.get('coupled_model') else
-                    '工作点按预设效率的等效输出负担求解；最终效率独立反算，不覆盖输入，也不宣称逐器件损耗自洽。')
+    warnings.append('模型效率待补温度、辅助供电、整流桥及 EMI 滤波损耗。')
+    if op.get('cot'):
+        warnings.append('每相电流按同参数均流的同步功率级估计。效率按全相器件损耗汇总。')
+    else:
+        warnings.append('耦合求解包含支路压降，以预设效率初始化。最终效率汇总器件损耗。' if op.get('coupled_model') else
+                        '工作点按预设效率折算负载。最终效率根据器件损耗反算。')
     warnings.extend(op.get('warnings', []))
     warnings.extend(res['semi']['switch'].get('gate', {}).get('notes', []))
     for model in res.get('diode_models',[]):
@@ -91,7 +94,8 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
         magnetics=(dict(ok=True, core=mdev.get('core'), core_label=mdev.get('core_label'),
                         core_geometry=copy.deepcopy(mdev.get('core_geometry')),
                         Ae=mdev.get('Ae'), Ve=mdev.get('Ve'), Wa=mdev.get('Wa'),
-                        MLT=mdev.get('MLT'), MLT_source=mdev.get('MLT_source'), Np=mdev.get('Np'),
+                        MLT=mdev.get('MLT'), MLT_source=mdev.get('MLT_source'),
+                        copper_length_m=mdev.get('copper_length_m'), Np=mdev.get('Np'),
                         Ns=mdev.get('Ns'), N=mdev.get('N'),
                         gap=mdev.get('gap'), B_pk=mdev['B_pk'],
                         dB=mdev['dB'], P_cu=float(mdev['P_cu']),
@@ -114,6 +118,8 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
         failed_checks=[c['id'] for c in failed],
         warnings=warnings,
     )
+    if op.get('cot'):
+        report['cot'] = copy.deepcopy(op['cot'])
     if op['topology'] == 'ACF-FORWARD':
         report['active_clamp'] = {k: float(op[k]) for k in (
             'Lm_forward','C_clamp','V_clamp','V_reset','V_clamp_hump',
@@ -138,6 +144,11 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
         V_out=r['op']['V_out'],mode=r['op'].get('branch_mode',r['op']['mode']),
         I_d_pk=r['op']['I_d_pk'],I_d_rms=r['op']['I_d_rms'],V_d_max=r['op']['V_d_max'],
         ripple_pp=r['ripple_pp'],P_rectifier=r['P_rectifier'],P_cap=r['P_cap'],P_dout=r['P_dout']) for r in res.get('outputs',[])]
+    if wf.get('ripple_impedance_model') == 'curve':
+        report['operating_point']['ripple_pp_impedance'] = float(wf['ripple_pp_total'])
+    for output, output_wf in zip(report['outputs'], wf.get('outputs', [])):
+        if output_wf.get('ripple_impedance_model') == 'curve':
+            output['ripple_pp_impedance'] = float(output_wf['ripple_pp_total'])
     if op.get('coupled_model'):
         report['operating_point']['rhp_zero_scope'] = 'nominal-reference-only; use loop model bandwidth and limitations'
         report['coupling'] = copy.deepcopy(op['coupled_model'])
@@ -145,6 +156,8 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
         report['flyback_clamp'] = copy.deepcopy(op['clamp'])
     if md.get('transformer',{}).get('windings'):
         report['magnetics']['windings'] = copy.deepcopy(md['transformer']['windings'])
+    if md.get('transformer',{}).get('winding_lengths'):
+        report['magnetics']['winding_lengths'] = copy.deepcopy(md['transformer']['winding_lengths'])
     if md.get('inductors'): report['magnetics']['inductors'] = copy.deepcopy(md['inductors'])
     if range_snapshot is not None:
         report['input_voltage_range'] = dict(

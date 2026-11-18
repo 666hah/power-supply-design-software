@@ -114,6 +114,9 @@ def analyze_loop(p, models, op=None, n=6000):
                 gm_db=gm_db, gm_infinite=gm_infinite, crosses=crosses,
                 all_crosses=all_crosses,
                 min_pm=min((v['pm'] for v in all_crosses), default=None))
+    if op is not None:
+        from loop_load_step import feedback_load_step
+        result['load_step'] = feedback_load_step(p, models, op)
     if metadata:
         result['model'] = dict(metadata)
         result['gm_band_limited'] = bool(limit)

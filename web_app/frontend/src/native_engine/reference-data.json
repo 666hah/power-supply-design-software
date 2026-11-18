@@ -3714,6 +3714,7 @@
         "simulation_threads": "线程",
         "qr_cds_pf": "Cds",
         "qr_aux_ratio": "Naux/Np",
+        "qr_zcd_winding": "检测绕组",
         "qr_zcd_r": "Rz",
         "qr_zcd_c_pf": "Cz",
         "qr_zcd_delay_ns": "延时",
@@ -3749,7 +3750,1291 @@
         "include_cap_esl": {
           "0": "不含",
           "1": "包含"
+        },
+        "qr_zcd_winding": {
+          "-1": "自动绕组",
+          "0": "历史原边端电压",
+          "1": "OUT1",
+          "2": "OUT2",
+          "3": "OUT3",
+          "4": "OUT4",
+          "5": "OUT5",
+          "6": "OUT6"
         }
+      },
+      "schematic": {
+        "width": 850,
+        "height": 414,
+        "title": "反激 · 通用固定频率 PWM 模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电流斜坡混合",
+            "detail": "CS × 增益 + 斜坡",
+            "parameter": "slope_mode"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                309,
+                242
+              ],
+              [
+                332,
+                242
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ]
+        ]
+      },
+      "schematic_voltage": {
+        "width": 850,
+        "height": 414,
+        "title": "反激 · 通用固定频率 PWM 模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电压模式斜坡",
+            "detail": "锯齿调制"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                403,
+                105
+              ],
+              [
+                403,
+                222
+              ]
+            ],
+            "arrow": true,
+            "label": "锯齿",
+            "label_at": [
+              427,
+              151
+            ]
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ]
+        ]
       },
       "parameters": {
         "frequency_hz": {
@@ -4080,6 +5365,14 @@
           "unit": "",
           "group": "测试与对比报告"
         },
+        "simulation_reuse": {
+          "node": "test",
+          "purpose": "复用同一设计已通过检查的标称仿真，减少重复运行。",
+          "meaning": "电路、计算结果、后处理版本或检查阈值变化会重新运行。FRA、交叉负载和短路测试仍实际执行；报告保留来源时间。",
+          "label": "复用相同设计已通过的标称仿真",
+          "unit": "",
+          "group": "测试与对比报告"
+        },
         "comparison_tolerance_pct": {
           "node": "test",
           "purpose": "给设计计算与实测仿真差异设置提示阈值。",
@@ -4178,9 +5471,9 @@
         },
         "niso_inductor_dcr": {
           "node": "power",
-          "purpose": "电感 DCR，-1=由磁件几何计算",
+          "purpose": "自制电感 DCR 覆盖，-1=几何；成品取主界面 DCR",
           "meaning": "-1 根据匝数、MLT、线径计算；非负值为明确的实测/选型覆盖，两端共用。",
-          "label": "电感 DCR，-1=由磁件几何计算",
+          "label": "自制电感 DCR 覆盖，-1=几何；成品取主界面 DCR",
           "unit": "Ω",
           "group": "Buck / Boost 原型"
         },
@@ -4199,6 +5492,1935 @@
           "label": "LM5022 外部 CS 滤波串阻（影响斜坡）",
           "unit": "Ω",
           "group": "Buck / Boost 原型"
+        }
+      },
+      "schematic_variants": {
+        "1": {
+          "width": 850,
+          "height": 414,
+          "title": "TPS40200 参考 · Buck 电压模式",
+          "boundary": [
+            116,
+            29,
+            618,
+            346
+          ],
+          "items": [
+            {
+              "id": "vcc",
+              "key": "start",
+              "kind": "pin",
+              "x": 116,
+              "y": 79,
+              "w": 0,
+              "h": 0,
+              "label": "VCC / EN",
+              "side": "left"
+            },
+            {
+              "id": "fb",
+              "key": "feedback",
+              "kind": "pin",
+              "x": 116,
+              "y": 190,
+              "w": 0,
+              "h": 0,
+              "label": "FB",
+              "side": "left"
+            },
+            {
+              "id": "cs",
+              "key": "sense",
+              "kind": "pin",
+              "x": 116,
+              "y": 242,
+              "w": 0,
+              "h": 0,
+              "label": "CS",
+              "side": "left"
+            },
+            {
+              "id": "gnd",
+              "key": "start",
+              "kind": "pin",
+              "x": 734,
+              "y": 295,
+              "w": 0,
+              "h": 0,
+              "label": "GND",
+              "side": "right"
+            },
+            {
+              "id": "gate",
+              "key": "drive",
+              "kind": "pin",
+              "x": 734,
+              "y": 175,
+              "w": 0,
+              "h": 0,
+              "label": "GDRV",
+              "side": "right"
+            },
+            {
+              "id": "uvlo",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 59,
+              "w": 130,
+              "h": 40,
+              "label": "EN / UVLO",
+              "parameter": "uvlo"
+            },
+            {
+              "id": "ss",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 112,
+              "w": 130,
+              "h": 38,
+              "label": "软启动 SS",
+              "parameter": "soft_start_ms"
+            },
+            {
+              "id": "clock",
+              "key": "clock",
+              "kind": "block",
+              "x": 352,
+              "y": 61,
+              "w": 128,
+              "h": 44,
+              "label": "振荡器",
+              "detail": "时钟 / Dmax",
+              "parameter": "frequency_hz"
+            },
+            {
+              "id": "permit",
+              "key": "start",
+              "kind": "block",
+              "x": 518,
+              "y": 138,
+              "w": 32,
+              "h": 38,
+              "label": "开"
+            },
+            {
+              "id": "latch",
+              "key": "drive",
+              "kind": "latch",
+              "x": 555,
+              "y": 139,
+              "w": 74,
+              "h": 111,
+              "label": "锁存",
+              "pins": [
+                {
+                  "name": "S",
+                  "x": 568,
+                  "y": 158
+                },
+                {
+                  "name": "R",
+                  "x": 568,
+                  "y": 231
+                },
+                {
+                  "name": "Q",
+                  "x": 616,
+                  "y": 175
+                }
+              ]
+            },
+            {
+              "id": "driver",
+              "key": "drive",
+              "kind": "driver",
+              "x": 654,
+              "y": 149,
+              "w": 57,
+              "h": 52,
+              "label": "驱动",
+              "parameter": "driver_resistance"
+            },
+            {
+              "id": "feedback",
+              "key": "feedback",
+              "kind": "block",
+              "x": 153,
+              "y": 170,
+              "w": 130,
+              "h": 41,
+              "label": "误差与补偿",
+              "detail": "COMP",
+              "parameter": "kp"
+            },
+            {
+              "id": "sense",
+              "key": "sense",
+              "kind": "block",
+              "x": 153,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "采样滤波",
+              "detail": "RC / LEB",
+              "parameter": "cs_filter_ns"
+            },
+            {
+              "id": "ramp",
+              "key": "clock",
+              "kind": "block",
+              "x": 332,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "VIN 前馈斜坡",
+              "detail": "锯齿调制",
+              "parameter": "niso_ramp_ratio"
+            },
+            {
+              "id": "pwm",
+              "key": "pwm",
+              "kind": "comparator",
+              "x": 479,
+              "y": 180,
+              "w": 72,
+              "h": 79,
+              "label": "PWM",
+              "pins": [
+                {
+                  "name": "+",
+                  "x": 487,
+                  "y": 242
+                },
+                {
+                  "name": "−",
+                  "x": 487,
+                  "y": 197
+                }
+              ]
+            },
+            {
+              "id": "reset",
+              "key": "drive",
+              "kind": "sum",
+              "x": 506,
+              "y": 274,
+              "w": 36,
+              "h": 36,
+              "label": "≥1"
+            },
+            {
+              "id": "current_limit",
+              "key": "pwm",
+              "kind": "block",
+              "x": 332,
+              "y": 271,
+              "w": 130,
+              "h": 40,
+              "label": "逐周期限流",
+              "parameter": "cs_limit"
+            },
+            {
+              "id": "protection",
+              "key": "protect",
+              "kind": "block",
+              "x": 332,
+              "y": 326,
+              "w": 130,
+              "h": 40,
+              "label": "可选 SCP / OLP",
+              "detail": "故障 / 打嗝 / 锁存",
+              "parameter": "short_mode"
+            },
+            {
+              "id": "analog_ground",
+              "key": "start",
+              "kind": "note",
+              "x": 643,
+              "y": 284,
+              "w": 61,
+              "h": 21,
+              "label": "参考"
+            },
+            {
+              "id": "power",
+              "key": "power",
+              "kind": "note",
+              "x": 55,
+              "y": 389,
+              "w": 197,
+              "h": 18,
+              "label": "外部功率级与寄生"
+            },
+            {
+              "id": "test",
+              "key": "test",
+              "kind": "note",
+              "x": 609,
+              "y": 389,
+              "w": 165,
+              "h": 18,
+              "label": "仿真工况与测量"
+            },
+            {
+              "id": "vin",
+              "key": "clock",
+              "kind": "pin",
+              "x": 116,
+              "y": 280,
+              "w": 0,
+              "h": 0,
+              "label": "VIN",
+              "side": "left"
+            }
+          ],
+          "routes": [
+            {
+              "points": [
+                [
+                  116,
+                  79
+                ],
+                [
+                  153,
+                  79
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  99
+                ],
+                [
+                  218,
+                  112
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  150
+                ],
+                [
+                  218,
+                  170
+                ]
+              ],
+              "arrow": true,
+              "label": "SS",
+              "label_at": [
+                233,
+                161
+              ]
+            },
+            {
+              "points": [
+                [
+                  480,
+                  83
+                ],
+                [
+                  533,
+                  83
+                ],
+                [
+                  533,
+                  138
+                ]
+              ],
+              "arrow": true,
+              "label": "周期开始",
+              "label_at": [
+                506,
+                72
+              ]
+            },
+            {
+              "points": [
+                [
+                  460,
+                  105
+                ],
+                [
+                  460,
+                  152
+                ],
+                [
+                  476,
+                  152
+                ],
+                [
+                  476,
+                  279
+                ],
+                [
+                  510,
+                  279
+                ]
+              ],
+              "arrow": true,
+              "label": "Dmax",
+              "label_at": [
+                451,
+                137
+              ]
+            },
+            {
+              "points": [
+                [
+                  550,
+                  157
+                ],
+                [
+                  555,
+                  157
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  79
+                ],
+                [
+                  307,
+                  79
+                ],
+                [
+                  307,
+                  119
+                ],
+                [
+                  511,
+                  119
+                ],
+                [
+                  511,
+                  149
+                ],
+                [
+                  518,
+                  149
+                ]
+              ],
+              "arrow": true,
+              "label": "RUN",
+              "label_at": [
+                324,
+                106
+              ]
+            },
+            {
+              "points": [
+                [
+                  116,
+                  190
+                ],
+                [
+                  153,
+                  190
+                ]
+              ],
+              "arrow": true,
+              "tone": "external"
+            },
+            {
+              "points": [
+                [
+                  283,
+                  190
+                ],
+                [
+                  479,
+                  190
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  116,
+                  242
+                ],
+                [
+                  153,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  242
+                ],
+                [
+                  479,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  551,
+                  219.5
+                ],
+                [
+                  551,
+                  295
+                ],
+                [
+                  542,
+                  295
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  537,
+                  280
+                ],
+                [
+                  549,
+                  280
+                ],
+                [
+                  549,
+                  231
+                ],
+                [
+                  555,
+                  231
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  242
+                ],
+                [
+                  309,
+                  242
+                ],
+                [
+                  309,
+                  345
+                ],
+                [
+                  332,
+                  345
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  309,
+                  291
+                ],
+                [
+                  332,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  291
+                ],
+                [
+                  506,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  345
+                ],
+                [
+                  524,
+                  345
+                ],
+                [
+                  524,
+                  310
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  629,
+                  175
+                ],
+                [
+                  654,
+                  175
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  711,
+                  175
+                ],
+                [
+                  734,
+                  175
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  734,
+                  295
+                ],
+                [
+                  707,
+                  295
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  116,
+                  280
+                ],
+                [
+                  295,
+                  280
+                ],
+                [
+                  295,
+                  251
+                ],
+                [
+                  332,
+                  251
+                ]
+              ],
+              "arrow": true
+            }
+          ],
+          "junctions": [
+            [
+              309,
+              242
+            ],
+            [
+              309,
+              291
+            ]
+          ],
+          "source": "https://www.ti.com/lit/ds/symlink/tps40200.pdf"
+        },
+        "2": {
+          "width": 850,
+          "height": 414,
+          "title": "LTC3864 参考 · Buck 峰值电流",
+          "boundary": [
+            116,
+            29,
+            618,
+            346
+          ],
+          "items": [
+            {
+              "id": "vcc",
+              "key": "start",
+              "kind": "pin",
+              "x": 116,
+              "y": 79,
+              "w": 0,
+              "h": 0,
+              "label": "VCC / EN",
+              "side": "left"
+            },
+            {
+              "id": "fb",
+              "key": "feedback",
+              "kind": "pin",
+              "x": 116,
+              "y": 190,
+              "w": 0,
+              "h": 0,
+              "label": "FB",
+              "side": "left"
+            },
+            {
+              "id": "cs",
+              "key": "sense",
+              "kind": "pin",
+              "x": 116,
+              "y": 242,
+              "w": 0,
+              "h": 0,
+              "label": "SENSE",
+              "side": "left"
+            },
+            {
+              "id": "gnd",
+              "key": "start",
+              "kind": "pin",
+              "x": 734,
+              "y": 295,
+              "w": 0,
+              "h": 0,
+              "label": "GND",
+              "side": "right"
+            },
+            {
+              "id": "gate",
+              "key": "drive",
+              "kind": "pin",
+              "x": 734,
+              "y": 175,
+              "w": 0,
+              "h": 0,
+              "label": "GATE",
+              "side": "right"
+            },
+            {
+              "id": "uvlo",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 59,
+              "w": 130,
+              "h": 40,
+              "label": "EN / UVLO",
+              "parameter": "uvlo"
+            },
+            {
+              "id": "ss",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 112,
+              "w": 130,
+              "h": 38,
+              "label": "软启动 SS",
+              "parameter": "soft_start_ms"
+            },
+            {
+              "id": "clock",
+              "key": "clock",
+              "kind": "block",
+              "x": 352,
+              "y": 61,
+              "w": 128,
+              "h": 44,
+              "label": "振荡器",
+              "detail": "时钟 / Dmax",
+              "parameter": "frequency_hz"
+            },
+            {
+              "id": "permit",
+              "key": "start",
+              "kind": "block",
+              "x": 518,
+              "y": 138,
+              "w": 32,
+              "h": 38,
+              "label": "开"
+            },
+            {
+              "id": "latch",
+              "key": "drive",
+              "kind": "latch",
+              "x": 555,
+              "y": 139,
+              "w": 74,
+              "h": 111,
+              "label": "锁存",
+              "pins": [
+                {
+                  "name": "S",
+                  "x": 568,
+                  "y": 158
+                },
+                {
+                  "name": "R",
+                  "x": 568,
+                  "y": 231
+                },
+                {
+                  "name": "Q",
+                  "x": 616,
+                  "y": 175
+                }
+              ]
+            },
+            {
+              "id": "driver",
+              "key": "drive",
+              "kind": "driver",
+              "x": 654,
+              "y": 149,
+              "w": 57,
+              "h": 52,
+              "label": "驱动",
+              "parameter": "driver_resistance"
+            },
+            {
+              "id": "feedback",
+              "key": "feedback",
+              "kind": "block",
+              "x": 153,
+              "y": 170,
+              "w": 130,
+              "h": 41,
+              "label": "误差与补偿",
+              "detail": "ITH",
+              "parameter": "kp"
+            },
+            {
+              "id": "sense",
+              "key": "sense",
+              "kind": "block",
+              "x": 153,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "采样滤波",
+              "detail": "RC / LEB",
+              "parameter": "cs_filter_ns"
+            },
+            {
+              "id": "ramp",
+              "key": "pwm",
+              "kind": "block",
+              "x": 332,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "电流斜坡混合",
+              "detail": "CS × 增益 + 斜坡",
+              "parameter": "slope_mode"
+            },
+            {
+              "id": "pwm",
+              "key": "pwm",
+              "kind": "comparator",
+              "x": 479,
+              "y": 180,
+              "w": 72,
+              "h": 79,
+              "label": "PWM",
+              "pins": [
+                {
+                  "name": "+",
+                  "x": 487,
+                  "y": 242
+                },
+                {
+                  "name": "−",
+                  "x": 487,
+                  "y": 197
+                }
+              ]
+            },
+            {
+              "id": "reset",
+              "key": "drive",
+              "kind": "sum",
+              "x": 506,
+              "y": 274,
+              "w": 36,
+              "h": 36,
+              "label": "≥1"
+            },
+            {
+              "id": "current_limit",
+              "key": "pwm",
+              "kind": "block",
+              "x": 332,
+              "y": 271,
+              "w": 130,
+              "h": 40,
+              "label": "逐周期限流",
+              "parameter": "cs_limit"
+            },
+            {
+              "id": "protection",
+              "key": "protect",
+              "kind": "block",
+              "x": 332,
+              "y": 326,
+              "w": 130,
+              "h": 40,
+              "label": "可选 SCP / OLP",
+              "detail": "故障 / 打嗝 / 锁存",
+              "parameter": "short_mode"
+            },
+            {
+              "id": "analog_ground",
+              "key": "start",
+              "kind": "note",
+              "x": 643,
+              "y": 284,
+              "w": 61,
+              "h": 21,
+              "label": "参考"
+            },
+            {
+              "id": "power",
+              "key": "power",
+              "kind": "note",
+              "x": 55,
+              "y": 389,
+              "w": 197,
+              "h": 18,
+              "label": "外部功率级与寄生"
+            },
+            {
+              "id": "test",
+              "key": "test",
+              "kind": "note",
+              "x": 609,
+              "y": 389,
+              "w": 165,
+              "h": 18,
+              "label": "仿真工况与测量"
+            }
+          ],
+          "routes": [
+            {
+              "points": [
+                [
+                  116,
+                  79
+                ],
+                [
+                  153,
+                  79
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  99
+                ],
+                [
+                  218,
+                  112
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  150
+                ],
+                [
+                  218,
+                  170
+                ]
+              ],
+              "arrow": true,
+              "label": "SS",
+              "label_at": [
+                233,
+                161
+              ]
+            },
+            {
+              "points": [
+                [
+                  480,
+                  83
+                ],
+                [
+                  533,
+                  83
+                ],
+                [
+                  533,
+                  138
+                ]
+              ],
+              "arrow": true,
+              "label": "周期开始",
+              "label_at": [
+                506,
+                72
+              ]
+            },
+            {
+              "points": [
+                [
+                  460,
+                  105
+                ],
+                [
+                  460,
+                  152
+                ],
+                [
+                  476,
+                  152
+                ],
+                [
+                  476,
+                  279
+                ],
+                [
+                  510,
+                  279
+                ]
+              ],
+              "arrow": true,
+              "label": "Dmax",
+              "label_at": [
+                451,
+                137
+              ]
+            },
+            {
+              "points": [
+                [
+                  550,
+                  157
+                ],
+                [
+                  555,
+                  157
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  79
+                ],
+                [
+                  307,
+                  79
+                ],
+                [
+                  307,
+                  119
+                ],
+                [
+                  511,
+                  119
+                ],
+                [
+                  511,
+                  149
+                ],
+                [
+                  518,
+                  149
+                ]
+              ],
+              "arrow": true,
+              "label": "RUN",
+              "label_at": [
+                324,
+                106
+              ]
+            },
+            {
+              "points": [
+                [
+                  116,
+                  190
+                ],
+                [
+                  153,
+                  190
+                ]
+              ],
+              "arrow": true,
+              "tone": "external"
+            },
+            {
+              "points": [
+                [
+                  283,
+                  190
+                ],
+                [
+                  479,
+                  190
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  116,
+                  242
+                ],
+                [
+                  153,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  242
+                ],
+                [
+                  479,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  551,
+                  219.5
+                ],
+                [
+                  551,
+                  295
+                ],
+                [
+                  542,
+                  295
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  537,
+                  280
+                ],
+                [
+                  549,
+                  280
+                ],
+                [
+                  549,
+                  231
+                ],
+                [
+                  555,
+                  231
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  242
+                ],
+                [
+                  309,
+                  242
+                ],
+                [
+                  309,
+                  345
+                ],
+                [
+                  332,
+                  345
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  309,
+                  291
+                ],
+                [
+                  332,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  291
+                ],
+                [
+                  506,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  345
+                ],
+                [
+                  524,
+                  345
+                ],
+                [
+                  524,
+                  310
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  629,
+                  175
+                ],
+                [
+                  654,
+                  175
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  711,
+                  175
+                ],
+                [
+                  734,
+                  175
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  734,
+                  295
+                ],
+                [
+                  707,
+                  295
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  309,
+                  242
+                ],
+                [
+                  332,
+                  242
+                ]
+              ],
+              "arrow": true
+            }
+          ],
+          "junctions": [
+            [
+              309,
+              242
+            ],
+            [
+              309,
+              291
+            ]
+          ],
+          "source": "https://www.analog.com/media/en/technical-documentation/data-sheets/ltc3864.pdf"
+        },
+        "3": {
+          "width": 850,
+          "height": 414,
+          "title": "LM5022 参考 · Boost 峰值电流",
+          "boundary": [
+            116,
+            29,
+            618,
+            346
+          ],
+          "items": [
+            {
+              "id": "vcc",
+              "key": "start",
+              "kind": "pin",
+              "x": 116,
+              "y": 79,
+              "w": 0,
+              "h": 0,
+              "label": "VCC / EN",
+              "side": "left"
+            },
+            {
+              "id": "fb",
+              "key": "feedback",
+              "kind": "pin",
+              "x": 116,
+              "y": 190,
+              "w": 0,
+              "h": 0,
+              "label": "FB",
+              "side": "left"
+            },
+            {
+              "id": "cs",
+              "key": "sense",
+              "kind": "pin",
+              "x": 116,
+              "y": 242,
+              "w": 0,
+              "h": 0,
+              "label": "CS",
+              "side": "left"
+            },
+            {
+              "id": "gnd",
+              "key": "start",
+              "kind": "pin",
+              "x": 734,
+              "y": 295,
+              "w": 0,
+              "h": 0,
+              "label": "GND",
+              "side": "right"
+            },
+            {
+              "id": "gate",
+              "key": "drive",
+              "kind": "pin",
+              "x": 734,
+              "y": 175,
+              "w": 0,
+              "h": 0,
+              "label": "OUT",
+              "side": "right"
+            },
+            {
+              "id": "uvlo",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 59,
+              "w": 130,
+              "h": 40,
+              "label": "EN / UVLO",
+              "parameter": "uvlo"
+            },
+            {
+              "id": "ss",
+              "key": "start",
+              "kind": "block",
+              "x": 153,
+              "y": 112,
+              "w": 130,
+              "h": 38,
+              "label": "软启动 SS",
+              "parameter": "soft_start_ms"
+            },
+            {
+              "id": "clock",
+              "key": "clock",
+              "kind": "block",
+              "x": 352,
+              "y": 61,
+              "w": 128,
+              "h": 44,
+              "label": "振荡器",
+              "detail": "时钟 / Dmax",
+              "parameter": "frequency_hz"
+            },
+            {
+              "id": "permit",
+              "key": "start",
+              "kind": "block",
+              "x": 518,
+              "y": 138,
+              "w": 32,
+              "h": 38,
+              "label": "开"
+            },
+            {
+              "id": "latch",
+              "key": "drive",
+              "kind": "latch",
+              "x": 555,
+              "y": 139,
+              "w": 74,
+              "h": 111,
+              "label": "锁存",
+              "pins": [
+                {
+                  "name": "S",
+                  "x": 568,
+                  "y": 158
+                },
+                {
+                  "name": "R",
+                  "x": 568,
+                  "y": 231
+                },
+                {
+                  "name": "Q",
+                  "x": 616,
+                  "y": 175
+                }
+              ]
+            },
+            {
+              "id": "driver",
+              "key": "drive",
+              "kind": "driver",
+              "x": 654,
+              "y": 149,
+              "w": 57,
+              "h": 52,
+              "label": "驱动",
+              "parameter": "driver_resistance"
+            },
+            {
+              "id": "feedback",
+              "key": "feedback",
+              "kind": "block",
+              "x": 153,
+              "y": 170,
+              "w": 130,
+              "h": 41,
+              "label": "误差与补偿",
+              "detail": "COMP",
+              "parameter": "kp"
+            },
+            {
+              "id": "sense",
+              "key": "sense",
+              "kind": "block",
+              "x": 153,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "采样滤波",
+              "detail": "RC / LEB",
+              "parameter": "cs_filter_ns"
+            },
+            {
+              "id": "ramp",
+              "key": "pwm",
+              "kind": "block",
+              "x": 332,
+              "y": 222,
+              "w": 130,
+              "h": 40,
+              "label": "电流斜坡混合",
+              "detail": "CS × 增益 + 斜坡",
+              "parameter": "niso_lm_cs_resistor"
+            },
+            {
+              "id": "pwm",
+              "key": "pwm",
+              "kind": "comparator",
+              "x": 479,
+              "y": 180,
+              "w": 72,
+              "h": 79,
+              "label": "PWM",
+              "pins": [
+                {
+                  "name": "+",
+                  "x": 487,
+                  "y": 242
+                },
+                {
+                  "name": "−",
+                  "x": 487,
+                  "y": 197
+                }
+              ]
+            },
+            {
+              "id": "reset",
+              "key": "drive",
+              "kind": "sum",
+              "x": 506,
+              "y": 274,
+              "w": 36,
+              "h": 36,
+              "label": "≥1"
+            },
+            {
+              "id": "current_limit",
+              "key": "pwm",
+              "kind": "block",
+              "x": 332,
+              "y": 271,
+              "w": 130,
+              "h": 40,
+              "label": "逐周期限流",
+              "parameter": "cs_limit"
+            },
+            {
+              "id": "protection",
+              "key": "protect",
+              "kind": "block",
+              "x": 332,
+              "y": 326,
+              "w": 130,
+              "h": 40,
+              "label": "可选 SCP / OLP",
+              "detail": "故障 / 打嗝 / 锁存",
+              "parameter": "short_mode"
+            },
+            {
+              "id": "analog_ground",
+              "key": "start",
+              "kind": "note",
+              "x": 643,
+              "y": 284,
+              "w": 61,
+              "h": 21,
+              "label": "参考"
+            },
+            {
+              "id": "power",
+              "key": "power",
+              "kind": "note",
+              "x": 55,
+              "y": 389,
+              "w": 197,
+              "h": 18,
+              "label": "外部功率级与寄生"
+            },
+            {
+              "id": "test",
+              "key": "test",
+              "kind": "note",
+              "x": 609,
+              "y": 389,
+              "w": 165,
+              "h": 18,
+              "label": "仿真工况与测量"
+            }
+          ],
+          "routes": [
+            {
+              "points": [
+                [
+                  116,
+                  79
+                ],
+                [
+                  153,
+                  79
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  99
+                ],
+                [
+                  218,
+                  112
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  218,
+                  150
+                ],
+                [
+                  218,
+                  170
+                ]
+              ],
+              "arrow": true,
+              "label": "SS",
+              "label_at": [
+                233,
+                161
+              ]
+            },
+            {
+              "points": [
+                [
+                  480,
+                  83
+                ],
+                [
+                  533,
+                  83
+                ],
+                [
+                  533,
+                  138
+                ]
+              ],
+              "arrow": true,
+              "label": "周期开始",
+              "label_at": [
+                506,
+                72
+              ]
+            },
+            {
+              "points": [
+                [
+                  460,
+                  105
+                ],
+                [
+                  460,
+                  152
+                ],
+                [
+                  476,
+                  152
+                ],
+                [
+                  476,
+                  279
+                ],
+                [
+                  510,
+                  279
+                ]
+              ],
+              "arrow": true,
+              "label": "Dmax",
+              "label_at": [
+                451,
+                137
+              ]
+            },
+            {
+              "points": [
+                [
+                  550,
+                  157
+                ],
+                [
+                  555,
+                  157
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  79
+                ],
+                [
+                  307,
+                  79
+                ],
+                [
+                  307,
+                  119
+                ],
+                [
+                  511,
+                  119
+                ],
+                [
+                  511,
+                  149
+                ],
+                [
+                  518,
+                  149
+                ]
+              ],
+              "arrow": true,
+              "label": "RUN",
+              "label_at": [
+                324,
+                106
+              ]
+            },
+            {
+              "points": [
+                [
+                  116,
+                  190
+                ],
+                [
+                  153,
+                  190
+                ]
+              ],
+              "arrow": true,
+              "tone": "external"
+            },
+            {
+              "points": [
+                [
+                  283,
+                  190
+                ],
+                [
+                  479,
+                  190
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  116,
+                  242
+                ],
+                [
+                  153,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  242
+                ],
+                [
+                  479,
+                  242
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  551,
+                  219.5
+                ],
+                [
+                  551,
+                  295
+                ],
+                [
+                  542,
+                  295
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  537,
+                  280
+                ],
+                [
+                  549,
+                  280
+                ],
+                [
+                  549,
+                  231
+                ],
+                [
+                  555,
+                  231
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  283,
+                  242
+                ],
+                [
+                  309,
+                  242
+                ],
+                [
+                  309,
+                  345
+                ],
+                [
+                  332,
+                  345
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  309,
+                  291
+                ],
+                [
+                  332,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  291
+                ],
+                [
+                  506,
+                  291
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  462,
+                  345
+                ],
+                [
+                  524,
+                  345
+                ],
+                [
+                  524,
+                  310
+                ]
+              ],
+              "arrow": true,
+              "tone": "protection"
+            },
+            {
+              "points": [
+                [
+                  629,
+                  175
+                ],
+                [
+                  654,
+                  175
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  711,
+                  175
+                ],
+                [
+                  734,
+                  175
+                ]
+              ],
+              "arrow": true
+            },
+            {
+              "points": [
+                [
+                  734,
+                  295
+                ],
+                [
+                  707,
+                  295
+                ]
+              ],
+              "arrow": false
+            },
+            {
+              "points": [
+                [
+                  309,
+                  242
+                ],
+                [
+                  332,
+                  242
+                ]
+              ],
+              "arrow": true
+            }
+          ],
+          "junctions": [
+            [
+              309,
+              242
+            ],
+            [
+              309,
+              291
+            ]
+          ],
+          "source": "https://www.ti.com/lit/ds/symlink/lm5022.pdf"
         }
       }
     },
@@ -4537,6 +7759,7 @@
         "simulation_threads": "线程",
         "qr_cds_pf": "Cds",
         "qr_aux_ratio": "Naux/Np",
+        "qr_zcd_winding": "检测绕组",
         "qr_zcd_r": "Rz",
         "qr_zcd_c_pf": "Cz",
         "qr_zcd_delay_ns": "延时",
@@ -4574,7 +7797,1413 @@
         "include_cap_esl": {
           "0": "不含",
           "1": "包含"
+        },
+        "qr_zcd_winding": {
+          "-1": "自动绕组",
+          "0": "历史原边端电压",
+          "1": "OUT1",
+          "2": "OUT2",
+          "3": "OUT3",
+          "4": "OUT4",
+          "5": "OUT5",
+          "6": "OUT6"
         }
+      },
+      "schematic": {
+        "width": 850,
+        "height": 414,
+        "title": "MP6005 参考 · 有源钳位正激模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电流斜坡混合",
+            "detail": "CS × 增益 + 斜坡",
+            "parameter": "slope_mode"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          },
+          {
+            "id": "deadtime",
+            "key": "drive",
+            "kind": "block",
+            "x": 590,
+            "y": 312,
+            "w": 117,
+            "h": 46,
+            "label": "双边沿死区",
+            "detail": "AC 移位在功率级",
+            "parameter": "acf_dead_ns"
+          },
+          {
+            "id": "sync",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 335,
+            "w": 0,
+            "h": 0,
+            "label": "SYNC",
+            "side": "right"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                309,
+                242
+              ],
+              [
+                332,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                721,
+                175
+              ],
+              [
+                721,
+                270
+              ],
+              [
+                648,
+                270
+              ],
+              [
+                648,
+                312
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                707,
+                335
+              ],
+              [
+                734,
+                335
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ],
+          [
+            721,
+            175
+          ]
+        ]
+      },
+      "schematic_voltage": {
+        "width": 850,
+        "height": 414,
+        "title": "MP6005 参考 · 有源钳位正激模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电压模式斜坡",
+            "detail": "锯齿调制"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          },
+          {
+            "id": "deadtime",
+            "key": "drive",
+            "kind": "block",
+            "x": 590,
+            "y": 312,
+            "w": 117,
+            "h": 46,
+            "label": "双边沿死区",
+            "detail": "AC 移位在功率级",
+            "parameter": "acf_dead_ns"
+          },
+          {
+            "id": "sync",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 335,
+            "w": 0,
+            "h": 0,
+            "label": "SYNC",
+            "side": "right"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                403,
+                105
+              ],
+              [
+                403,
+                222
+              ]
+            ],
+            "arrow": true,
+            "label": "锯齿",
+            "label_at": [
+              427,
+              151
+            ]
+          },
+          {
+            "points": [
+              [
+                721,
+                175
+              ],
+              [
+                721,
+                270
+              ],
+              [
+                648,
+                270
+              ],
+              [
+                648,
+                312
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                707,
+                335
+              ],
+              [
+                734,
+                335
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ],
+          [
+            721,
+            175
+          ]
+        ]
       },
       "parameters": {
         "frequency_hz": {
@@ -4929,6 +9558,14 @@
           "unit": "",
           "group": "测试与对比报告"
         },
+        "simulation_reuse": {
+          "node": "test",
+          "purpose": "复用同一设计已通过检查的标称仿真，减少重复运行。",
+          "meaning": "电路、计算结果、后处理版本或检查阈值变化会重新运行。FRA、交叉负载和短路测试仍实际执行；报告保留来源时间。",
+          "label": "复用相同设计已通过的标称仿真",
+          "unit": "",
+          "group": "测试与对比报告"
+        },
         "comparison_tolerance_pct": {
           "node": "test",
           "purpose": "给设计计算与实测仿真差异设置提示阈值。",
@@ -5116,11 +9753,11 @@
           "title": "辅助绕组电压到 ZCD",
           "scope": "chip",
           "body": [
-            "RC / 钳位 / 上升预备 / 下降触发",
+            "所选绕组 → RC / 钳位 → 边沿检测",
             "附加延时用于靠近谷底，须核对波形"
           ],
           "values": [
-            "qr_zcd_arm_v",
+            "qr_zcd_winding",
             "qr_zcd_delay_ns"
           ]
         },
@@ -5366,6 +10003,7 @@
         "simulation_threads": "线程",
         "qr_cds_pf": "Cds",
         "qr_aux_ratio": "Naux/Np",
+        "qr_zcd_winding": "检测绕组",
         "qr_zcd_r": "Rz",
         "qr_zcd_c_pf": "Cz",
         "qr_zcd_delay_ns": "延时",
@@ -5401,7 +10039,868 @@
         "include_cap_esl": {
           "0": "不含",
           "1": "包含"
+        },
+        "qr_zcd_winding": {
+          "-1": "自动绕组",
+          "0": "历史原边端电压",
+          "1": "OUT1",
+          "2": "OUT2",
+          "3": "OUT3",
+          "4": "OUT4",
+          "5": "OUT5",
+          "6": "OUT6"
         }
+      },
+      "schematic": {
+        "width": 850,
+        "height": 414,
+        "title": "L6565 参考 · 准谐振行为模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "zcd_pin",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 101,
+            "w": 0,
+            "h": 0,
+            "label": "ZCD ⑤",
+            "side": "left",
+            "focus_fields": [
+              "qr_aux_ratio",
+              "qr_zcd_winding",
+              "qr_zcd_r",
+              "qr_zcd_c_pf",
+              "qr_zcd_delay_ns",
+              "qr_zcd_arm_v",
+              "qr_zcd_trigger_v"
+            ]
+          },
+          {
+            "id": "comp_pin",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 222,
+            "w": 0,
+            "h": 0,
+            "label": "COMP ②",
+            "side": "left"
+          },
+          {
+            "id": "cs_pin",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 270,
+            "w": 0,
+            "h": 0,
+            "label": "CS ④",
+            "side": "left",
+            "focus_fields": [
+              "cs_filter_ns",
+              "blanking_ns"
+            ]
+          },
+          {
+            "id": "vff_pin",
+            "key": "pwm",
+            "kind": "pin",
+            "x": 116,
+            "y": 320,
+            "w": 0,
+            "h": 0,
+            "label": "VFF ③",
+            "side": "left"
+          },
+          {
+            "id": "vcc_pin",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 75,
+            "w": 0,
+            "h": 0,
+            "label": "⑧ VCC",
+            "side": "right"
+          },
+          {
+            "id": "gd_pin",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 158,
+            "w": 0,
+            "h": 0,
+            "label": "⑦ GD",
+            "side": "right"
+          },
+          {
+            "id": "gnd_pin",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 353,
+            "w": 0,
+            "h": 0,
+            "label": "⑥ GND",
+            "side": "right"
+          },
+          {
+            "id": "zcd_cmp",
+            "key": "sense",
+            "kind": "comparator",
+            "x": 150,
+            "y": 66,
+            "w": 93,
+            "h": 70,
+            "label": "ZCD",
+            "detail": "迟滞边沿",
+            "parameter": "qr_zcd_winding",
+            "focus_fields": [
+              "qr_aux_ratio",
+              "qr_zcd_winding",
+              "qr_zcd_r",
+              "qr_zcd_c_pf",
+              "qr_zcd_delay_ns",
+              "qr_zcd_arm_v",
+              "qr_zcd_trigger_v"
+            ]
+          },
+          {
+            "id": "off_window",
+            "key": "clock",
+            "kind": "block",
+            "x": 275,
+            "y": 78,
+            "w": 128,
+            "h": 46,
+            "label": "关断消隐",
+            "detail": "随 COMP 变化",
+            "parameter": "qr_off_min_us"
+          },
+          {
+            "id": "restart",
+            "key": "clock",
+            "kind": "block",
+            "x": 275,
+            "y": 143,
+            "w": 128,
+            "h": 38,
+            "label": "启动定时器",
+            "parameter": "qr_starter_us"
+          },
+          {
+            "id": "set",
+            "key": "clock",
+            "kind": "sum",
+            "x": 453,
+            "y": 93,
+            "w": 34,
+            "h": 34,
+            "label": "≥1"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 500,
+            "y": 109,
+            "w": 36,
+            "h": 36,
+            "label": "使能"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 588,
+            "y": 55,
+            "w": 103,
+            "h": 40,
+            "label": "UVLO",
+            "parameter": "qr_uvlo_on_v"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 552,
+            "y": 125,
+            "w": 76,
+            "h": 114,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 565,
+                "y": 144
+              },
+              {
+                "name": "R",
+                "x": 565,
+                "y": 218
+              },
+              {
+                "name": "Q",
+                "x": 615,
+                "y": 158
+              }
+            ]
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "driver",
+            "x": 658,
+            "y": 130,
+            "w": 56,
+            "h": 56,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "comp",
+            "key": "feedback",
+            "kind": "block",
+            "x": 151,
+            "y": 202,
+            "w": 106,
+            "h": 40,
+            "label": "电流命令",
+            "detail": "COMP 量纲",
+            "parameter": "kp"
+          },
+          {
+            "id": "cs_filter",
+            "key": "sense",
+            "kind": "block",
+            "x": 151,
+            "y": 247,
+            "w": 106,
+            "h": 46,
+            "label": "CS 滤波",
+            "detail": "RC",
+            "parameter": "cs_filter_ns",
+            "focus_fields": [
+              "cs_filter_ns"
+            ]
+          },
+          {
+            "id": "vff",
+            "key": "pwm",
+            "kind": "block",
+            "x": 151,
+            "y": 302,
+            "w": 106,
+            "h": 36,
+            "label": "线电压前馈",
+            "parameter": "qr_vff_v"
+          },
+          {
+            "id": "clamp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 294,
+            "y": 202,
+            "w": 99,
+            "h": 40,
+            "label": "COMP 限幅",
+            "parameter": "qr_cs_clamp_v"
+          },
+          {
+            "id": "gain",
+            "key": "sense",
+            "kind": "block",
+            "x": 294,
+            "y": 250,
+            "w": 99,
+            "h": 40,
+            "label": "增益 / LEB",
+            "parameter": "blanking_ns",
+            "focus_fields": [
+              "blanking_ns"
+            ]
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 433,
+            "y": 201,
+            "w": 71,
+            "h": 81,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 440,
+                "y": 268
+              },
+              {
+                "name": "−",
+                "x": 440,
+                "y": 219
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 512,
+            "y": 201,
+            "w": 34,
+            "h": 34,
+            "label": "≥1"
+          },
+          {
+            "id": "ocp",
+            "key": "protect",
+            "kind": "comparator",
+            "x": 315,
+            "y": 300,
+            "w": 82,
+            "h": 56,
+            "label": "OCP",
+            "parameter": "qr_ocp_v"
+          },
+          {
+            "id": "fault",
+            "key": "protect",
+            "kind": "latch",
+            "x": 445,
+            "y": 304,
+            "w": 100,
+            "h": 48,
+            "label": "故障锁存",
+            "detail": "VCC 欠压复位",
+            "parameter": "qr_ocp_v"
+          },
+          {
+            "id": "watchdog",
+            "key": "drive",
+            "kind": "block",
+            "x": 576,
+            "y": 264,
+            "w": 140,
+            "h": 42,
+            "label": "最长导通",
+            "detail": "模型定时器",
+            "parameter": "qr_max_on_us"
+          },
+          {
+            "id": "ground",
+            "key": "start",
+            "kind": "note",
+            "x": 611,
+            "y": 342,
+            "w": 93,
+            "h": 22,
+            "label": "信号参考"
+          },
+          {
+            "id": "zcd_source",
+            "key": "sense",
+            "kind": "note",
+            "x": 17,
+            "y": 118,
+            "w": 87,
+            "h": 20,
+            "label": "绕组电压副本",
+            "focus_fields": [
+              "qr_aux_ratio",
+              "qr_zcd_winding",
+              "qr_zcd_r",
+              "qr_zcd_c_pf",
+              "qr_zcd_delay_ns",
+              "qr_zcd_arm_v",
+              "qr_zcd_trigger_v"
+            ],
+            "parameter": "qr_zcd_winding"
+          },
+          {
+            "id": "ssr_source",
+            "key": "feedback",
+            "kind": "note",
+            "x": 16,
+            "y": 232,
+            "w": 88,
+            "h": 20,
+            "label": "外部 SSR 补偿",
+            "parameter": "kp"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 610,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          },
+          {
+            "id": "external",
+            "key": "power",
+            "kind": "note",
+            "x": 46,
+            "y": 389,
+            "w": 200,
+            "h": 18,
+            "label": "外部谐振功率级"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                101
+              ],
+              [
+                150,
+                101
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                243,
+                101
+              ],
+              [
+                275,
+                101
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                403,
+                101
+              ],
+              [
+                435,
+                101
+              ],
+              [
+                435,
+                110
+              ],
+              [
+                453,
+                110
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                403,
+                162
+              ],
+              [
+                438,
+                162
+              ],
+              [
+                438,
+                122
+              ],
+              [
+                458,
+                122
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                487,
+                110
+              ],
+              [
+                491,
+                110
+              ],
+              [
+                491,
+                127
+              ],
+              [
+                500,
+                127
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                536,
+                127
+              ],
+              [
+                543,
+                127
+              ],
+              [
+                543,
+                144
+              ],
+              [
+                552,
+                144
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                75
+              ],
+              [
+                691,
+                75
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                588,
+                75
+              ],
+              [
+                518,
+                75
+              ],
+              [
+                518,
+                109
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              556,
+              64
+            ]
+          },
+          {
+            "points": [
+              [
+                628,
+                158
+              ],
+              [
+                658,
+                158
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                714,
+                158
+              ],
+              [
+                734,
+                158
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                353
+              ],
+              [
+                706,
+                353
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                116,
+                222
+              ],
+              [
+                151,
+                222
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                257,
+                222
+              ],
+              [
+                294,
+                222
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                393,
+                222
+              ],
+              [
+                433,
+                222
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                270
+              ],
+              [
+                151,
+                270
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                257,
+                270
+              ],
+              [
+                294,
+                270
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                393,
+                270
+              ],
+              [
+                433,
+                270
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                320
+              ],
+              [
+                151,
+                320
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                257,
+                320
+              ],
+              [
+                285,
+                320
+              ],
+              [
+                285,
+                229
+              ],
+              [
+                294,
+                229
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                504,
+                241.5
+              ],
+              [
+                508,
+                241.5
+              ],
+              [
+                508,
+                218
+              ],
+              [
+                512,
+                218
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                546,
+                218
+              ],
+              [
+                552,
+                218
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                272,
+                270
+              ],
+              [
+                272,
+                328
+              ],
+              [
+                315,
+                328
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                397,
+                328
+              ],
+              [
+                445,
+                328
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                545,
+                328
+              ],
+              [
+                553,
+                328
+              ],
+              [
+                553,
+                246
+              ],
+              [
+                535,
+                246
+              ],
+              [
+                535,
+                234
+              ]
+            ],
+            "arrow": true,
+            "label": "FAULT",
+            "label_at": [
+              514,
+              279
+            ],
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                646,
+                158
+              ],
+              [
+                646,
+                264
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                576,
+                286
+              ],
+              [
+                569,
+                286
+              ],
+              [
+                569,
+                252
+              ],
+              [
+                522,
+                252
+              ],
+              [
+                522,
+                233
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": [
+          [
+            272,
+            270
+          ],
+          [
+            646,
+            158
+          ]
+        ]
       },
       "parameters": {
         "blanking_ns": {
@@ -5596,6 +11095,14 @@
           "unit": "",
           "group": "测试与对比报告"
         },
+        "simulation_reuse": {
+          "node": "test",
+          "purpose": "复用同一设计已通过检查的标称仿真，减少重复运行。",
+          "meaning": "电路、计算结果、后处理版本或检查阈值变化会重新运行。FRA、交叉负载和短路测试仍实际执行；报告保留来源时间。",
+          "label": "复用相同设计已通过的标称仿真",
+          "unit": "",
+          "group": "测试与对比报告"
+        },
         "comparison_tolerance_pct": {
           "node": "test",
           "purpose": "给设计计算与实测仿真差异设置提示阈值。",
@@ -5668,6 +11175,38 @@
           "unit": "s",
           "group": "环路与交叉调整率"
         },
+        "cross_enabled": {
+          "node": "test",
+          "purpose": "开启多输出min/max负载组合的瞬态角点试验。",
+          "meaning": "用于检查非反馈路交叉调整率；不是芯片内置的多路独立稳压功能。",
+          "label": "交叉调整率瞬态角点对比",
+          "unit": "",
+          "group": "环路与交叉调整率"
+        },
+        "cross_mode": {
+          "node": "test",
+          "purpose": "选择全部负载组合还是重点角点。",
+          "meaning": "全组合最多按各路min/max展开；路数增加时运行数量增长。",
+          "label": "交叉调整率角点覆盖",
+          "unit": "",
+          "group": "环路与交叉调整率"
+        },
+        "cross_hold_ms": {
+          "node": "test",
+          "purpose": "设置每个交叉负载角点保持的时间。",
+          "meaning": "用于让输出稳定；时间不足时会标注未收敛，不纳入已验证包络。",
+          "label": "每个负载角点保持时间",
+          "unit": "ms",
+          "group": "环路与交叉调整率"
+        },
+        "cross_timeout_s": {
+          "node": "test",
+          "purpose": "设置每个输入端点交叉调整率试验的实际计算超时。",
+          "meaning": "它限制电脑计算时间，与负载保持时间的单位和作用不同。",
+          "label": "每端点交叉调整率超时",
+          "unit": "s",
+          "group": "环路与交叉调整率"
+        },
         "qr_cds_pf": {
           "node": "power",
           "purpose": "决定退磁后的漏极谐振周期与谷底电压波形。",
@@ -5678,24 +11217,32 @@
         },
         "qr_aux_ratio": {
           "node": "sense",
-          "purpose": "ZCD 辅助绕组匝比 Naux/Np用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "定义等效检测辅助绕组与原边的匝数比 Naux/Np。",
+          "meaning": "从 OUTn 取信号时再乘 Np/Ns_n，因此更换检测绕组不重复改变电压比例。实际辅助供电绕组的匝比可按实际值填写。",
           "label": "ZCD 辅助绕组匝比 Naux/Np",
+          "unit": "",
+          "group": "准谐振与 ZCD"
+        },
+        "qr_zcd_winding": {
+          "node": "sense",
+          "purpose": "选择送入退磁检测的绕组电压，避免把原边漏感尖峰当作退磁。",
+          "meaning": "自动优先非反馈路中匝数最少的绕组，单路使用 OUT1；1–6 指定 OUTn。0 重现旧原边端电压复制。均为隔离电压副本，不改变负载，也不提供 VCC。",
+          "label": "ZCD 取样：-1自动，0原边端电压，1–6输出绕组",
           "unit": "",
           "group": "准谐振与 ZCD"
         },
         "qr_zcd_r": {
           "node": "sense",
-          "purpose": "ZCD 串联电阻用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "等效绕组电压与 ZCD 检测端之间的串联电阻。",
+          "meaning": "与输入电容及钳位共同决定检测沿的延时。",
           "label": "ZCD 串联电阻",
           "unit": "Ω",
           "group": "准谐振与 ZCD"
         },
         "qr_zcd_c_pf": {
           "node": "sense",
-          "purpose": "ZCD 等效输入电容（假设）用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "与 ZCD 串联电阻组成检测滤波的等效输入电容。",
+          "meaning": "增大后检测端斜率减缓，触发时刻会改变。",
           "label": "ZCD 等效输入电容（假设）",
           "unit": "pF",
           "group": "准谐振与 ZCD"
@@ -5710,64 +11257,64 @@
         },
         "qr_zcd_arm_v": {
           "node": "sense",
-          "purpose": "ZCD 上升沿预备阈值用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "ZCD 上升超过此阈值后，允许本周期检测下降沿。",
+          "meaning": "需要先预备，再在关断消隐结束后响应下降触发。",
           "label": "ZCD 上升沿预备阈值",
           "unit": "V",
           "group": "准谐振与 ZCD"
         },
         "qr_zcd_trigger_v": {
           "node": "sense",
-          "purpose": "ZCD 下降沿触发阈值用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "已预备时，ZCD 下降穿过此阈值产生触发沿。",
+          "meaning": "预备阈值与下降阈值构成迟滞。触发还受消隐、COMP 和 RUN 约束。",
           "label": "ZCD 下降沿触发阈值",
           "unit": "V",
           "group": "准谐振与 ZCD"
         },
         "qr_off_min_us": {
           "node": "clock",
-          "purpose": "重载最短关断消隐时间用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "设定重载下相邻脉冲的最短关断消隐时间。",
+          "meaning": "未到消隐结束的 ZCD 边沿不置位。",
           "label": "重载最短关断消隐时间",
           "unit": "µs",
           "group": "准谐振与 ZCD"
         },
         "qr_off_light_us": {
           "node": "clock",
-          "purpose": "轻载关断消隐时间（COMP=2.5 V）用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "低 COMP 命令下使用更长的关断消隐时间。",
+          "meaning": "消隐随等效芯片 COMP 电压变化，可跳过较早的谷底。",
           "label": "轻载关断消隐时间（COMP=2.5 V）",
           "unit": "µs",
           "group": "准谐振与 ZCD"
         },
         "qr_starter_us": {
           "node": "clock",
-          "purpose": "无 ZCD 时启动定时器用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "关断时间超过此值时，可在没有 ZCD 有效边沿的情况下置位。",
+          "meaning": "仍要求 RUN 有效且 COMP 请求导通。",
           "label": "无 ZCD 时启动定时器",
           "unit": "µs",
           "group": "准谐振与 ZCD"
         },
         "qr_vcc_v": {
           "node": "start",
-          "purpose": "外部理想 VCC 供电用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "外部理想电源施加在 VCC 节点的电压。",
+          "meaning": "决定欠压许可，供电耗尽和辅助绕组回供需独立建模。",
           "label": "外部理想 VCC 供电",
           "unit": "V",
           "group": "准谐振与 ZCD"
         },
         "qr_uvlo_on_v": {
           "node": "start",
-          "purpose": "VCC 启动阈值用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "VCC 上升到该阈值后才允许启动。",
+          "meaning": "与下行关断阈值组成欠压迟滞。",
           "label": "VCC 启动阈值",
           "unit": "V",
           "group": "准谐振与 ZCD"
         },
         "qr_uvlo_off_v": {
           "node": "start",
-          "purpose": "VCC 关断阈值用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "VCC 下降低于该阈值后停止驱动并清除异常 CS 锁存。",
+          "meaning": "重新开机仍须达到上行启动阈值。",
           "label": "VCC 关断阈值",
           "unit": "V",
           "group": "准谐振与 ZCD"
@@ -5781,9 +11328,9 @@
           "group": "准谐振与 ZCD"
         },
         "qr_cs_clamp_v": {
-          "node": "clock",
-          "purpose": "VFF=0 时逐周期 CS 钳位用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "node": "pwm",
+          "purpose": "VFF 为 0 时的正常峰值电流命令上限，采用 CS 电压量纲。",
+          "meaning": "正常限流命令与异常 CS 故障锁存阈值分别设置。",
           "label": "VFF=0 时逐周期 CS 钳位",
           "unit": "V",
           "group": "准谐振与 ZCD"
@@ -6123,6 +11670,7 @@
         "simulation_threads": "线程",
         "qr_cds_pf": "Cds",
         "qr_aux_ratio": "Naux/Np",
+        "qr_zcd_winding": "检测绕组",
         "qr_zcd_r": "Rz",
         "qr_zcd_c_pf": "Cz",
         "qr_zcd_delay_ns": "延时",
@@ -6158,7 +11706,1291 @@
         "include_cap_esl": {
           "0": "不含",
           "1": "包含"
+        },
+        "qr_zcd_winding": {
+          "-1": "自动绕组",
+          "0": "历史原边端电压",
+          "1": "OUT1",
+          "2": "OUT2",
+          "3": "OUT3",
+          "4": "OUT4",
+          "5": "OUT5",
+          "6": "OUT6"
         }
+      },
+      "schematic": {
+        "width": 850,
+        "height": 414,
+        "title": "反激 · 通用固定频率 PWM 模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电流斜坡混合",
+            "detail": "CS × 增益 + 斜坡",
+            "parameter": "slope_mode"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                309,
+                242
+              ],
+              [
+                332,
+                242
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ]
+        ]
+      },
+      "schematic_voltage": {
+        "width": 850,
+        "height": 414,
+        "title": "反激 · 通用固定频率 PWM 模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "vcc",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 79,
+            "w": 0,
+            "h": 0,
+            "label": "VCC / EN",
+            "side": "left"
+          },
+          {
+            "id": "fb",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 190,
+            "w": 0,
+            "h": 0,
+            "label": "COMP",
+            "side": "left"
+          },
+          {
+            "id": "cs",
+            "key": "sense",
+            "kind": "pin",
+            "x": 116,
+            "y": 242,
+            "w": 0,
+            "h": 0,
+            "label": "CS",
+            "side": "left"
+          },
+          {
+            "id": "gnd",
+            "key": "start",
+            "kind": "pin",
+            "x": 734,
+            "y": 295,
+            "w": 0,
+            "h": 0,
+            "label": "GND",
+            "side": "right"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 175,
+            "w": 0,
+            "h": 0,
+            "label": "GATE",
+            "side": "right"
+          },
+          {
+            "id": "uvlo",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 59,
+            "w": 130,
+            "h": 40,
+            "label": "EN / UVLO",
+            "parameter": "uvlo"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 153,
+            "y": 112,
+            "w": 130,
+            "h": 38,
+            "label": "软启动 SS",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "clock",
+            "key": "clock",
+            "kind": "block",
+            "x": 352,
+            "y": 61,
+            "w": 128,
+            "h": 44,
+            "label": "振荡器",
+            "detail": "时钟 / Dmax",
+            "parameter": "frequency_hz"
+          },
+          {
+            "id": "permit",
+            "key": "start",
+            "kind": "block",
+            "x": 518,
+            "y": 138,
+            "w": 32,
+            "h": 38,
+            "label": "开"
+          },
+          {
+            "id": "latch",
+            "key": "drive",
+            "kind": "latch",
+            "x": 555,
+            "y": 139,
+            "w": 74,
+            "h": 111,
+            "label": "锁存",
+            "pins": [
+              {
+                "name": "S",
+                "x": 568,
+                "y": 158
+              },
+              {
+                "name": "R",
+                "x": 568,
+                "y": 231
+              },
+              {
+                "name": "Q",
+                "x": 616,
+                "y": 175
+              }
+            ]
+          },
+          {
+            "id": "driver",
+            "key": "drive",
+            "kind": "driver",
+            "x": 654,
+            "y": 149,
+            "w": 57,
+            "h": 52,
+            "label": "驱动",
+            "parameter": "driver_resistance"
+          },
+          {
+            "id": "feedback",
+            "key": "feedback",
+            "kind": "block",
+            "x": 153,
+            "y": 170,
+            "w": 130,
+            "h": 41,
+            "label": "调制命令",
+            "detail": "COMP",
+            "parameter": "kp"
+          },
+          {
+            "id": "sense",
+            "key": "sense",
+            "kind": "block",
+            "x": 153,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "采样滤波",
+            "detail": "RC / LEB",
+            "parameter": "cs_filter_ns"
+          },
+          {
+            "id": "ramp",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 222,
+            "w": 130,
+            "h": 40,
+            "label": "电压模式斜坡",
+            "detail": "锯齿调制"
+          },
+          {
+            "id": "pwm",
+            "key": "pwm",
+            "kind": "comparator",
+            "x": 479,
+            "y": 180,
+            "w": 72,
+            "h": 79,
+            "label": "PWM",
+            "pins": [
+              {
+                "name": "+",
+                "x": 487,
+                "y": 242
+              },
+              {
+                "name": "−",
+                "x": 487,
+                "y": 197
+              }
+            ]
+          },
+          {
+            "id": "reset",
+            "key": "drive",
+            "kind": "sum",
+            "x": 506,
+            "y": 274,
+            "w": 36,
+            "h": 36,
+            "label": "≥1"
+          },
+          {
+            "id": "current_limit",
+            "key": "pwm",
+            "kind": "block",
+            "x": 332,
+            "y": 271,
+            "w": 130,
+            "h": 40,
+            "label": "逐周期限流",
+            "parameter": "cs_limit"
+          },
+          {
+            "id": "protection",
+            "key": "protect",
+            "kind": "block",
+            "x": 332,
+            "y": 326,
+            "w": 130,
+            "h": 40,
+            "label": "SCP / OLP",
+            "detail": "故障 / 打嗝 / 锁存",
+            "parameter": "short_mode"
+          },
+          {
+            "id": "analog_ground",
+            "key": "start",
+            "kind": "note",
+            "x": 643,
+            "y": 284,
+            "w": 61,
+            "h": 21,
+            "label": "参考"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                79
+              ],
+              [
+                153,
+                79
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                99
+              ],
+              [
+                218,
+                112
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                218,
+                150
+              ],
+              [
+                218,
+                170
+              ]
+            ],
+            "arrow": true,
+            "label": "SS",
+            "label_at": [
+              233,
+              161
+            ]
+          },
+          {
+            "points": [
+              [
+                480,
+                83
+              ],
+              [
+                533,
+                83
+              ],
+              [
+                533,
+                138
+              ]
+            ],
+            "arrow": true,
+            "label": "周期开始",
+            "label_at": [
+              506,
+              72
+            ]
+          },
+          {
+            "points": [
+              [
+                460,
+                105
+              ],
+              [
+                460,
+                152
+              ],
+              [
+                476,
+                152
+              ],
+              [
+                476,
+                279
+              ],
+              [
+                510,
+                279
+              ]
+            ],
+            "arrow": true,
+            "label": "Dmax",
+            "label_at": [
+              451,
+              137
+            ]
+          },
+          {
+            "points": [
+              [
+                550,
+                157
+              ],
+              [
+                555,
+                157
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                79
+              ],
+              [
+                307,
+                79
+              ],
+              [
+                307,
+                119
+              ],
+              [
+                511,
+                119
+              ],
+              [
+                511,
+                149
+              ],
+              [
+                518,
+                149
+              ]
+            ],
+            "arrow": true,
+            "label": "RUN",
+            "label_at": [
+              324,
+              106
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                190
+              ],
+              [
+                153,
+                190
+              ]
+            ],
+            "arrow": true,
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                283,
+                190
+              ],
+              [
+                479,
+                190
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                242
+              ],
+              [
+                153,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                242
+              ],
+              [
+                479,
+                242
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                551,
+                219.5
+              ],
+              [
+                551,
+                295
+              ],
+              [
+                542,
+                295
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                537,
+                280
+              ],
+              [
+                549,
+                280
+              ],
+              [
+                549,
+                231
+              ],
+              [
+                555,
+                231
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                283,
+                242
+              ],
+              [
+                309,
+                242
+              ],
+              [
+                309,
+                345
+              ],
+              [
+                332,
+                345
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                309,
+                291
+              ],
+              [
+                332,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                291
+              ],
+              [
+                506,
+                291
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                462,
+                345
+              ],
+              [
+                524,
+                345
+              ],
+              [
+                524,
+                310
+              ]
+            ],
+            "arrow": true,
+            "tone": "protection"
+          },
+          {
+            "points": [
+              [
+                629,
+                175
+              ],
+              [
+                654,
+                175
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                711,
+                175
+              ],
+              [
+                734,
+                175
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                734,
+                295
+              ],
+              [
+                707,
+                295
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                403,
+                105
+              ],
+              [
+                403,
+                222
+              ]
+            ],
+            "arrow": true,
+            "label": "锯齿",
+            "label_at": [
+              427,
+              151
+            ]
+          }
+        ],
+        "junctions": [
+          [
+            309,
+            242
+          ],
+          [
+            309,
+            291
+          ]
+        ]
       },
       "parameters": {
         "frequency_hz": {
@@ -6513,6 +13345,14 @@
           "unit": "",
           "group": "测试与对比报告"
         },
+        "simulation_reuse": {
+          "node": "test",
+          "purpose": "复用同一设计已通过检查的标称仿真，减少重复运行。",
+          "meaning": "电路、计算结果、后处理版本或检查阈值变化会重新运行。FRA、交叉负载和短路测试仍实际执行；报告保留来源时间。",
+          "label": "复用相同设计已通过的标称仿真",
+          "unit": "",
+          "group": "测试与对比报告"
+        },
         "comparison_tolerance_pct": {
           "node": "test",
           "purpose": "给设计计算与实测仿真差异设置提示阈值。",
@@ -6627,9 +13467,17 @@
         },
         "qr_aux_ratio": {
           "node": "sense",
-          "purpose": "ZCD 辅助绕组匝比 Naux/Np用于准谐振事件触发控制。",
-          "meaning": "QR 专用参数；不作用于固定频率 PWM。阈值参考 L6565；检测与寄生仍须实测。",
+          "purpose": "定义等效检测辅助绕组与原边的匝数比 Naux/Np。",
+          "meaning": "从 OUTn 取信号时再乘 Np/Ns_n，因此更换检测绕组不重复改变电压比例。实际辅助供电绕组的匝比可按实际值填写。",
           "label": "ZCD 辅助绕组匝比 Naux/Np",
+          "unit": "",
+          "group": "准谐振与 ZCD"
+        },
+        "qr_zcd_winding": {
+          "node": "sense",
+          "purpose": "选择送入退磁检测的绕组电压，避免把原边漏感尖峰当作退磁。",
+          "meaning": "自动优先非反馈路中匝数最少的绕组，单路使用 OUT1；1–6 指定 OUTn。0 重现旧原边端电压复制。均为隔离电压副本，不改变负载，也不提供 VCC。",
+          "label": "ZCD 取样：-1自动，0原边端电压，1–6输出绕组",
           "unit": "",
           "group": "准谐振与 ZCD"
         },
@@ -6787,9 +13635,9 @@
         },
         "niso_inductor_dcr": {
           "node": "power",
-          "purpose": "电感 DCR，-1=由磁件几何计算",
+          "purpose": "自制电感 DCR 覆盖，-1=几何；成品取主界面 DCR",
           "meaning": "Buck/Boost 专用配置；三个原型分别定义调制、采样与管脚转换。具体含义见 Buck/Boost 专用框图。",
-          "label": "电感 DCR，-1=由磁件几何计算",
+          "label": "自制电感 DCR 覆盖，-1=几何；成品取主界面 DCR",
           "unit": "Ω",
           "group": "Buck / Boost 原型"
         },
@@ -9256,6 +16104,640 @@
           "filename": ""
         }
       ]
+    },
+    "spice_cot_logic": {
+      "width": 720,
+      "height": 1100,
+      "source": "",
+      "nodes": [
+        {
+          "id": "feedback",
+          "x": 36,
+          "y": 20,
+          "w": 648,
+          "h": 116,
+          "title": "反馈误差与 PI 调节",
+          "scope": "external",
+          "body": [
+            "输出电容端电压与参考比较，PI 调节脉冲触发频率。"
+          ],
+          "values": []
+        },
+        {
+          "id": "clock",
+          "x": 46,
+          "y": 210,
+          "w": 292,
+          "h": 134,
+          "title": "导通时间与频率限制",
+          "scope": "chip",
+          "body": [
+            "Ton 取设定值或由输入电压及目标频率前馈计算。",
+            "最短关断时间限制最高触发频率。"
+          ],
+          "values": []
+        },
+        {
+          "id": "start",
+          "x": 378,
+          "y": 210,
+          "w": 292,
+          "h": 134,
+          "title": "启动与参考缓升",
+          "scope": "chip",
+          "body": [
+            "启动延时结束后，参考电压按软启动时间线性上升。"
+          ],
+          "values": [
+            "enable_delay_ms",
+            "soft_start_ms"
+          ]
+        },
+        {
+          "id": "pwm",
+          "x": 46,
+          "y": 600,
+          "w": 292,
+          "h": 150,
+          "title": "触发与各相分配",
+          "scope": "chip",
+          "body": [
+            "共享相位累加器依序分配触发，各相采用独立恒定导通脉冲。"
+          ],
+          "values": []
+        },
+        {
+          "id": "drive",
+          "x": 378,
+          "y": 600,
+          "w": 292,
+          "h": 150,
+          "title": "同步 Buck 门极驱动",
+          "scope": "chip",
+          "body": [
+            "各相分别产生对应的高侧和低侧门极信号。"
+          ],
+          "values": []
+        },
+        {
+          "id": "power",
+          "x": 36,
+          "y": 834,
+          "w": 648,
+          "h": 104,
+          "title": "外部功率级与寄生",
+          "scope": "external",
+          "body": [
+            "各相电感连接到公共输出电容端，电容可计入已启用的 ESL。"
+          ],
+          "values": [
+            "include_cap_esl"
+          ]
+        },
+        {
+          "id": "test",
+          "x": 36,
+          "y": 980,
+          "w": 648,
+          "h": 100,
+          "title": "仿真工况与测量",
+          "scope": "test",
+          "body": [
+            "可比较软启动、稳定后的负载阶跃，以及额定工况开关 FRA。"
+          ],
+          "values": [
+            "step_ms",
+            "stop_ms"
+          ]
+        }
+      ],
+      "edges": [],
+      "short_labels": {
+        "frequency_hz": "fs",
+        "duty_max": "Dmax",
+        "soft_start_mode": "SS模式",
+        "soft_start_ms": "Tss",
+        "cs_filter_ns": "τcs",
+        "blanking_ns": "LEB",
+        "scp_threshold_v": "SCP",
+        "short_mode": "故障模式",
+        "cs_limit": "Vcs",
+        "slope_mode": "斜坡",
+        "delay_ns": "延时",
+        "driver_resistance": "Rdrv",
+        "feedback_scale": "H",
+        "kp": "KP",
+        "comp_voltage_max": "COMP上限",
+        "include_cap_esl": "ESL",
+        "diode_cj_pf": "Cj",
+        "stop_ms": "Tstop",
+        "simulation_threads": "线程",
+        "qr_cds_pf": "Cds",
+        "qr_aux_ratio": "Naux/Np",
+        "qr_zcd_winding": "检测绕组",
+        "qr_zcd_r": "Rz",
+        "qr_zcd_c_pf": "Cz",
+        "qr_zcd_delay_ns": "延时",
+        "qr_zcd_arm_v": "预备",
+        "qr_zcd_trigger_v": "触发",
+        "qr_off_min_us": "Toff",
+        "qr_off_light_us": "轻载Toff",
+        "qr_starter_us": "启动",
+        "qr_vcc_v": "VCC",
+        "qr_uvlo_on_v": "UVon",
+        "qr_uvlo_off_v": "UVoff",
+        "qr_vff_v": "VFF",
+        "qr_cs_clamp_v": "CS0",
+        "qr_ocp_v": "OCP",
+        "qr_max_on_us": "Tonmax"
+      },
+      "short_choices": {
+        "soft_start_mode": {
+          "0": "参考缓升",
+          "1": "限流缓升",
+          "2": "COMP缓升"
+        },
+        "short_mode": {
+          "0": "逐周期限流",
+          "1": "打嗝",
+          "2": "锁存"
+        },
+        "slope_mode": {
+          "0": "跟随设计",
+          "1": "自动建议",
+          "2": "手动"
+        },
+        "include_cap_esl": {
+          "0": "不含",
+          "1": "包含"
+        },
+        "qr_zcd_winding": {
+          "-1": "自动绕组",
+          "0": "历史原边端电压",
+          "1": "OUT1",
+          "2": "OUT2",
+          "3": "OUT3",
+          "4": "OUT4",
+          "5": "OUT5",
+          "6": "OUT6"
+        }
+      },
+      "schematic": {
+        "width": 850,
+        "height": 414,
+        "title": "Buck COT · 同步交错行为模型",
+        "boundary": [
+          116,
+          29,
+          618,
+          346
+        ],
+        "items": [
+          {
+            "id": "enable",
+            "key": "start",
+            "kind": "pin",
+            "x": 116,
+            "y": 83,
+            "w": 0,
+            "h": 0,
+            "label": "启动",
+            "side": "left"
+          },
+          {
+            "id": "vout",
+            "key": "feedback",
+            "kind": "pin",
+            "x": 116,
+            "y": 173,
+            "w": 0,
+            "h": 0,
+            "label": "VOUT",
+            "side": "left"
+          },
+          {
+            "id": "vin",
+            "key": "clock",
+            "kind": "pin",
+            "x": 116,
+            "y": 264,
+            "w": 0,
+            "h": 0,
+            "label": "VIN",
+            "side": "left"
+          },
+          {
+            "id": "out",
+            "key": "drive",
+            "kind": "pin",
+            "x": 734,
+            "y": 216,
+            "w": 0,
+            "h": 0,
+            "label": "GH / GL",
+            "side": "right"
+          },
+          {
+            "id": "ss",
+            "key": "start",
+            "kind": "block",
+            "x": 156,
+            "y": 60,
+            "w": 126,
+            "h": 46,
+            "label": "参考缓升",
+            "detail": "Tstart / Tss",
+            "parameter": "soft_start_ms"
+          },
+          {
+            "id": "error",
+            "key": "feedback",
+            "kind": "sum",
+            "x": 311,
+            "y": 140,
+            "w": 40,
+            "h": 40,
+            "label": "Σ"
+          },
+          {
+            "id": "pi",
+            "key": "feedback",
+            "kind": "block",
+            "x": 387,
+            "y": 136,
+            "w": 140,
+            "h": 48,
+            "label": "PI 调节",
+            "detail": "误差 → 脉冲频率"
+          },
+          {
+            "id": "clamp",
+            "key": "clock",
+            "kind": "block",
+            "x": 387,
+            "y": 199,
+            "w": 140,
+            "h": 48,
+            "label": "频率限制",
+            "detail": "最短关断时间"
+          },
+          {
+            "id": "ton",
+            "key": "clock",
+            "kind": "block",
+            "x": 156,
+            "y": 241,
+            "w": 126,
+            "h": 46,
+            "label": "Ton 前馈",
+            "detail": "手动 / 自动"
+          },
+          {
+            "id": "interleave",
+            "key": "pwm",
+            "kind": "block",
+            "x": 566,
+            "y": 192,
+            "w": 97,
+            "h": 48,
+            "label": "各相分配",
+            "detail": "交错相位"
+          },
+          {
+            "id": "gate",
+            "key": "drive",
+            "kind": "driver",
+            "x": 677,
+            "y": 190,
+            "w": 47,
+            "h": 52,
+            "label": "驱动"
+          },
+          {
+            "id": "power",
+            "key": "power",
+            "kind": "note",
+            "x": 55,
+            "y": 389,
+            "w": 197,
+            "h": 18,
+            "label": "外部功率级与寄生"
+          },
+          {
+            "id": "test",
+            "key": "test",
+            "kind": "note",
+            "x": 609,
+            "y": 389,
+            "w": 165,
+            "h": 18,
+            "label": "仿真工况与测量"
+          }
+        ],
+        "routes": [
+          {
+            "points": [
+              [
+                116,
+                83
+              ],
+              [
+                156,
+                83
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                282,
+                83
+              ],
+              [
+                331,
+                83
+              ],
+              [
+                331,
+                140
+              ]
+            ],
+            "arrow": true,
+            "label": "参考 +",
+            "label_at": [
+              361,
+              99
+            ]
+          },
+          {
+            "points": [
+              [
+                116,
+                173
+              ],
+              [
+                316,
+                173
+              ]
+            ],
+            "arrow": true,
+            "label": "反馈 −",
+            "label_at": [
+              206,
+              157
+            ],
+            "tone": "external"
+          },
+          {
+            "points": [
+              [
+                351,
+                160
+              ],
+              [
+                387,
+                160
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                457,
+                184
+              ],
+              [
+                457,
+                199
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                527,
+                223
+              ],
+              [
+                566,
+                223
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                116,
+                264
+              ],
+              [
+                156,
+                264
+              ]
+            ],
+            "arrow": true
+          },
+          {
+            "points": [
+              [
+                282,
+                264
+              ],
+              [
+                614,
+                264
+              ],
+              [
+                614,
+                240
+              ]
+            ],
+            "arrow": true,
+            "label": "Ton",
+            "label_at": [
+              551,
+              276
+            ]
+          },
+          {
+            "points": [
+              [
+                663,
+                216
+              ],
+              [
+                677,
+                216
+              ]
+            ],
+            "arrow": false
+          },
+          {
+            "points": [
+              [
+                724,
+                216
+              ],
+              [
+                734,
+                216
+              ]
+            ],
+            "arrow": true
+          }
+        ],
+        "junctions": []
+      },
+      "parameters": {
+        "enable_delay_ms": {
+          "node": "start",
+          "purpose": "仿真开始后延迟允许切换并开始参考电压缓升。",
+          "meaning": "与软启动时长分别设置。",
+          "label": "使能到允许开关延时",
+          "unit": "ms",
+          "group": "软启动逻辑",
+          "default": 0.0
+        },
+        "soft_start_ms": {
+          "node": "start",
+          "purpose": "参考电压由零缓升至设定值的时长。",
+          "meaning": "电压反馈 PI 调整脉冲触发频率。",
+          "label": "软启动时间",
+          "unit": "ms",
+          "group": "软启动逻辑",
+          "default": 1.0
+        },
+        "step_ms": {
+          "node": "test",
+          "purpose": "设置全部输出同时执行负载阶跃的时刻。",
+          "meaning": "应晚于软启动且早于仿真结束；不属于芯片内部定时器。",
+          "label": "负载阶跃时刻",
+          "unit": "ms",
+          "group": "测试与对比报告",
+          "default": 3.0
+        },
+        "stop_ms": {
+          "node": "test",
+          "purpose": "设置瞬态仿真观察到的结束时间。",
+          "meaning": "需要覆盖启动、稳态和被测事件；打嗝关断较长时应留足观察窗口。",
+          "label": "仿真结束时间",
+          "unit": "ms",
+          "group": "测试与对比报告",
+          "default": 4.0
+        },
+        "load_after": {
+          "node": "test",
+          "purpose": "设置阶跃后的负载电流比例。",
+          "meaning": "1保持额定；0.5为半载；这改变仿真负载，不修改控制器额定参数。",
+          "label": "阶跃后／额定负载",
+          "unit": "",
+          "group": "测试与对比报告",
+          "default": 0.5
+        },
+        "simulation_threads": {
+          "node": "test",
+          "purpose": "设置LTspice求解线程上限。",
+          "meaning": "属于计算资源设置，更多线程不保证此电路更快，不影响控制器逻辑。",
+          "label": "LTspice 最大线程数",
+          "unit": "",
+          "group": "测试与对比报告",
+          "default": 2.0
+        },
+        "simulation_timeout_s": {
+          "node": "test",
+          "purpose": "限制每个瞬态工况允许占用的实际计算时间。",
+          "meaning": "超时会标记该工况未完成；不会改变电路的仿真时钟或芯片动作时间。",
+          "label": "每工况仿真超时",
+          "unit": "s",
+          "group": "测试与对比报告",
+          "default": 180.0
+        },
+        "comparison_tolerance_pct": {
+          "node": "test",
+          "purpose": "给设计计算与实测仿真差异设置提示阈值。",
+          "meaning": "只改变报告判读，不会调整电路参数或强迫结果一致。",
+          "label": "对比偏差提示阈值",
+          "unit": "%",
+          "group": "测试与对比报告",
+          "default": 5.0
+        },
+        "include_cap_esl": {
+          "node": "power",
+          "purpose": "决定输出/输入电容模型是否包含已配置的ESL。",
+          "meaning": "这是外部电容寄生电感，不是芯片内部量；包含ESL通常使开关仿真更慢。",
+          "label": "电容 ESL：0=不含，1=包含",
+          "unit": "",
+          "group": "补偿与寄生",
+          "default": 0.0
+        },
+        "fra_enabled": {
+          "node": "test",
+          "purpose": "开启实际开关闭环频率响应测量。",
+          "meaning": "FRA属于仿真试验，不是芯片内部功能；报告可与设计环路对照。",
+          "label": "实际开关闭环 FRA 对比",
+          "unit": "",
+          "group": "环路与交叉调整率",
+          "default": 0.0
+        },
+        "fra_start_hz": {
+          "node": "test",
+          "purpose": "FRA扫描的最低注入频率。",
+          "meaning": "应低于结束频率；低频点需要更长的收敛与采样时间。",
+          "label": "FRA 起始频率",
+          "unit": "Hz",
+          "group": "环路与交叉调整率",
+          "default": 500.0
+        },
+        "fra_stop_hz": {
+          "node": "test",
+          "purpose": "FRA扫描的最高注入频率。",
+          "meaning": "接近开关频率时，通用模型和采样效应需谨慎解读。",
+          "label": "FRA 结束频率",
+          "unit": "Hz",
+          "group": "环路与交叉调整率",
+          "default": 6000.0
+        },
+        "fra_oct": {
+          "node": "test",
+          "purpose": "设置每倍频程的FRA频点密度。",
+          "meaning": "点数增加能看得更细，但仿真时间也会增加。",
+          "label": "FRA 每倍频程点数",
+          "unit": "",
+          "group": "环路与交叉调整率",
+          "default": 3.0
+        },
+        "fra_amplitude_pct": {
+          "node": "test",
+          "purpose": "设置FRA注入峰峰值相对反馈电压的比例。",
+          "meaning": "过大可能进入非线性，过小可能被数值噪声淹没；不是功率输出纹波目标。",
+          "label": "FRA 注入峰峰值／反馈电压",
+          "unit": "%",
+          "group": "环路与交叉调整率",
+          "default": 0.4
+        },
+        "fra_cycles": {
+          "node": "test",
+          "purpose": "设置每个FRA频点至少运行的开关周期数。",
+          "meaning": "低频时还受注入周期数和收敛需求影响，不是只运行这么多周期就必然准确。",
+          "label": "FRA 每频点最少开关周期",
+          "unit": "",
+          "group": "环路与交叉调整率",
+          "default": 100.0
+        },
+        "fra_timeout_s": {
+          "node": "test",
+          "purpose": "设置每个输入端点FRA试验的实际计算超时。",
+          "meaning": "超时保留未完成状态，不填造环路结果。",
+          "label": "每端点 FRA 超时",
+          "unit": "s",
+          "group": "环路与交叉调整率",
+          "default": 600.0
+        }
+      }
     }
   },
   "defaults": {

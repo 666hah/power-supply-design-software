@@ -56,7 +56,11 @@ class TransientRaw:
         if 'real' not in flags or 'FastAccess' in flags or 'complex' in flags:
             raise ValueError('当前读取器只支持普通 real 瞬态 RAW，请关闭 FastAccess 后重跑')
         count=int(re.search(r'No\. Variables:\s*(\d+)',header)[1]);points=int(re.search(r'No\. Points:\s*(\d+)',header)[1])
-        if not 2<=points<=30000000:raise ValueError('RAW 点数无效或超过可用预算，请缩短仿真时长')
+        # Long terminal-only tests save far fewer channels than detailed
+        # device runs. Keep their original switching samples within a separate
+        # time-axis budget so a completed uncompressed test can be measured.
+        point_limit=80000000 if 2<=count<=10 else 30000000
+        if not 2<=points<=point_limit:raise ValueError('RAW 点数无效或超过可用预算，请缩短仿真时长')
         names=[m[1].casefold() for m in re.finditer(r'^\s*\d+\s+(\S+)\s+\S+\s*$',header.rsplit('Variables:',1)[1],re.M)]
         dtype=np.dtype([('time','<f8'),('values','<f8' if 'double' in flags else '<f4',(count-1,))])
         offset=where+len(marker)
@@ -69,7 +73,16 @@ class TransientRaw:
             if not np.all(np.isfinite(chunk)) or np.any(np.diff(chunk)<0):raise ValueError('RAW 时间倒退，可能包含多个 .step，请逐工况运行')
     def trace(self,name):return self.data['values'][:,self.names[name.casefold()]]
     def samples(self,names,start,end,points=2400):
-        axis=np.linspace(start,end,points)
+        if points is None:
+            # Short QR windows contain narrow real commutation pulses. Keep
+            # every original point so the displayed peak matches metrology.
+            a,b=np.searchsorted(self.time,[start,end])
+            inside=self.time[a:b]
+            axis=np.r_[start,inside[(inside>start)&(inside<end)],end]
+        else:
+            axis=np.linspace(start,end,points)
+        return TransientRaw._samples_at(self,names,axis)
+    def _samples_at(self,names,axis):
         neighbours=np.searchsorted(self.time,axis,side='right')
         right=np.clip(neighbours,0,len(self.time)-1)
         left=np.clip(neighbours-1,0,len(self.time)-1)
@@ -82,6 +95,32 @@ class TransientRaw:
         for key in names:
             values=self.trace(key);a=values[left].astype(float);b=values[right].astype(float)
             result[key]=(a+(b-a)*fraction).tolist()
+        return result
+    def plot_samples(self,signals,start,end,bins=650,markers=()):
+        """Keep each plotted signal's extrema from each time bin, plus event edges."""
+        edges=np.searchsorted(self.time,np.linspace(start,end,bins+1))
+        indices=[]
+        for positive,negative in signals.values():
+            values=self.trace(positive)
+            reference=self.trace(negative) if negative else None
+            for first,last in zip(edges[:-1],edges[1:]):
+                if first==last:continue
+                segment=values[first:last]
+                if reference is not None:
+                    segment=segment.astype(float)-reference[first:last]
+                indices.extend((first+int(np.argmin(segment)),first+int(np.argmax(segment))))
+        bounds=[start,end]+[t for t in markers if start<=t<=end]
+        indices=np.unique(indices).astype(int)
+        exact_time=self.time[indices]
+        marker_time=np.setdiff1d(bounds,exact_time)
+        names=dict.fromkeys(node for terminals in signals.values() for node in terminals if node)
+        interpolated=self._samples_at(names,marker_time)
+        times=np.r_[exact_time,marker_time]
+        order=np.argsort(times,kind='stable')
+        samples={node:np.r_[self.trace(node)[indices].astype(float),interpolated[node]][order] for node in names}
+        result=dict(time=times[order].tolist())
+        for name,(positive,negative) in signals.items():
+            result[name]=(samples[positive]-samples[negative] if negative else samples[positive]).tolist()
         return result
     def close(self):
         self.time=None
@@ -169,13 +208,17 @@ def _comparison_rows(case,measured,meta,periodicity=None,steady=None):
     add('实际开关频率','Hz',op['f_sw'] if meta.get('topology')=='QR-FLYBACK' else case['p']['f_sw'],measured.get('frequency_actual'),'稳态门极边沿周期测量')
     add('门极导通占空比','',op['D'],measured.get('duty_avg'))
     add('原边电流 RMS','A',op.get('I_p_rms',op['I_sw_rms']),measured.get('primary_rms'))
-    add('原边电流峰值','A',op['I_sw_pk'],measured.get('primary_peak'))
+    add('原边电流峰值','A',op.get('I_p_pk',op['I_sw_pk']),measured.get('primary_peak'))
     add('原边电流平均值','A',op.get('I_p_avg',op['I_sw_avg']),measured.get('primary_avg'),
         '同一原边绕组全周期有符号均值' if 'I_p_avg' in op else '计算开关平均电流与物理原边绕组电流，含钳位换流差异')
     add('Vcs 峰值','V',op['I_sw_pk']*case['p']['Rs'],measured.get('vcs_peak'),'采样端含开通过渡尖峰',False)
     if noniso:
         for key,field,title in [('switch_rms','I_sw_rms','RMS'),('switch_avg','I_sw_avg','平均值'),('switch_peak','I_sw_pk','峰值')]:
             add('MOS Q1 电流 '+title,'A',op[field],measured.get(key),'实际串联 Rs 支路全周期电流',not meta['settings']['niso_edge_model'])
+    elif meta.get('topology')=='QR-FLYBACK' and measured.get('switch_rms') is not None:
+        for key,field,title in [('switch_rms','I_sw_rms','RMS'),('switch_avg','I_sw_avg','平均值'),('switch_peak','I_sw_pk','峰值')]:
+            add('MOS Q1 沟道电流 '+title,'A',op[field],measured.get(key),
+                '计算为传能电流包络；仿真为D→S沟道全带宽电流，含Coss放电与有限开关沿。RMS差异保留，峰值口径不同',key!='switch_peak')
     add('MOS Vds 峰值','V',op['V_sw_max'],measured.get('vds_peak'),'计算器钳位包络与瞬态寄生模型不同',False)
     outputs=result.get('outputs') or []
     for i,winding in enumerate(meta['hardware']['windings'],1):
@@ -186,6 +229,10 @@ def _comparison_rows(case,measured,meta,periodicity=None,steady=None):
         add(f'OUT{i} 副边电流 RMS','A',child.get('I_s_rms',child['I_d_rms']),measured.get(f'out{i}_winding_rms'))
         add(f'OUT{i} 副边电流峰值','A',child.get('I_s_pk',child['I_d_pk']),measured.get(f'out{i}_winding_peak'))
         add(f'OUT{i} 副边电流平均值','A',child['I_d_avg'],measured.get(f'out{i}_winding_avg'))
+        if meta.get('topology')=='QR-FLYBACK' and measured.get(f'out{i}_rectifier_rms') is not None:
+            for key,field,title in [('rms','I_d_rms','RMS'),('avg','I_d_avg','平均值'),('peak','I_d_pk','峰值')]:
+                add(f'OUT{i} 整流管电流 '+title,'A',child[field],measured.get(f'out{i}_rectifier_{key}'),
+                    '整流管Dmain导通支路；并联Cj位移电流单列，绕组电流不替代整流导通电流')
         ripple=outputs[i-1]['ripple_pp'] if outputs else result['wf']['ripple_pp']
         add(f'OUT{i} 输出电容纹波峰峰值','V',ripple,measured.get(f'out{i}_pre_ripple'),'ESL/器件开关边沿及整流模型不同',False)
         add(f'OUT{i} 整流管反压','V',child['V_d_max'],measured.get(f'out{i}_diode_reverse'),'理想稳态反压与瞬态极值不同',False)
@@ -200,6 +247,39 @@ def _comparison_rows(case,measured,meta,periodicity=None,steady=None):
                 if row['delta_percent'] is not None:row['status']='偏差待复核' if abs(row['delta_percent'])>tolerance else '偏差在提示阈值内'
             row['metric']=row['metric'].replace('副边电流','二极管 D1 电流').replace('整流管反压','续流管反压' if meta['topology']=='BUCK' else '整流管反压')
     return rows,ready
+
+
+def _startup_waveform(raw, output_count, end_s, return_node='v(sgnd)'):
+    outputs={f'v(out{i})':(f'v(out{i})',return_node) for i in range(1,output_count+1)}
+    optional=('v(input)','v(en)','v(ss)','v(ref)','v(fault)','v(comp)','v(vcc)','v(zcd)',
+              'v(xu_ctrl:filtered)','v(xu_ctrl:trip)')
+    signals={**outputs, **{name:(name,None) for name in optional if name in raw.names}}
+    return raw.plot_samples(signals,float(raw.time[0]),end_s,bins=350)
+
+
+def startup_excitation(raw, end_s, controller, startup_evidence):
+    """Capture actual gated primary current near the startup winding peak."""
+    from qr_spice_analysis import excitation_ramps
+    names = ('v(gate)','v(sense)','v(drain)','i(lp)')
+    if not all(name in raw.names for name in names) or end_s <= raw.time[0]:
+        return dict(available=False,reason='缺少启动原边或门极的短窗口数据。')
+    anchor = next((r['time_s'] for r in startup_evidence.get('rows', ())
+                   if r['ref']=='LP' and r['channel']=='current' and r['time_s'] is not None),None)
+    if anchor is None:
+        trace=raw.trace('i(lp)')
+        limit=int(np.searchsorted(raw.time,end_s,side='right'))
+        peak=0.
+        for start in range(0,limit,200000):
+            samples=trace[start:min(limit,start+200000)]
+            index=int(np.argmax(samples))
+            if samples[index]>peak:
+                peak=float(samples[index])
+                anchor=float(raw.time[start+index])
+    if anchor is None:
+        return dict(available=False,reason='启动窗口没有可定位的正向原边电流。')
+    half_width=max(2.5/float(controller['FSW']),60e-6)
+    observed = raw.samples(names,max(float(raw.time[0]),anchor-half_width),min(end_s,anchor+half_width),None)
+    return excitation_ramps(observed,controller)
 
 
 def _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,progress=None):
@@ -221,10 +301,22 @@ def _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,prog
         if noniso:
             raw.names['i(lp)']=raw.names['i(l1)']
             raw.names['i(ls1)']=raw.names['i(v_d1)']
+        if not fault_case:
+            requested_end=settings['step_ms']*1e-3
+            start_end=min(float(raw.time[-1]),requested_end)
+            record['startup_window_end_s']=start_end
+            record['startup_window']=_startup_waveform(raw,len(meta['hardware']['windings']),start_end)
+            if meta.get('white_box_probes'):
+                from spice_white_box import collect_startup
+                record['white_box_startup']=collect_startup(raw,meta['white_box_probes'],0.,requested_end)
+            if meta.get('topology') in ('QR-FLYBACK','FLYBACK'):
+                record['startup_excitation']=startup_excitation(raw,start_end,meta['resolved_controller'],
+                    record.get('white_box_startup') or {})
         if errors or not math.isclose(raw.time[-1],settings['stop_ms']*1e-3,abs_tol=1e-10):
             raise ValueError('仿真未到结束时刻或日志存在求解失败：'+'; '.join(errors))
         if qr:
             from qr_spice_analysis import startup_gate_current
+            record['qr_calculation_model']=case['result']['op'].get('qr_multi_model') or {}
             record['qr_startup']=startup_gate_current(raw,settings['step_ms']*1e-3,meta['resolved_controller']['VG'],
                 output_count=len(meta['hardware']['windings']),feedback_output=int(meta.get('feedback_output',1)))
         required=['primary_rms','primary_peak','vds_peak','fault_max','input_voltage','frequency_actual','duty_avg']+[f'out{i}_before' for i in range(1,len(meta['hardware']['windings'])+1)]
@@ -255,10 +347,30 @@ def _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,prog
         if qr and record['periodicity'].get('frequency_mean_hz'):
             measured['frequency_actual']=record['periodicity']['frequency_mean_hz']
             meta['qr_measured_min_frequency_hz']=record['periodicity']['frequency_min_hz']
-        if forward or noniso or (qr and len(meta['hardware']['windings']) > 1):
+            from qr_spice_analysis import cycle_current_statistics
+            audit=cycle_current_statistics(raw,record['periodicity'],len(meta['hardware']['windings']),
+                current_observation=meta.get('current_observation'))
+            record['qr_current_audit']=audit
+            if audit['available']:
+                audit['original_meas']={key:measured.get(key) for key in audit['measurements']}
+                measured.update(audit['measurements'])
+        if forward or noniso or qr:
             from spice_analysis import steady_quality
             record['steady_before_step']=steady_quality(raw,frequency,settings['step_ms']*1e-3,len(meta['hardware']['windings']))
+        if qr and (record.get('qr_current_audit') or {}).get('available'):
+            from qr_spice_analysis import charge_balance
+            balance=charge_balance(record['qr_current_audit'],case)
+            record['qr_charge_balance']=balance
+            record['steady_before_step']['passed'] &= balance['passed']
+            record['steady_before_step']['reason'] += '；'+balance['reason']
+        elif qr:
+            record['steady_before_step']['passed']=False
+            record['steady_before_step']['reason']+='；未取得连续完整周期的电流证据'
         record['rows'],record['nominal_comparable']=_comparison_rows(case,measured,meta,record['periodicity'],record.get('steady_before_step'))
+        if not fault_case:
+            from spice_black_box import full_load_ports
+            record['black_box']=full_load_ports(raw,case,end_s=settings['step_ms']*1e-3,
+                frequency_hz=frequency,return_node='v(sgnd)',comparable=record['nominal_comparable'])
         if fault_case:
             for row in record['rows']:row.update(delta_percent=None,status='短路测试 不与标称判差')
         names=['v(out'+str(i)+')' for i in range(1,len(meta['hardware']['windings'])+1)]
@@ -269,10 +381,15 @@ def _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,prog
             visible_cycles=cycles[-5:]
             begin=visible_cycles[0]['start_s']
             end=visible_cycles[-1]['end_s']
+        if not fault_case and meta.get('white_box_probes'):
+            from spice_white_box import collect
+            audit_start=(record.get('qr_current_audit') or {}).get('start_s',settings['step_ms']*1e-3-200/frequency)
+            record['white_box']=collect(raw,meta['white_box_probes'],audit_start,end,begin,
+                comparable=record['nominal_comparable'],tolerance=settings['comparison_tolerance_pct'])
         record['switching']=raw.samples(['v(drain)','v(sense)','v(gate)','v(comp)','v(ramp)','i(lp)']+(['v(zcd)'] if qr else [])+
             (['v(sync)','v(auxgate)','v(aclamp)','v(vin_bus)','i(c_active)']+[f'i(lo{i})' for i in range(1,len(meta['hardware']['windings'])+1)] if forward else [])+
             ['i(ls'+str(i)+')' for i in range(1,len(meta['hardware']['windings'])+1)]+
-            [f'v({node}{i})' for i in range(1,len(meta['hardware']['windings'])+1) for node in ('out','cap')],begin,end,2400)
+            [f'v({node}{i})' for i in range(1,len(meta['hardware']['windings'])+1) for node in ('out','cap')],begin,end,None if qr else 2400)
         if forward:
             for i in range(1,len(meta['hardware']['windings'])+1):
                 key=f'i(ls{i})'
@@ -317,7 +434,12 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
     from calculation_scheduler import CalculationCancelled
     executable=executable or find_ltspice()
     if not executable:raise ValueError('未检测到 LTspice。请在桌面仿真设置中选择 LTspice.exe 后重试')
-    bundle=run.runtime_bundle();p=bundle['base_spec'];settings=normalize_settings(p.get('spice_config'))
+    bundle=run.runtime_bundle();p=bundle['base_spec']
+    from cot_settings import active as cot_active
+    if cot_active(p):
+        from cot_spice_comparison import compare_design as compare_cot
+        return compare_cot(bundle,destination,executable=executable,cancelled=cancelled,progress=progress)
+    settings=normalize_settings(p.get('spice_config'))
     destination=Path(destination).resolve();destination.parent.mkdir(parents=True,exist_ok=True)
     report_path=destination if destination.suffix.lower()=='.docx' else destination.with_suffix('.docx')
     zip_path=destination if destination.suffix.lower()=='.zip' else destination.with_suffix('.zip')
@@ -332,21 +454,22 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
     if forward:
         from acf_spice import MODEL_VERSION
     from spice_studies import run_fra,run_cross,collect_study
+    from spice_boundary import endpoint_cases, run_load_transient
     from spice_analysis import cycle_quality,statistics,steady_quality
     from spice_planning import execution_plan
     from spice_result_cache import NominalCache,cache_key
     if qr:
         from qr_spice_analysis import cycle_quality
     plan=execution_plan(p,settings)
-    evidence=dict(schema='powerdesign-spice-comparison-2',model=MODEL_VERSION,cases=[],settings=settings,topology=p.get('topology'),plan=plan)
+    evidence=dict(schema='powerdesign-spice-comparison-2',model=MODEL_VERSION,cases=[],settings=settings,topology=p.get('topology'),plan=plan,
+                  input_range_V=[p.get('V_in_min',p.get('V_in')),p.get('V_in_max',p.get('V_in'))])
     from engineering_acceptance import input_fingerprint
     evidence['input_fingerprint'] = input_fingerprint(p)
     started=time.monotonic();cache=NominalCache()
     processors=(_simulate_nominal,_comparison_rows,cycle_quality,statistics,steady_quality,TransientRaw.samples,TransientRaw.__init__)
-    cases=[];seen=set()
-    for case in bundle['cases']:
-        if case['voltage'] not in seen:cases.append(case);seen.add(case['voltage'])
-    total=len(cases)*((2 if settings['short_test'] else 1)+int(settings['fra_enabled'])+int(plan['cross_enabled']))
+    cases=endpoint_cases(p,bundle['cases'])
+    bundle=dict(bundle,cases=cases)
+    total=len(plan['stages'])
     with tempfile.TemporaryDirectory(prefix='spice-compare-',dir=destination.parent) as temporary:
         work=Path(temporary);archive_files={};done=0
         for case in cases:
@@ -354,9 +477,12 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                 if cancelled():raise CalculationCancelled()
                 done+=1;label=case['id']+('_短路测试' if fault_case else '_标称负载')
                 if progress:progress(done,total,'LTspice '+label)
-                q=copy.deepcopy(p);q['spice_config']=dict(settings,short_test=int(fault_case))
+                q=copy.deepcopy(p);q['spice_config']=dict(settings,short_test=int(fault_case),load_after=1.)
                 files=project_files(q,bundle=bundle)
                 meta=json.loads(files['manifest.json'])
+                if not fault_case:
+                    from spice_white_box import prepare
+                    meta['white_box_probes']=prepare(files,case)
                 folder=work/label;folder.mkdir()
                 for name,data in files.items():
                     if name=='design_params.inc':
@@ -410,6 +536,15 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     return _run(executable,study_folder,timeout,cancelled,
                         progress=lambda text:progress(done,total,phase[0]+' · '+text) if progress else None,
                         simulation_end=simulation_end)
+                done+=1
+                phase_progress('反馈路 10% ↔ 90% 双向负载阶跃')
+                if record.get('complete') and not record.get('protection_stop'):
+                    study=work/(case['id']+'_双向阶跃')
+                    record['load_transient']=run_load_transient(files,case,settings,study,execute,
+                        frequency_hz=record.get('measurements',{}).get('frequency_actual') or meta['resolved_controller']['FSW'])
+                    if study.is_dir():archive_files.update(collect_study(study,study.name))
+                else:
+                    record['load_transient']=dict(available=False,complete=False,error='满载仿真未完成或触发保护，双向阶跃未运行')
                 if settings['fra_enabled']:
                     done+=1
                     if progress:progress(done,total,'LTspice '+case['id']+' 原生 FRA')
@@ -441,6 +576,18 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     if study.is_dir():archive_files.update(collect_study(study,study.name))
                     for retry in study.glob('retry_*'):
                         if retry.is_dir():archive_files.update(collect_study(retry,study.name+'/'+retry.name))
+                if settings['line_load_enabled'] and case is cases[-1]:
+                    done += 1
+                    baselines = [item for item in evidence['cases'] if not item['fault_test']]
+                    if all(item.get('nominal_comparable') for item in baselines):
+                        from isolated_outputs import output_specs
+                        from spice_line_load import run_line_load
+                        phase_progress('黑盒动态稳定度：线载联合跳变')
+                        study = work/'line_load'
+                        evidence['line_load_stability'] = run_line_load(files, output_specs(p) or [p], [item['voltage'] for item in cases], settings, meta['resolved_controller']['FSW'], study, execute)
+                        if study.is_dir():archive_files.update(collect_study(study, study.name))
+                    else:
+                        evidence['line_load_stability'] = dict(complete=False,error='边界满载基线未稳态，未启动线载联合试验')
         if cancelled():raise CalculationCancelled()
         from spice_comparison_report import write_report
         pending_report=work/'comparison.docx'
@@ -471,6 +618,7 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
         cross_simulation_successful=cross_simulation_success,cross_design_successful=cross_design_success,
         cached_nominal=sum(c.get('cache',{}).get('hit',False) for c in nominal),
         elapsed_s=time.monotonic()-started,
-        incomplete=any(not c['complete'] for c in evidence['cases']) or any(not c.get('nominal_comparable',False) for c in nominal) or
+        incomplete=bool(settings['line_load_enabled'] and not evidence.get('line_load_stability',{}).get('complete')) or any(not c['complete'] for c in evidence['cases']) or any(not c.get('nominal_comparable',False) or
+            not c.get('load_transient',{}).get('complete') for c in nominal) or
             bool(settings['fra_enabled'] and fra_success<len(nominal)) or
             bool(settings['cross_enabled'] and cross_success<len(cross_cases)))

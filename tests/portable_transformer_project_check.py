@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 from runtime_resources import configure_numeric_threads
 configure_numeric_threads()
 from calculation_scheduler import CalculationCancelled
-from portable_transformer_project import prepare_portable_reference
+from portable_transformer_project import automatic_field_inputs, prepare_portable_reference
 from transformer_geometry import read_geometry_package, strict_json
 from transformer_sim_runner import bind_solver_project
 
@@ -90,6 +90,45 @@ class PortableProjectChecks(unittest.TestCase):
             env = dict(self.env, **{key: None})
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, '不能自动猜测'):
                 self.prepare(environment=env)
+
+    def test_preflight_uses_current_qr_frame_and_catalog_without_creating_files(self):
+        design = strict_json((ROOT / 'examples/90W_QR_L6565_252_442V_REFERENCE.json').read_bytes())
+        untouched = deepcopy(design)
+        env = dict(elmer_home=str(self.root / 'elmer'))
+        result = automatic_field_inputs(design, env)
+        self.assertTrue(result['ready'], result['missing'])
+        self.assertTrue(result['generated_core'])
+        self.assertEqual(result['environment']['r0_m'], .0074)
+        self.assertEqual(result['environment']['z0_m'], -.0088)
+        self.assertEqual(result['environment']['core_mode'], 'assembled')
+        self.assertEqual(design, untouched)
+        self.assertEqual(env, dict(elmer_home=str(self.root / 'elmer')))
+
+    def test_generated_reference_fills_only_missing_nominal_dimensions(self):
+        design = deepcopy(self.cfg)
+        design['winding_config'].pop('window_width')
+        result = automatic_field_inputs(design, {})
+        self.assertTrue(result['ready'], result['missing'])
+        self.assertTrue(result['generated_core'])
+        self.assertGreater(result['winding']['window_width'], 0)
+        self.assertEqual(result['winding']['window_height'], design['winding_config']['window_height'])
+        self.assertIn('估算', result['summary'])
+        design['winding_config']['model_3d'] = dict(schema='power-transformer.model-input.v1',
+            bobbin=dict(winding_route_type='rounded_rectangle'))
+        result = automatic_field_inputs(design, {})
+        self.assertFalse(result['ready'])
+        self.assertTrue(any('非圆形' in msg for msg in result['missing']))
+
+    def test_explicit_cad_has_priority_without_changing_engineering_input(self):
+        env = dict(self.env, core_model='PQ20-20')
+        result = automatic_field_inputs(self.cfg, env)
+        self.assertTrue(result['ready'], result['missing'])
+        self.assertFalse(result['generated_core'])
+        self.assertEqual(result['environment']['core_path'], self.env['core_path'])
+        self.assertEqual(result['environment']['r0_m'], self.env['r0_m'])
+        broken = automatic_field_inputs(self.cfg, dict(env, core_path=str(self.root / 'missing.step')))
+        self.assertFalse(broken['ready'])
+        self.assertFalse(broken['generated_core'])
 
     def test_manual_turn_centers_and_complete_parallel_wires_survive_preparation(self):
         from transformer_simulation import _calculate

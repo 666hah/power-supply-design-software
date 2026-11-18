@@ -5,6 +5,7 @@ Charts are regenerated, not copied from visited GUI tabs. No automatic tuning
 or changes to design parameters are made by export.
 """
 import math
+import re
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -14,7 +15,7 @@ from matplotlib import rc_context
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-from docx_layout import new_document, paragraph, table, figure, section, equation
+from docx_layout import finalize_book_report, new_document, paragraph, table, figure, section, equation
 from waveforms import make_waveforms
 from capripple import capacitor_ripple_analysis
 from semiconductor import device_stress
@@ -54,7 +55,7 @@ PARAMS = {
     'Rth_transformer':('变压器至环境热阻 Ri-a','K/W'),
     'mu_r':('磁材相对磁导率（0=材料预设）',''),
     'k_core':('Steinmetz k',''),'a_core':('Steinmetz α',''),'b_core':('Steinmetz β',''),
-    'MLT':('标准磁芯平均匝长（0=自动）','m'),'Np':('原边匝数（0=自动）',''),
+    'MLT':('兼容字段 MLT','m'),'Np':('原边匝数（0=自动）',''),
     'Ns':('副边匝数（0=自动）',''),'d_wire_p':('原边单股线径（0=自动）','m'),
     'd_wire_s':('副边单股线径（0=自动）','m'),'n_strand_p':('原边单根线股数',''),
     'n_strand_s':('副边单根线股数',''),'parallel_wires_p':('原边线圈并绕数',''),
@@ -92,9 +93,9 @@ def value(x, unit=''):
 def _mos_gate_report(doc, switch_loss):
     gate = switch_loss.get('gate')
     if not gate:
-        paragraph(doc, '此快照缺少 MOS 平台工作点，请用新版重新计算，不以输入值伪装成已求解的平台。')
+        paragraph(doc, '待重算 MOS 平台工作点。')
         return
-    paragraph(doc, '当前平台模型：'+gate['label']+'。以下使用本输入电压与负载下的开通/关断电流；不会把 Vinmin 的平台直接复制给 Vinmax。')
+    paragraph(doc, gate['label']+'。栅电荷计算采用当前工况的开通与关断电流。')
     table(doc, ['过程','实际换流电流','计算平台电压','计算 Qgs'], [
         ('开通',value(gate['I_on'],'A'),value(gate['Vgp_on'],'V'),value(gate['Qgs_on'],'C')),
         ('关断',value(gate['I_off'],'A'),value(gate['Vgp_off'],'V'),value(gate['Qgs_off'],'C')),
@@ -111,7 +112,7 @@ def _mos_gate_report(doc, switch_loss):
         if details:paragraph(doc,'；'.join(details),True)
         origin=info.get('import_file') or info.get('source',{})
         if origin.get('filename'):paragraph(doc,'数据来源：'+origin['filename']+'；SHA256：'+origin.get('sha256','未记录'),True)
-        paragraph(doc,'F 表示按声明坐标插值或端点趋势外推后的反函数。输出曲线族先在指定 Vds 截面得到 Id–Vgs 采样，再沿 Vgs 分组反查。外推情况另行提示，不将其他工况的平台复制为本工况。',True)
+        paragraph(doc,'F 为插值或外推后的反函数。输出曲线族先在指定 Vds 截面取 Id–Vgs，再按电流反查平台电压。',True)
         equation(doc,'Vgp,on=F(Ids,on)')
         equation(doc,'Vgp,off=F(Ids,off)')
     if gate['mode'] == 'current':
@@ -130,7 +131,7 @@ def _mos_gate_report(doc, switch_loss):
         ],[2.5,2.3,2.3])
         origin=info.get('import_file') or info.get('source',{})
         if origin.get('filename'):paragraph(doc,'栅电荷数据来源：'+origin['filename']+'；SHA256：'+origin.get('sha256','未记录'),True)
-        paragraph(doc,'Fpre 是平台前上升支路的反函数，Fpost 是平台后上升支路的反函数。QM,start 与 QM,end 分别是已确认的平台起止电荷。各支路支持端点趋势外推，平台平段及平台后支路不参与 Qgs 的反查；外推不是新增实测点。',True)
+        paragraph(doc,'Fpre、Fpost 分别为平台前、后上升段的反函数。Qgs 只取平台前支路，Qgd 取平台起止电荷差。超出曲线范围时按对应支路端点外推。',True)
         for formula in ('Qg_th=Fpre(Vth)','Qgs,on=Fpre(Vgp,on)','Qgs,off=Fpre(Vgp,off)',
                         'Qgd=Qplateau,end−Qplateau,start','Qg=Fpost(Vdrv)'):
             equation(doc,formula)
@@ -186,23 +187,23 @@ def loop_data(p,models):
     return analyze_loop(p,models)
 
 
-def design_checks(p,op,wf,res,loop,loop_error=None):
+def design_checks(p,op,wf,res,loop,loop_error=None,*,checks=None):
     from design_checks import check_catalog, STATE_LABELS
-    checks=res.get('checks')
     if checks is None:
-        checks=check_catalog(p,res,loop,loop_error)
+        checks=res.get('checks')
+        if checks is None:
+            checks=check_catalog(p,res,loop,loop_error)
     return [(c['name'], value(c['value'], c['unit']),
              (c['comparison']+' '+value(c['limit'], c['unit'])) if c['limit'] is not None else c['note'],
-             STATE_LABELS[c['state']]) for c in checks]
+             STATE_LABELS[c['state']]) for c in checks if not c['id'].startswith('bom_')]
 
 
-def _output_report(doc,p,res):
+def _output_report(doc,p,res,*,coupled):
     if not res.get('outputs'): return
     section(doc,'1.1  多绕组输出与独立支路核算')
     paragraph(doc,'只输入主反馈或 PSR 基准路的电压，其余输出按已解析的整数副边匝数比估算；每路功率、整流器、电容和绕组参数分别配置。原边按总输出功率设计，共享磁芯、MOS、采样和输入电容只计一次。最多 6 路功率输出，PSR 辅助采样绕组另计。')
     equation(doc,'V_j,est = (V_b + Vf,block,b + Vf,rect,b)·Ns_j/Ns_b − Vf,rect,j − Vf,block,j')
     equation(doc,'Pout = Σ P_j'); equation(doc,'I_j = ','P_j','V_j')
-    coupled = bool(res['op'].get('coupled_solution') is not None)
     paragraph(doc,'本次采用逐对耦合矩阵，联立二极管导通状态与各路周期平均电荷平衡。负载为反馈设定或匝比近似电压平方除以额定功率得到的固定电阻；仅主反馈路固定设定电压，其他输出电压及实际功率为解算结果。输出电容以刚性直流电压近似，非开关瞬态仿真。' if coupled else
               '本模型假定理想匝比关系和标称同步整流波形；反激电流按各路功率比例分配。非反馈输出不独立闭环，轻载、空载、整流压降和耦合导致的交叉调整率未被验证。多路正激仅支持每路均 CCM，DCM 角点明确跳过。',True)
     table(doc,['输出 / 名称','反馈设定或匝比估算 / 功率','直流电流','整流 RMS','纹波','整流 / 电容损耗'],[
@@ -228,7 +229,7 @@ def _output_report(doc,p,res):
              '不适用（反激共享 L）' if b=='L' and p['topology']!='ACF-FORWARD' else value(spec[b]/FIELDS[b][2],FIELDS[b][1]))
             for a,b in [('V_out','P_out'),('P_out_min','ripple_target'),('C_out','Rc'),('ESL','C_out2'),('Rc2','ESL2'),('Vf_diode','Qrr'),('Ns','n_strand_s'),('d_wire_s','parallel_wires_s')]+([('L','Vf_dout')] if p['topology']=='ACF-FORWARD' else [])
             ],[1.7,1.85,1.7,1.85])
-        paragraph(doc,f"并联电容数量：{len(__import__('capacitor_banks').bank(spec))} 颗；输出防反：{value(spec['d_out_enable'])}，固定 Vf={value(spec['Vf_dout'],'V')}；二极管曲线与对应损耗见第 3 节。"+
+        paragraph(doc,f"并联电容数量：{len(__import__('capacitor_banks').bank(spec))} 颗。输出防反：{value(spec['d_out_enable'])}，固定 Vf={value(spec['Vf_dout'],'V')}。二极管曲线与对应损耗见器件选型与损耗部分。"+
                   (f"正激输出电感磁芯：{spec['core_choice_L']}。" if p['topology']=='ACF-FORWARD' else ''))
         def waves(fig):
             from multi_output_charts import draw_output_currents
@@ -240,7 +241,7 @@ def _output_report(doc,p,res):
             axes[1].plot(wf['t']*1e6,wf['vout_ripple']*1000); axes[1].set(title=f'OUT{idx} 低频纹波',xlabel='时间 / μs',ylabel='mV')
             for ax in axes: ax.grid(alpha=.2)
         figure(doc,_chart((7.1,2.2),waves),f'图 1-OUT{idx}  '+('耦合矩阵解算电流与小纹波重建' if coupled else '对应输出的标称波形；非交叉调整率实测'))
-        paragraph(doc,f'OUT{idx} 的电容组 RMS、单只电容损耗和频带柱状图集中列于第 4 节，不在此重复。',True)
+        paragraph(doc,f'OUT{idx} 的电容组 RMS、单只电容损耗和频带柱状图见「电容组与纹波电流」。',True)
         inds=res['mag'].get('inductors',[])
         if inds:
             dev=inds[idx-1]
@@ -255,7 +256,7 @@ def _psr_report(doc,p,res):
     detail=res.get('psr')
     if not detail: return
     section(doc,'1.2  MP6005 原边反馈设计核算')
-    paragraph(doc,f"控制器 MP6005，MODE 悬空；{detail['region']} 区域；PWM 固定 250kHz，内部 CS 增益 11。基准为 OUT{int(p.get('feedback_output',1))}，辅助采样绕组在原边参考地，不能直接连接到次级地。")
+    paragraph(doc,f"MP6005 工作在 {detail['region']} 区域。MODE 悬空，PWM 250 kHz，内部 CS 增益 11。基准为 OUT{int(p.get('feedback_output',1))}。辅助采样绕组接原边参考地。")
     equation(doc,'β = ','R_FB,L','R_FB,H + R_FB,L')
     equation(doc,'V_FB = β·((N_a/N_s)·(Vo + V_f) - I_reg·R_FB,H)')
     equation(doc,'L_min = ','(N_p/N_s)·(Vo + V_f)·0.7μs·R_s','0.033V')
@@ -298,7 +299,7 @@ def _psr_report(doc,p,res):
 
 def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None,comparison=None,
                        *,mos_real_time=False,efficiency_curve=None,compensation_state=None,
-                       document=None,case_label=None,save=True):
+                       document=None,case_label=None,save=True,include_conclusion=True):
     """Write a complete .docx without mutating the design snapshot.
 
     MOS axis mode follows the GUI option, defaulting to stage unfolding for
@@ -310,6 +311,9 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     from isolated_outputs import selected_params
     source_p=dict(p)
     fixed_hardware=any(key.startswith('_fixed_') for key in source_p)
+    cot = op.get('cot')
+    coupling=op.get('coupled_model')
+    coupled=bool(coupling and not coupling.get('ideal_fallback'))
     from device_curve_sources import effective_sources
     p=selected_params(effective_sources(p))
     if res.get('psr'):
@@ -323,8 +327,13 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
             loop=loop_data(dict(p,f_sw=op['f_sw']),models)
         except Exception as exc:
             loop_error=str(exc)
-    checks=design_checks(p,op,wf,res,loop,loop_error)
-    failed=[c for c in checks if c[3] in ('需复核','未计算')]
+    from design_checks import check_catalog
+    from report_architecture import conclusion_line, review_findings
+    check_items=res.get('checks')
+    if check_items is None:
+        check_items=check_catalog(source_p,res,loop,loop_error)
+    checks=design_checks(p,op,wf,res,loop,loop_error,checks=check_items)
+    failed=[c for c in check_items if c['state'] in ('review','undefined')]
     stamp=datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M %Z')
     doc=document if document is not None else new_document('开关电源设计评审报告',
         f"{TOPOLOGY.get(op['topology'],op['topology'])}  |  {value(p['P_out'],'W')}  |  {stamp}",
@@ -336,8 +345,16 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         hardware_scope=('磁芯、匝数、线径及补偿参数与另一端点相同。' if fixed_hardware else
                         '未成功固定有效磁件，保留可用的电气计算结果；补偿参数不变。')
         paragraph(doc,f"本部分所有参数、表格和波形对应 {case_label or '当前工况'}，输入电压为 {value(p['V_in'],'V')}。{hardware_scope}各节编号只在本工况内引用。")
+    if include_conclusion:
+        doc.add_heading('评审结论',1)
+        findings, pending = review_findings([dict(result=res, checks=check_items)])
+        summary = f'重点复核 {len(findings)} 项，待补数据 {pending} 项'
+        conclusion_line(doc, summary, 'review' if findings else 'undefined' if pending else 'pass')
+        if findings:
+            table(doc, ['优先复核', '当前值与要求'], findings[:5], [2.6, 4.5])
+        table(doc,['工作模式','模型效率','总损耗','低频纹波'],[
+            (op['mode'],f"{res['eta']*100:.2f}%",value(res['P_total'],'W'),value(wf['ripple_pp'],'V'))])
     doc.add_heading('设计概览',1)
-    paragraph(doc,f"本报告记录导出时的设计快照，面向研发与设计评审。共核查 {len(checks)} 项，{len(failed)} 项需复核。结果为分析模型估算，不代替样机实测、器件数据手册和安规认证。")
     from voltage_nodes import NOTE
     paragraph(doc,NOTE)
     table(doc,['输出端口（防反后）','电容端／反馈取样（防反前）','输入母线（防反后）'],[
@@ -346,24 +363,22 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         ('输入 / 输出电压',value(p['V_in'],'V')+' / '+value(p['V_out'],'V'),
          (case_label+' 输入端点；完整输入范围见报告开头') if case_label else '标称需求；扫描范围另见角点节（如有）'),
         ('总功率 / 主反馈路电流' if res.get('outputs') else '输出功率 / 电流',value(p['P_out'],'W')+' / '+value(op['I_out'],'A'),'所选路负载电阻 '+value(op['R'],'Ω')),
-        ('开关频率设定',value(p['f_sw'],'Hz'),'MP6005 使用 250kHz PWM / 轻载降频' if res.get('psr') else 'QR 为频率上限；其余为固定频率'),
-        ('控制方式',p['control_mode'],'当前补偿器：'+resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])),
+        ('开关频率设定',value(p['f_sw'],'Hz'),'每相目标频率，用于自适应导通定时' if cot else
+         'MP6005 使用 250kHz PWM / 轻载降频' if res.get('psr') else 'QR 为频率上限；其余为固定频率'),
+        ('控制方式','COT · 同步 Buck' if cot else p['control_mode'],
+         '每相同规格、共用一个输出' if cot else '当前补偿器：'+resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])),
         ('纹波目标',value(p['ripple_target']*p['V_out'],'V'),'输出低频峰峰值目标'),
         ('环路目标',value(p.get('fc_target'),'Hz')+' / '+value(p.get('pm_target'),'°'),'导出不进行自动整定'),
         ('效率目标',f"{p['target_eta']*100:.1f}%",'仅比较已建模损耗口径'),
-        ('预设设计效率',f"{op['eta_guess']*100:.2f}%",'工作点与波形的设计假设；不被最终效率覆盖'),
+        ('预设设计效率',f"{op['eta_guess']*100:.2f}%",'仅用于功耗预算，占空比由实际导通压降求解' if cot else
+         '工作点与波形的设计假设；不被最终效率覆盖'),
     ],[1.65,2.25,3.2])
-    doc.add_heading('评审摘要',2)
-    table(doc,['工作模式','模型效率','总损耗','低频纹波'],[
-        (op['mode'],f"{res['eta']*100:.2f}%",value(res['P_total'],'W'),value(wf['ripple_pp'],'V'))])
-    paragraph(doc,'优先复核：'+('；'.join(c[0] for c in failed) if failed else '本快照的已建模检查满足当前阈值，仍需完成额定值、热态和实测验证。'))
-    paragraph(doc,'报告导航：工作点与核查 → 关键波形 → 功率器件 → 电容纹波 → 磁件 → 环路与补偿电路 → 损耗与效率 → 模型限制与输入参数。',True)
-
     section(doc,'0  拓扑、绕组与反馈架构')
     from topology_diagram import draw_topology,topology_components
-    def topology(fig): draw_topology(fig.subplots(),source_p,op)
+    def topology(fig): draw_topology(fig.subplots(),source_p,op,label_operating_values=False)
     rail_count=len(res.get('outputs',[]))
-    figure(doc,_chart((7.1,6.4 if rail_count>3 else 4.6 if rail_count>1 else 3.4),topology),'图 0-1  与软件①页同步的拓扑参考图；工程示意，不是可生产原理图')
+    figure(doc,_chart((7.1,6.4 if rail_count>3 else 4.6 if rail_count>1 else 3.4),topology),
+           '图 0-1  电路拓扑与器件位号')
     rows=topology_components(source_p,op)
     table(doc,['位号','器件 / 用途','配置参数'],[(r['ref'],r['role'],r['values']) for r in rows],[1.,2.7,3.4])
     paragraph(doc,(f"反馈方式：{source_p.get('feedback_mode','SSR')}；主反馈/PSR基准：OUT{int(source_p.get('feedback_output',1))}。仅该路电压作为设定输入，其余路以整数副边匝数比估算；耦合解算电压另列，不作为独立稳压设定。" ) if res.get('outputs') or res.get('psr') else '当前采用兼容单路配置。')
@@ -372,17 +387,18 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     table(doc,['计算量','结果','计算量','结果'],[
         ('导通占空比 D',value(op['D']),'续流 / 退磁占空比 Dp',value(op['Dp'])),
         ('实际开关频率',value(op['f_sw'],'Hz'),'开关周期',value(op['Ts'],'s')),
-        ('电感 L',value(p['L'],'H'),'工作点输入匝比 N',value(p['N']) if op['topology'] in ('FLYBACK','QR-FLYBACK','ACF-FORWARD') else '不适用'),
+        ('励磁电感 Lm' if op['topology'] in ('FLYBACK','QR-FLYBACK') else '电感 L',value(p['L'],'H'),
+         '工作点输入匝比 N',value(p['N']) if op['topology'] in ('FLYBACK','QR-FLYBACK','ACF-FORWARD') else '不适用'),
         ('电感 / 原边峰值电流',value(op['I_L_pk'],'A'),'电流峰峰纹波',value(op['dI_L'],'A')),
         ('电感 / 原边谷值电流',value(op['I_L_min'],'A'),'工作模式',op['mode']),
-        ('RHP 零点','耦合模型不沿用' if op.get('coupled_solution') is not None else value(op.get('rhp_zero'),'Hz'),
+        ('RHP 零点','耦合模型不沿用' if coupled else value(op.get('rhp_zero'),'Hz'),
          '含 ESL 总纹波',value(wf.get('ripple_pp_total'),'V')),
     ],[2.2,1.35,2.2,1.35])
     table(doc,['核查项','计算值','目标 / 阈值','结论'],checks,[2.15,1.3,2.85,.8])
-    paragraph(doc,f"温升上限为 {p.get('temp_rise_limit',40):g} K，GUI / API / 报告共用此阈值。窗口填充率未计骨架、绝缘和爬电空间；‘满足’仅表示数学模型内满足阈值。器件额定值及降额初筛见关键器件 BOM 节；额定电流、电容寿命与完整热态性能仍未核定。",True)
+    paragraph(doc,'窗口填充率按裸铜计算。器件额定值与降额见关键器件表。',True)
     from component_report import add_component_report
     add_component_report(doc, source_p, res)
-    _output_report(doc,source_p,res)
+    _output_report(doc,source_p,res,coupled=coupled)
     _psr_report(doc,source_p,res)
     from cross_regulation_report import add_report as add_cross_regulation_report
     add_cross_regulation_report(doc,source_p,res)
@@ -391,19 +407,78 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         add_coupling_snapshot(doc,op)
 
     section(doc,'2  关键时域波形')
-    paragraph(doc,'波形与软件②功率级页面共用绘图逻辑和导出快照；多路模式显示共享 Q1 电流、输入电流、Vds 和磁链等效量，支路电流与纹波在各路核算节列出。单路兼容模式顺序为 Q1 电流、D1 电流、输出纹波、输出电压。随后均展示 Q1 开通、关断过程。')
+    if cot:
+        table(doc, ['相数', '导通时间 / 相', '关断时间 / 相', '频率 / 相', '相间角度', '合成基频'],
+              [(cot['phases'], value(cot['ton_s'], 's'), value(cot['toff_s'], 's'), value(op['f_sw'], 'Hz'),
+                value(cot['phase_shift_deg'], '°'), value(cot['ripple_frequency_Hz'], 'Hz'))])
+        table(doc, ['输出电流', '相电流平均值', '相电流 RMS', '相电流峰值 / 谷值', '合成电流纹波'],
+              [(value(op['I_out'], 'A'), value(op['I_L_avg'], 'A'), value(op['I_L_rms'], 'A'),
+                value(op['I_L_pk'], 'A')+' / '+value(op['I_L_min'], 'A'),
+                value(cot['total_output_current_ripple_A'], 'A'))])
+        paragraph(doc, ('自适应模式按电容端设定电压、输入母线及目标每相频率设定导通时间。'
+                        if cot['adaptive'] else '本设计使用固定导通时间。')+
+                  '各相电感电流错开后在同一输出端求和。', True)
+        paragraph(doc, cot['scope'], True)
+        engineering = cot.get('engineering')
+        if engineering:
+            section(doc,'2.1  逐相均流与动态约束')
+            phases=cot.get('phase_data') or []
+            table(doc,['相号','平均 / A','RMS / A','峰值 / A','谷值 / A','占空比'],[
+                (r['id'],value(r['current_avg_A'],'A'),value(r['current_rms_A'],'A'),
+                 value(r['current_peak_A'],'A'),value(r['current_valley_A'],'A'),f"{r['duty']:.4f}") for r in phases])
+            paragraph(doc,f"最大相电流不平衡 {engineering['phase_imbalance_pct']:.3g}%；"
+                          f"峰值最大为第 {engineering['max_phase_id']} 相。"+
+                          ('均流修正达到限幅。' if engineering['trim_saturated'] else '均流修正在设定范围内。'))
+            table(doc,['相号','采样峰值 / A','限流阈值 / A','采样余量 / A','延迟附加电流 / A'],[
+                (r['id'],value(r['sampled_peak_A'],'A'),value(r['limit_A'],'A') if r['limit_A'] is not None else '未启用',
+                 value(r['sample_margin_A'],'A') if r['sample_margin_A'] is not None else '—',value(r['delay_overshoot_A'],'A'))
+                for r in engineering['protection']])
+            dyn=engineering['dynamic']
+            if dyn['enabled']:
+                table(doc,['动态设计项目','计算结果','允许值'],[
+                    ('负载阶跃幅度',value(dyn['step_A'],'A'),'按工程负载配置'),
+                    ('响应延迟',value(dyn['delay_s'],'s'),'工程预算'),
+                    ('电荷初筛：增载跌落',value(dyn['droop_bound_V'],'V'),value(dyn['droop_limit_V'],'V') if dyn['droop_limit_V'] else '未指定'),
+                    ('电荷初筛：掉载过冲',value(dyn['overshoot_bound_V'],'V'),value(dyn['overshoot_limit_V'],'V') if dyn['overshoot_limit_V'] else '未指定'),
+                    ('跌落所需容量',value(dyn['required_droop_F'],'F') if dyn['required_droop_F'] is not None else '限值不足或未指定',value(dyn['capacitance_F'],'F')+' 已配置'),
+                    ('过冲所需容量',value(dyn['required_overshoot_F'],'F') if dyn['required_overshoot_F'] is not None else '限值不足或未指定',value(dyn['capacitance_F'],'F')+' 已配置')])
+                paragraph(doc,dyn['note'],True)
+                closed=dyn.get('closed_loop') or {}
+                if closed.get('available'):
+                    table(doc,['平均闭环负载响应','结果'],[
+                        ('增载最大跌落 / 回摆过冲',value(closed['droop_V'],'V')+' / '+value(closed['overshoot_V'],'V')),
+                        ('小信号恢复时间',value(closed['settling_s'],'s') if closed['settled'] else '观测窗口内未稳定')],[4.2,2.9])
+                    paragraph(doc,closed['note'],True)
+                    def dynamic_chart(fig):
+                        axes=fig.subplots(1,2)
+                        axes[0].plot(np.asarray(closed['time_s'])*1e3,np.asarray(closed['voltage_delta_V'])*1e3)
+                        axes[0].set(title='平均闭环负载增量响应',xlabel='时间 / ms',ylabel='端口电压变化 / mV')
+                        axes[1].loglog(closed['zout_frequency_Hz'],closed['zout_magnitude_ohm'])
+                        axes[1].set(title='平均闭环输出阻抗',xlabel='频率 / Hz',ylabel='|Zout| / Ω')
+                        for ax in axes:ax.grid(alpha=.2,which='both')
+                    figure(doc,_chart((7.1,2.8),dynamic_chart),'COT 平均闭环负载响应与输出阻抗；大阶跃另由开关仿真验收')
+                else:
+                    paragraph(doc,'平均闭环动态未覆盖：'+closed.get('reason','未取得响应计算')+'。',True)
+            else:
+                paragraph(doc,'未配置负载阶跃幅度，动态电容约束未覆盖。稳态纹波抵消不作为动态容量充分性的证据。',True)
+    else:
+        paragraph(doc,'波形与软件②功率级页面共用绘图逻辑和导出快照；多路模式显示共享 Q1 电流、输入电流、Vds 和磁链等效量，支路电流与纹波在各路核算节列出。单路兼容模式顺序为 Q1 电流、D1 电流、输出纹波、输出电压。随后均展示 Q1 开通、关断过程。')
     if res.get('outputs'):
-        paragraph(doc,f"本节 D1 为所选 OUT{int(source_p['feedback_output'])} 整流支路的通用波形标签；实际器件位号见图 0-1。其余输出分别见多路输出核算节。",True)
-    paragraph(doc,'前四图为两周期模型波形，RMS 与峰值按相同采样计算。输出纹波与页面一致，以 mV 显示低频分量，不叠加 ESL 尖峰；电容分流和纹波 RMS 见第 4 节。',True)
+        paragraph(doc,f"本节 D1 为所选 OUT{int(source_p['feedback_output'])} 整流支路的通用波形标签。实际器件位号见“电路拓扑与器件位号”图。其余输出分别见多路输出核算部分。",True)
+    paragraph(doc,'时域波形显示两个开关周期，RMS 与峰值按相同采样计算。与软件页面一致，输出纹波图以 mV 显示低频分量，另列电容分流和纹波 RMS。',True)
     from stress_notes import DIODE_STRESS_NOTE, FLYBACK_STRESS_NOTE
-    paragraph(doc,DIODE_STRESS_NOTE,True)
+    if not cot:
+        paragraph(doc,DIODE_STRESS_NOTE,True)
     def steady(fig):
         if res.get('outputs'):
             from multi_output_charts import draw_shared_power_signals
             draw_shared_power_signals(fig.subplots(2,2),op,wf)
         else:
             draw_power_signals(fig.subplots(2,2),op['topology'],wf)
-    figure(doc,_chart((7.1,4.1),steady),'图 2-1  '+('共享 MOS 电流、输入电流、Vds 与磁链等效量' if res.get('outputs') else 'Q1 电流、D1 电流、输出纹波与输出电压')+'（按行排列）')
+    waveform_caption = ('COT 每相电流、合成电流、输入电流与输出纹波' if cot else
+        '共享 MOS 电流、输入电流、Vds 与磁链等效量' if res.get('outputs') else
+        'Q1 电流、D1 电流、输出纹波与输出电压')
+    figure(doc,_chart((7.1,4.1),steady),'图 2-1  '+waveform_caption+'（按行排列）')
 
     section(doc,'2.1  Q1 开通与关断过程')
     _mos_gate_report(doc, res['semi']['switch'])
@@ -419,18 +494,20 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
          '补充估算' if i in (4,5) else '栅电荷损耗模型') for i in range(1,9)],
         [.6,.65,1.5,1.4,2.95])
     for note in switching_data['notes']: paragraph(doc,note,True)
-    paragraph(doc,'关断总栅阻包含 MOS 内部栅阻。交叠损耗只使用 t2+t3 与 t6+t7；上述曲线是分段重建参考，不是 SPICE 瞬态或实测结果。',True)
+    paragraph(doc,'关断总栅阻含 MOS 内部栅阻。交叠损耗采用 t2+t3 与 t6+t7。图中曲线按各阶段计算值重建。',True)
 
     from parasitic_report import add_report as add_parasitic_report
     add_parasitic_report(doc,source_p,res)
     section(doc,'3  功率器件参数与应力')
     from device_curve_report import add_device_source_report
     add_device_source_report(doc,source_p,res)
-    stress=device_stress(op); names={'switch':'主 MOSFET','diode':'整流二极管','auxiliary':'钳位 MOSFET','freewheel':'续流二极管'}
+    stress=device_stress(op); names=({'switch':'每相高侧 MOSFET','auxiliary':'每相低侧 MOSFET'} if cot else
+        {'switch':'主 MOSFET','diode':'整流二极管','auxiliary':'钳位 MOSFET','freewheel':'续流二极管'})
     table(doc,['器件','耐压应力','峰值电流','有效值电流','平均电流'],[
         (names.get(k,k),value(v['V_max'],'V'),value(v['I_pk'],'A'),value(v['I_rms'],'A'),value(v['I_avg'],'A')) for k,v in stress.items()
     ],[1.7,1.35,1.35,1.35,1.35])
-    paragraph(doc,DIODE_STRESS_NOTE)
+    if not cot:
+        paragraph(doc,DIODE_STRESS_NOTE)
     if op['topology'] in ('FLYBACK','QR-FLYBACK'):
         paragraph(doc,FLYBACK_STRESS_NOTE)
         clamp=op.get('clamp',{})
@@ -440,11 +517,11 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
             ('Kc 钳位上限',value(clamp.get('V_ceiling') if valid_clamp else None,'V'),
              'Vin + Kc × Vreflect；不叠加振铃裕度' if valid_clamp else '未配置有效 Kc>1；仅理想平台，未覆盖尖峰应力'),
             ('模拟波形峰值',value(clamp.get('V_peak'),'V'),'按漏感能量与钳位求得，可低于上限')],[1.6,1.3,4.2])
-    else:
-        paragraph(doc,'MOS 应力包含用户设定的 MOS 电压裕量，不将该裕量套用到二极管反压。')
-    paragraph(doc,'计算应力不是器件额定值。选型需再核对 SOA、温度降额、反向恢复、雪崩和真实尖峰。')
-    keys=['Rds_on','Coss','Qg','Vgs','Vf_diode','Qrr']
-    if op['topology']=='ACF-FORWARD': keys+=['Rds_aux','Coss_aux','Qg_aux']
+    elif not cot:
+        paragraph(doc,'MOS 电压应力含设定裕量。二极管按反向电压模型计算。')
+    paragraph(doc,'器件额定值与降额见选型表。SOA、反向恢复、雪崩及开关尖峰另行核对。')
+    keys=['Rds_on','Coss','Qg','Vgs'] if cot else ['Rds_on','Coss','Qg','Vgs','Vf_diode','Qrr']
+    if cot or op['topology']=='ACF-FORWARD': keys+=['Rds_aux','Coss_aux','Qg_aux']
     table(doc,['器件 / 控制参数','符号','当前值'],[(PARAMS[k][0],k,value(p[k],PARAMS[k][1])) for k in keys],[3.7,1.5,1.9])
     from diode_report import add_diode_report
     add_diode_report(doc,source_p,res)
@@ -453,22 +530,45 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         (names[k],value(res['semi'][k].get('P_cond',0),'W'),value(res['semi'][k].get('P_sw_on',0)+res['semi'][k].get('P_sw_off',0)+res['semi'][k].get('P_rr',0),'W'),
          value(res['semi'][k].get('P_coss',0),'W'),value(res['semi'][k].get('P_gate',0),'W'),value(res['semi'][k]['P_total'],'W'))
         for k in names if k in res['semi']],[1.6,1.1,1.25,1.1,1.05,1])
-    paragraph(doc,'主开关采用栅电荷时间法；栅极模型全参数见附录。正激钳位开关仅估算导通、栅驱动和 Coss 项，未建模开关交叠。QR 分支假定理想谷底开通，开通与 Coss 损耗记零；有源钳位正激不自动获得 ZVS 损耗减免。',True)
+    paragraph(doc, '表中损耗及应力按每相单颗器件显示。效率核算采用所有相的合计。' if cot else
+              '主开关采用栅电荷时间法。正激钳位开关计导通、栅驱动和 Coss 损耗。QR 按理想谷底开通估算，开通和 Coss 损耗记零。', True)
 
     section(doc,'4  电容组与纹波电流')
-    caprows=[]; capnames=[]; capvals=[]; caplist=[]
+    caprows=[]; capnames=[]; capvals=[]; caplist=[]; impedance_rows=[]
     multiple=bool(res.get('outputs'))
     groups=[('共享输入' if multiple else '输入',caps['input'])]
     groups += [(f"OUT{row['id']}",row['capacitors']['output']) for row in res['outputs']] if multiple else [('输出',caps['output'])]
     if multiple:
-        paragraph(doc,'共享输入仅列一次；全部 OUT 的电容详细结果统一列于本节。第 1.1 节只保留支路电压纹波与电流波形，不再重复电容 RMS 表格和柱状图。')
+        paragraph(doc,'共享输入电容与各输出电容的详细结果集中列于本节。各输出支路小节列出对应的电压纹波与电流波形。')
     for label,bank in groups:
         for i,c in enumerate(bank['caps'],1):
             name=f'{label} C{i}'; capnames.append(name); capvals.append(c['total']); caplist.append((name,c,bank['labels']))
-            caprows.append((name,value(c['C'],'F'),value(c['ESR'],'Ω'),value(c['ESL'],'H'),value(c['total'],'A'),value(c['ESR']*c['total']**2,'W')))
+            loss=c['loss_W'] if 'loss_W' in c else c['ESR']*c['total']**2
+            caprows.append((name,value(c['C'],'F'),value(c['ESR'],'Ω'),value(c['ESL'],'H'),value(c['total'],'A'),value(loss,'W')))
+            curve_range=c.get('curve_range_hz')
+            coverage=c.get('curve_coverage_fraction')
+            rise=c.get('temperature_rise_K')
+            if curve_range or rise is not None:
+                impedance_rows.append((name,
+                    '–'.join(value(f,'Hz') for f in curve_range) if curve_range else '固定 RLC',
+                    f'{100*coverage:.1f}%' if coverage is not None else '—',
+                    value(c['equivalent_esr_ohm'],'Ω') if c.get('equivalent_esr_ohm') is not None else '—',
+                    value(rise,'K') if rise is not None else '未填热阻'))
     table(doc,['电容','容量','ESR','ESL','纹波 RMS','ESR 损耗'],caprows,[1.1,1.1,1.1,1.1,1.4,1.3])
+    if impedance_rows:
+        table(doc,['电容','扫频范围','曲线覆盖 I²','等效 ESR','估算温升'],impedance_rows,
+              [1.1,2.1,1.4,1.1,1.2])
+        paragraph(doc,'首表 ESR 与 ESL 是固定模型参数。曲线覆盖率是扫频内各频点均方电流占比。'
+                  '损耗按各频点均方电流乘阻抗实部后求和，温升按损耗乘单颗热阻估算。'
+                  '扫频范围之外、环路计算及 LTspice 时域仍沿用固定参数。',True)
+        ripple_cases = [(f"OUT{rail['id']}", data) for rail,data in zip(res['outputs'], wf.get('outputs',()))] if multiple else [('输出', wf)]
+        ripple_rows = [(label, value(data['ripple_pp_total'],'V'), value(data['ripple_pp'],'V'))
+                       for label,data in ripple_cases if data.get('ripple_impedance_model') == 'curve']
+        if ripple_rows:
+            table(doc,['测量位置','阻抗曲线总纹波 / Vpp','标称 C+ESR 参考纹波 / Vpp'],
+                  ripple_rows,[1.3,2.8,3.0])
     paragraph(doc,'；'.join(f"{label}组总纹波 {value(bank['total_bank'],'A')}" for label,bank in groups)+
-              '。单只电流按各频率复阻抗分配，不能将单只 RMS 算术相加。额定纹波需按厂家频率、温度和寿命条件校验。',True)
+              '。按各频率的复阻抗计算分流。额定纹波按厂家频率、温度和寿命条件核对。',True)
     figure(doc,_bars(capnames,capvals,'各电容总纹波电流','有效值 / A',max(1.8,.25*len(capnames)+.65)),
            '图 4-1  单只电容总纹波电流（统一口径）')
     def harmonics(fig,items):
@@ -478,14 +578,23 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
             ax.bar(np.arange(len(labels)),c['bands'],color=COLORS[0],width=.7)
             ax.set_xticks(ticks,['LF' if x==0 else labels[x] for x in ticks]); ax.set(title=name,xlabel='相对开关频率的频带',ylabel='RMS / A'); ax.grid(axis='y',alpha=.15)
         for ax in axes[len(items):]: ax.set_visible(False)
-    if multiple:
-        for index,(label,bank) in enumerate(groups,2):
-            items=[(f'{label} C{i}',c,bank['labels']) for i,c in enumerate(bank['caps'],1)]
-            figure(doc,_chart((7.1,1.9),lambda fig,items=items: harmonics(fig,items)),
-                   f'图 4-{index}  {label} 电容 FFT 分带（仅列一次）')
-    else:
-        figure(doc,_chart((7.1,3.3 if len(caplist)>2 else 1.9),lambda fig: harmonics(fig,caplist)),
-               '图 4-2  FFT 分带；LF < 0.5fs，HF > 20.5fs；稀疏显示刻度')
+    # Equal branches share an identical spectrum. Keep every capacitor in the
+    # numeric table, and group only exactly equal displayed curves.
+    plot_banks=[(label,[(f'{label} C{i}',c,bank['labels']) for i,c in enumerate(bank['caps'],1)])
+                for label,bank in groups] if multiple else [('输入与输出',caplist)]
+    for label,branches in plot_banks:
+        spectra={}
+        for name,c,labels in branches:
+            key=(tuple(labels),tuple(float(x) for x in c['bands']))
+            if key not in spectra:spectra[key]=([name],c,labels)
+            else:spectra[key][0].append(name)
+        items=[(names[0]+(f' 等 {len(names)} 颗（各颗）' if len(names)>1 else ''),c,labels)
+               for names,c,labels in spectra.values()]
+        for offset in range(0,len(items),4):
+            group=items[offset:offset+4]
+            caption=(label+' 电容 FFT 分带（仅列一次）' if multiple and offset==0 else label+' 电容 FFT 分带')
+            figure(doc,_chart((7.1,3.5 if len(group)>2 else 1.9),lambda fig,group=group: harmonics(fig,group)),
+                   caption+'；相同曲线合并展示，各颗计算结果保留于上表；LF < 0.5fs，HF > 20.5fs')
     paragraph(doc,'输入与输出电容 ESR 均计入最终损耗。整周期采样按全部 DFT 频点进行复阻抗分流，并以 Parseval 校核能量；仅非整周期采样采用平顶窗近似。单只 RMS 可因环流大于组总 RMS。',True)
 
     section(doc,'5  磁件设计与热评估')
@@ -493,8 +602,8 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     if not bought_inductor:
         table(doc,['基础输入','当前值','基础输入','当前值'],[
         (PARAMS[a][0],value(p[a],PARAMS[a][1]),PARAMS[b][0],value(p[b],PARAMS[b][1]))
-        for a,b in [('Bmax','Bsat'),('J','Ku'),('rho','Rth_transformer' if res['mag'].get('transformer') else 'h_conv'),('k_core','a_core'),('b_core','MLT')]
-        ],[2.15,1.4,2.15,1.4])
+        for a,b in [('Bmax','Bsat'),('J','Ku'),('rho','Rth_transformer' if res['mag'].get('transformer') else 'h_conv'),('k_core','a_core')]
+        ] + [(PARAMS['b_core'][0],value(p['b_core']),'','')],[2.15,1.4,2.15,1.4])
     devices=[]
     for kind,label in [('transformer','变压器'),('inductor','电感')]:
         dev=res['mag'].get(kind)
@@ -518,7 +627,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         devices.append((kind,label,dev)); doc.add_heading(label+' · '+dev['core_label'],2)
         paragraph(doc,'磁芯尺寸来源：'+dev['core']+'；MLT 来源：'+dev['MLT_source']+'。',True)
         rows=[('有效截面积 Ae',value(dev['Ae']*1e6,'mm²'),'有效体积 Ve',value(dev['Ve']*1e6,'cm³')),
-              ('窗口面积 Wa',value(dev['Wa']*1e6,'mm²'),'平均匝长 MLT',value(dev['MLT']*1e3,'mm')),
+              ('窗口面积 Wa',value(dev['Wa']*1e6,'mm²'),('原边 MLT' if kind=='transformer' else '电感 MLT'),value(dev['MLT']*1e3,'mm')),
               ('峰值磁密',value(dev['B_pk'],'T'),'峰峰磁通摆幅',value(dev['dB'],'T')),
               ('窗口填充率',f"{dev['fill']*100:.1f}%",'估算温升',value(dev['dT'],'K')),
               ('铜损',value(dev['P_cu'],'W'),'磁芯损耗',value(dev['P_core'],'W'))]
@@ -542,18 +651,29 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
                      ('原 / 副边线圈并绕根数',f"{dev.get('parallel_wires_p',1)} / {dev.get('parallel_wires_s',1)}",'截面线数（匝数 × 根数）',f"{dev['Np']*dev.get('parallel_wires_p',1)} / {dev['Ns']*dev.get('parallel_wires_s',1)}"),
                      ('原 / 副边直流电阻',value(dev['R_dc_p'],'Ω')+' / '+value(dev['R_dc_s'],'Ω'),'交流修正系数',value(dev['Fr_p'])+' / '+value(dev['Fr_s']))]
             rows += [('原 / 副边 RMS 电流密度',value(dev['J_actual_p']/1e6,'A/mm²')+' / '+value(dev['J_actual_s']/1e6,'A/mm²'),
-                      'DCR 来源','ρ × MLT × 匝数 / 总裸铜截面积')]
+                      'DCR 来源','ρ × 该绕组等效线长 / 总裸铜截面积')]
         else:
             rows += [('电感对流系数 h',value(dev['h_conv'],'W/(m²·K)'),
                       '经验散热面积',value(dev['A_surf'],'m²'))]
             rows += [('匝数',str(dev['N']),'估算气隙',value(dev['gap'],'m')),
                      ('单线线径',value(dev['d_wire'],'m'),'直流电阻 / Fr',value(dev['R_dc'],'Ω')+' / '+value(dev['Fr']))]
         table(doc,['计算参数','结果','计算参数','结果'],rows,[1.9,1.65,1.9,1.65])
+        if kind=='transformer':
+            from magnetic_report_view import transformer_length_rows
+            length_rows = transformer_length_rows(dev)
+            if length_rows:
+                table(doc,['绕组','匝数','MLT / mm','DCR 等效线长 / mm','引线 / mm','DCR / mΩ'],
+                      [(key, item['turns'], value(item['mlt_m']*1e3), value(item['length_m']*1e3),
+                        value(item['lead_length_m']*1e3) if item.get('lead_length_m') is not None else '—',
+                        value(resistance*1e3) if resistance is not None else '—')
+                       for key,item,resistance in length_rows], [0.7,.65,1.15,2.05,1.05,1.5])
+                for note in dev['winding_lengths'].get('notes', ()):
+                    paragraph(doc,note,True)
         if kind=='transformer' and dev.get('gap_design'):
             gap=dev['gap_design']
             paragraph(doc,(gap['mu_r_conditions'] or '')+'。'+gap['note'])
     if not bought_inductor:
-        paragraph(doc,'磁芯损耗采用实际理想 B(t) 的 NSE 数值积分。铜损为直流电阻乘简化趋肤修正；未计邻近效应、端接损耗、热态电阻或绝缘填充。变压器温升 ΔT=(全部绕组铜损+磁芯损耗)×用户输入 Ri-a；默认 100 K/W 仅为初始假设，须按实测或热设计填写。独立电感保留经验表面积与对流模型。两者均不是局部热点温度或实测温升。',True)
+        paragraph(doc,'磁芯损耗按 B(t) 做 NSE 积分。铜损按直流电阻与趋肤修正估算。变压器平均温升按总损耗乘 Ri-a 估算，Ri-a 取热设计或实测值。独立电感采用表面积与对流模型。热点温升待测。',True)
     if devices:
         section(doc,'5.1  磁通波形与损耗分配')
         def flux(fig):
@@ -578,16 +698,33 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
 
     section(doc,'6  环路与补偿器')
     if res.get('psr'): paragraph(doc,res['psr']['note'],True)
-    kind=resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])
-    paragraph(doc,'二型：原点积分极点 + 一个有限零点 + 一个有限极点；三型：原点积分极点 + 两个有限零点 + 两个有限极点。名称中的原点极点不在频率输入框中另占一行。')
-    table(doc,['当前补偿器参数','结果','作用'],[
-        ('类型',kind,'独立于功率级控制方式；auto 根据 VM/PCM 选择'),
-        ('KP',value(p['KP']),'积分器系数，不是无量纲比例增益'),
-        ('fz1 / fp1',value(p['fz1'],'Hz')+' / '+value(p['fp1'],'Hz'),'有效有限零点 / 极点'),
-        ('fz2 / fp2',value(p['fz2'],'Hz')+' / '+value(p['fp2'],'Hz'),'仅三型使用；二型忽略这两项'),
-    ],[1.55,2.35,3.2])
+    if cot:
+        paragraph(doc,'电压外环通过 PI 调节公共触发节奏，各相共用一个电容端取样。平均模型按当前各相电感、电阻、采样参数及均流配置线性化。')
+        if loop:
+            model = loop['model']
+            paragraph(doc,model.get('assumptions',''),True)
+            gain_source = '模型默认值' if model['gain_source'] == 'default' else '工程设定值'
+            table(doc,['当前 COT 环路参数','结果'],[
+                ('比例增益 Kp',value(model['cot_kp_hz'],'Hz')),
+                ('积分增益 Ki',value(model['cot_ki_hz_per_s'],'Hz/s')),
+                ('控制结构','电压外环 + 总电流反馈' if model.get('control_structure')=='current_feedback' else '电压外环调节触发节奏'),
+                ('总电流反馈增益',value(model.get('current_feedback_hz_per_a',0.),'Hz/A')),
+                ('建议穿越上限（每相频率的 1/20）',value(model['recommended_fc_max'],'Hz')),
+                ('模型频带上限（每相频率的 1/10）',value(model['frequency_limit'],'Hz')),
+            ],[4.6,2.5])
+            equation(doc,'T(s) = Gvf(s)·','Kp + Ki/s','Vset')
+            paragraph(doc,f'Gvf 为每相频率指令到防反管前电容端电压的传递函数（V/Hz），Vset 为该处电压设定值（V）。比例增益 Kp 与积分增益 Ki 使用{gain_source}，输入为以 Vset 归一化的误差。s 为拉普拉斯变量（s⁻¹）。')
+    else:
+        kind=resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])
+        paragraph(doc,'二型：原点积分极点 + 一个有限零点 + 一个有限极点；三型：原点积分极点 + 两个有限零点 + 两个有限极点。名称中的原点极点不在频率输入框中另占一行。')
+        table(doc,['当前补偿器参数','结果','作用'],[
+            ('类型',kind,'独立于功率级控制方式；auto 根据 VM/PCM 选择'),
+            ('KP',value(p['KP']),'积分器系数'),
+            ('fz1 / fp1',value(p['fz1'],'Hz')+' / '+value(p['fp1'],'Hz'),'有效有限零点 / 极点'),
+            ('fz2 / fp2',value(p['fz2'],'Hz')+' / '+value(p['fp2'],'Hz'),'仅三型使用；二型忽略这两项'),
+        ],[1.55,2.35,3.2])
     if loop:
-        if loop.get('model'):
+        if loop.get('model') and not cot:
             model = loop['model']
             paragraph(doc,f"唯一主反馈路：OUT{model['feedback_output']}。"+model['assumptions'],True)
             from loop_report import add_capacitor_bank_snapshot
@@ -596,12 +733,14 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
                 table(doc,['临时频带限制','目标 fc','差分一致性误差','近似闭环极点'],[(
                     '已停用', value(p['fc_target'],'Hz'),
                     value(model['derivative_error']*100,'%'), '稳定' if loop['closed_loop_stable'] else '存在非稳定极点')])
-        table(doc,['实际 fc','所选 PM','最小 PM','GM'],[(value(loop['fc'],'Hz'),value(loop['pm'],'°'),value(loop['min_pm'],'°'),
+        fc_result = '带内未检出' if cot and loop['fc'] is None else value(loop['fc'],'Hz')
+        table(doc,['穿越频率 fc','所选 PM','最小 PM','GM'],[(fc_result,value(loop['pm'],'°'),value(loop['min_pm'],'°'),
             '扫描范围内未检出' if (loop.get('gm_scan_limited') or loop.get('gm_band_limited')) and loop['gm_db'] is None else
             '未检出有限 -180° 穿越' if loop['gm_infinite'] else value(loop['gm_db'],'dB'))])
         def bode(fig):
             axes=fig.subplots(2,2)
-            for idx,label in [(0,'对象 Gvc'),(1,'补偿器 Gc')]:
+            labels = ('频率到取样电压 Gvf', '频率 PI') if cot else ('对象 Gvc', '补偿器 Gc')
+            for idx,label in enumerate(labels):
                 axes[0,0].semilogx(loop['f'],20*np.log10(np.maximum(abs(loop['gains'][idx]),1e-300)),label=label)
                 axes[0,1].semilogx(loop['f'],loop['phases'][idx],label=label)
             axes[1,0].semilogx(loop['f'],20*np.log10(np.maximum(abs(loop['gains'][2]),1e-300)),label='开环 T')
@@ -612,7 +751,8 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
                 if loop['fc']: ax.axvline(loop['fc'],color=COLORS[2],ls=':',lw=.8)
             axes[0,0].set(title='对象 / 补偿器幅频',ylabel='增益 / dB'); axes[0,1].set(title='对象 / 补偿器相频',ylabel='相位 / °')
             axes[1,0].set(title='开环幅频',ylabel='增益 / dB'); axes[1,1].set(title='开环相频',ylabel='相位 / °')
-        figure(doc,_chart((7.1,4.2),bode),'图 6-1  当前参数 Bode 图；绿色线为所选下降穿越频率')
+        figure(doc,_chart((7.1,4.2),bode),('图 6-1  COT 公共电压外环 Bode 图（模型有效频带）' if cot else
+                                          '图 6-1  当前参数 Bode 图；绿色线为所选下降穿越频率'))
         multi = loop.get('multi_output')
         if multi:
             equation(doc,'T(s) = Gc(s)·Gb(s)')
@@ -621,7 +761,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
             from loop_charts import draw_multi_output_response
             selected = int(multi['feedback_output'])
             figure(doc,_chart((7.1,4.5),lambda fig: draw_multi_output_response(fig.subplots(2,2),loop,selected)),
-                   '图 6-2  全部输出参考响应与主反馈路负载扰动；低频局部小信号，不是大信号阶跃')
+                   '图 6-2  输出参考响应与主反馈路负载扰动（低频小信号）')
             if multi['dc_load'] is not None:
                 equation(doc,'Zjk(s) = Gjk(s) - ','Gj(s)·Gc(s)·Gbk(s)','1 + T(s)')
                 table(doc,['被观察输出']+[f'OUT{r["id"]} 负载 / V·A⁻¹' for r in multi['outputs']],
@@ -635,7 +775,10 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
                 for c in loop['all_crosses']],[2.5,1.6,3.0])
     else:
         paragraph(doc,'环路计算未能完成：'+str(loop_error or '未提供传递函数')+'。未用默认值替代真实结果。')
-    if loop and loop.get('model',{}).get('experimental'):
+    if cot:
+        paragraph(doc, loop['model']['assumptions'] if loop else
+                  '模型覆盖固定活动相数、强制同步及标称均流下的低频电压外环。',True)
+    elif loop and loop.get('model',{}).get('experimental'):
         paragraph(doc,'周期映射模型独立保留各路电容与局部导通状态，不使用原单路 DCM/CCM 公式，也不重新乘预设效率。增益裕度仅检查扫描范围，未检出不代表无限裕量。高频寄生、真实采样控制及全部独立负载角点仍需 SPICE 与样机 FRA。',True)
     else:
         from plants import uses_dcm_peak_energy, DCM_PEAK_NOTE
@@ -645,7 +788,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
               +'未包含完整钳位谐振动态；PCM 斜坡回退不代表通过次谐波稳定验证。',True)
 
     from compensation_report import add_compensation_report
-    compensation_available=add_compensation_report(doc,p,op,compensation_state,psr=bool(res.get('psr')))
+    compensation_available=False if cot else add_compensation_report(doc,p,op,compensation_state,psr=bool(res.get('psr')))
 
     if op['topology']=='ACF-FORWARD' or (op['topology'] in ('FLYBACK','QR-FLYBACK') and p.get('Kc',0)>1):
         section(doc,'7  钳位与复位设计')
@@ -656,7 +799,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
                 ('I_mag_pk','励磁峰值电流','A'),('I_clamp_rms','钳位电容有效值电流','A'),('f_clamp','Lm-Ccl 谐振频率','Hz'),
                 ('f_clamp_effective','折算谐振频率','Hz'),('fc_recommended_max','建议 fc 上限','Hz')]]
             table(doc,['正激钳位 / 复位参数','计算值'],rows,[4.5,2.6])
-            paragraph(doc,'原边通过双极性励磁电流完成伏秒复位；钳位电压隆起使用简化抛物线近似。未进行漏感换流、死区能量和 ZVS 充放电判据求解，因此不能据此宣称全负载软开关。')
+            paragraph(doc,'原边双极性励磁电流完成伏秒复位。钳位电压隆起按抛物线估算。ZVS 条件待用漏感换流和死区仿真核对。')
             if 'v_clamp' in wf:
                 def clamp(fig):
                     ax=fig.subplots(); ax.plot(wf['t']*1e6,wf['v_clamp']); ax.set(xlabel='时间 / μs',ylabel='电压 / V',title='有源钳位电容电压（简化波形）'); ax.grid(alpha=.2)
@@ -684,10 +827,10 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     table(doc,['效率设计 / 复核','结果','说明'],[
         ('预设设计效率',f"{op['eta_guess']*100:.2f}%",'所有拓扑的工作点输入，保持固定'),
         ('预估输入功率 / 损耗预算',value(op['P_in_est'],'W')+' / '+value(op['P_loss_budget'],'W'),'Pin,est=Po/η；预算不再次加入损耗'),
-        ('最终计算效率 / 差值',f"{res['eta']*100:.2f}% / {res['eta_delta']*100:+.2f} pp",'由实际已建模分项汇总；不是样机实测'),
+        ('最终计算效率 / 差值',f"{res['eta']*100:.2f}% / {res['eta_delta']*100:+.2f} pp",'按分项计算损耗汇总'),
         ('输入功率差值',value(res['P_in_delta'],'W'),'损耗反算 Pin − 预估 Pin；差值较大应调整预设并重新设计'),
     ],[2.2,2.25,2.65])
-    paragraph(doc,'统一采用一阶等效输出电压负担 U=Vo/η、等效负载 R*=R/η，保持 Io=Po/Vo。效率预算包含整流压降，稳态不再另加旧参数 Vf；真实二极管参数仍参与最终损耗。波形、电容电流和磁件来自同一工作点，环路按固定预设作近似折算。效率本身不能唯一确定真实损耗分布，此模型不代替寄生参数仿真；损耗反算 Pin 与波形输入均值可能不同，不宣称已实现自洽迭代。',True)
+    paragraph(doc,'工作点按预设效率折算 U=Vo/η 与 R*=R/η，保持 Io=Po/Vo。整流压降包含在工作点效率预算内，最终损耗使用器件参数。波形输入功率和损耗反算输入功率按各自口径列示。',True)
     doc.add_heading('同一预设下的效率随负载变化',2)
     curve_errors=[]
     if efficiency_curve is not None:
@@ -715,7 +858,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     figure(doc,_chart((7.1,2.5),efficiency),('图 8-2  '+case_label+' 输入下的效率曲线；预设不变，无效点留空') if case_label else '图 8-2  标称输入下的效率曲线；预设不变，无效点留空')
     sample_indices=sorted(set(np.linspace(0,len(fractions)-1,5,dtype=int)))
     table(doc,['负载','额定功率比例','模式','模型效率'],[(f'{fractions[i]*100:.0f}%',value(p['P_out']*fractions[i],'W'),modes[i],value(etas[i],'%')) for i in sample_indices])
-    paragraph(doc,'磁芯、匝数、平均匝长与线径保持固定，仅重新求解负载工作点及对应损耗；该曲线是固定硬件的模型估算，不是实测效率曲线。' if fixed_hardware else '自动选芯 / 匝数会在每个负载点重新设计，因此该曲线是各工作点的重新计算结果，不是固定实物磁件的实测效率曲线。不能用此图替代整机效率验证。')
+    paragraph(doc,'效率曲线采用同一套磁件，逐点计算负载与损耗。' if fixed_hardware else '效率曲线在每个负载点重新选芯和计算匝数。')
     for err in curve_errors: paragraph(doc,'曲线未计算点：'+err,True)
 
     if corners:
@@ -780,7 +923,7 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     if comparison:
         section(doc,'8.4  方案 A 与 B 对比')
         paragraph(doc,' / '.join(comparison['names'])+'。对比使用独立冻结快照；B 不写回当前设计，差值定义为 B−A。')
-        paragraph(doc,'A / B 输入、输出与功率需求一致；不自动判定优劣。' if comparison['same_requirements'] else '注意：A / B 电路需求不同，不能直接按效率或应力判定方案优劣。')
+        paragraph(doc,'A 与 B 使用相同需求。' if comparison['same_requirements'] else 'A 与 B 的电路需求不同。请结合各自目标比较结果。')
         table(doc,['指标','方案 A','方案 B','B − A'],[(r['name'],value(r['a'],r['unit']),value(r['b'],r['unit']),value(r['delta'],'百分点' if r['unit']=='%' else r['unit'])) for r in comparison['metrics']],
               [2.35,1.55,1.55,1.65])
         def compare_plot(fig):
@@ -803,19 +946,18 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         for snap,name in [(comparison['a'],'A'),(comparison['b'],'B')]:
             paragraph(doc,name+' 需复核：'+('；'.join(c['name'] for c in snap['checks'] if c['state'] in ('review','undefined')) or '已建模检查满足阈值。'))
 
-    section(doc,'9  模型限制与评审建议')
+    section(doc,'9  模型口径与待核对事项')
     for text in [
-        (f'需求边界：本部分仅核算 {case_label} 输入端点、指定输出和负载。两个输入端点的结果不证明区间内部所有输入、负载、温度和器件容差均合格；额定值及安规要求未核定，未执行全边界认证。' if case_label else '需求边界：标称输入、指定输出和负载是本次设计需求。角点扫描范围（如有）另见分析节，不等同额定输入范围；环境温度、器件容差、额定值及安规要求未核定，未执行全边界认证。'),
-        ('稳态：耦合模型包含输入/输出防反固定压降，输出端口与反馈取样节点分开；输出电容采用恒直流电压边界，未包含 Coss/Cj 和完整寄生换流。' if op.get('coupled_solution') is not None else
-         '稳态：端口与电容端按固定防反压降区分；非耦合工作点仍采用预设效率的等效负担近似，未独立解算全部压降和寄生换流。')+'波形不等于开关节点真实瞬态。',
-        '效率：输入与输出电容 ESR 均计入；'+('MP6005 额外计入典型静态与分压功耗，但未覆盖完整控制 / 辅助供电。' if res.get('psr') else '未包含控制 / 辅助供电。')+'整流桥、PCB / 连接器、EMI 滤波、温度依赖与邻近效应未计。模型效率可能偏乐观，不能保证为实测上限或固定误差范围。',
-        '磁件：磁芯材料参数应来自对应温度、频率、磁密的数据。面积乘积、气隙与对流表面积为工程近似；Bsat 应按最坏温度选取。',
-        '环路：传递函数为工作点附近的线性近似。没有有限穿越不表示稳定；有多个穿越或非最小相位对象时应结合 Nyquist / 闭环极点。RHP 零点和钳位谐振附近需详细仿真。',
-        ('补偿网络：MP6005 使用独立 gm-COMP 物理二型网络，由 Rcomp / Ccomp / Cpole 构成。⑨页原版 SSR 阻容正反算不用于 PSR；内部斜坡、采样和动态压降补偿仍需厂商模型或样机 FRA 核验。' if res.get('psr') else '补偿网络：使用⑨页的原版元件计算。其“二型简化支路”与⑤页的标准二型高频极点不一一对应；不能根据参考电路表自行认定零极点完全匹配。报告并列全部回代结果与目标，未替换第 6 节 Bode 的参数。'),
-        '实施顺序：核对需求与额定值 → 使用热态参数重算 → 容差 / 输入 / 负载扫描 → SPICE 或样机波形 → FRA 环路测量与负载阶跃 → 修订评审结论。',
+        ('耦合稳态按固定防反压降与刚性电容端电压求解。Coss/Cj 和寄生换流需瞬态仿真。' if coupled else
+         '稳态按预设效率折算负载。端口与取样节点按固定防反压降区分。寄生换流需瞬态仿真。'),
+        '效率计入电容 ESR。待补损耗包括整流桥、PCB、连接器、EMI 滤波、辅助供电和温度效应。'+
+        ('MP6005 已计典型静态与分压功耗。' if res.get('psr') else ''),
+        '磁件按所选材料参数估算。请核对工作温度下的 Bsat 和材料损耗参数。',
+        '环路使用工作点附近的线性模型。多重穿越时核对 Nyquist 或闭环极点。谐振附近用仿真或 FRA 验证。',
+        ('MP6005 使用 Rcomp、Ccomp、Cpole 构成的 gm-COMP 网络。内部斜坡和动态压降补偿待用厂商模型或 FRA 核对。' if res.get('psr') else
+         '补偿元件按参考电路换算。零极点核对见目标值与回代结果。'),
     ]: paragraph(doc,text)
-    doc.add_heading('导出内容与可追溯性',2)
-    paragraph(doc,'所有表格和图像均来自同一导出快照；导出不会修改设计或执行整定。附录记录主要输入。软件计算方法详见帮助菜单中的《计算方法与公式说明》。本报告不自动生成未在软件中输入的 BOM 型号或实测结论。')
+    paragraph(doc,'计算方法见帮助菜单中的《计算方法与公式说明》。', True)
 
     section(doc,'附录 A  计算输入参数快照')
     gate=['gfs','Vth','Vgp_on','Vgp_off','Qg_th','Qgs','Qgd','Rg_drive','Rs_on','Rs_off','Rg','k_sw']
@@ -829,12 +971,15 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         gate=[k for k in gate if k not in ('Vgp_on','Vgp_off','Qgs')]
         from mos_manual import normalize_events
         manual=normalize_events(p['mos_manual_events'])
+        fixed_input = p.get('V_in_min') is not None and p['V_in_min'] == p.get('V_in_max')
+        input_cases = [('固定输入', 'min')] if fixed_input and manual['min'] == manual['max'] else [
+            ('Vinmin', 'min'), ('Vinmax', 'max')]
         table(doc,['手动输入端点','事件','Vgp','零伏至平台 Qgs'],[
-            ('Vinmin' if case=='min' else 'Vinmax','开通' if edge=='on' else '关断',
+            (label,'开通' if edge=='on' else '关断',
              value(manual[case][edge]['Vgp'],'V'),value(manual[case][edge]['Qgs'],'C') if p.get('mos_charge_mode')!='curve' else '由 Vgs–Qg 曲线读取')
-            for case in ('min','max') for edge in ('on','off')],[1.3,1.,2.,2.8])
+            for label, case in input_cases for edge in ('on','off')],[1.3,1.,2.,2.8])
     table(doc,['栅电荷 / 开关时间输入','符号','值'],[(PARAMS[k][0],k,value(p.get(k,0.),PARAMS[k][1])) for k in gate],[3.8,1.4,1.9])
-    paragraph(doc,'主开关 t1–t8 的时长、阶段含义与来源见第 2.1 节。栅电荷损耗时间按参考表的自然对数公式计算；图中的 t4/t5 为补充估算，不修改损耗。',True)
+    paragraph(doc,'主开关 t1–t8 的时长、阶段含义与来源见“Q1 开通与关断过程”。栅电荷损耗时间按参考表的自然对数公式计算。图中的 t4/t5 用于补充展示。',True)
     section(doc,'附录 B  其他输入与配置')
     extra=['Np','Ns','d_wire_p','d_wire_s','n_strand_p','n_strand_s','parallel_wires_p','parallel_wires_s'] if res['mag'].get('transformer') else []
     extra += ['forward_dead_time','forward_d_max','ESR_clamp'] if op['topology']=='ACF-FORWARD' else []
@@ -844,6 +989,18 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
     if extra: table(doc,['其他输入','符号','值'],[(PARAMS[k][0],k,value(p[k],PARAMS[k][1])) for k in extra],[3.8,1.4,1.9])
     table(doc,['配置项','设定'],[(k,value(bool(p.get(k)) if k.endswith('_enable') else p.get(k))) for k in ['core_material','core_choice','core_choice_L','d_in_enable','d_out_enable','controller_type']]+[
         ('输入并联电容数量',str(len(caps['input']['caps']))),('当前输出并联电容数量',str(len(caps['output']['caps'])))],[3.8,3.3])
+    if save and document is None:
+        # Dotted labels classify sections during module capture. In a
+        # standalone report they are subtitles of the renumbered chapter.
+        for heading in doc.paragraphs:
+            if not heading.style.name.startswith('Heading'):
+                continue
+            prefix = re.match(r'^\d+(?:\.\d+)+\s+', heading.text)
+            if prefix:
+                depth = min(3, prefix.group().count('.') + 1)
+                heading.style = f'Heading {depth}'
+                heading.paragraph_format.page_break_before = False
+                heading.runs[0].text = heading.runs[0].text[prefix.end():]
     if case_label:
         # Prefix only this append's headings/captions, including sections added
         # by compensation/coupling helpers. Do not rewrite equation XML/runs.
@@ -859,7 +1016,8 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
             for prop in shape._inline.xpath('.//wp:docPr'):
                 prop.set('descr',f'[{case_label}] '+prop.get('descr',''))
     if save:
+        finalize_book_report(doc)
         Path(path).parent.mkdir(parents=True,exist_ok=True)
         doc.save(path)
-    return dict(path=str(path),checks=len(checks),needs_review=len(failed),figures=len(doc.inline_shapes)-start_figure,
+    return dict(path=str(path),checks=len(check_items),needs_review=len(failed),figures=len(doc.inline_shapes)-start_figure,
                 loop_available=loop is not None,compensation_available=compensation_available)

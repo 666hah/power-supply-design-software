@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self';"><title>变压器 · 三维结构</title><link rel="stylesheet" href="viewer.css"></head>
+<body>
+<header><div class="brand">磁</div><div><h1>变压器 · 三维结构</h1><p id="subtitle">绕组结构与磁芯装配</p></div><span class="badge">本地离线预览</span><button id="capture">导出当前视图</button></header>
+<main>
+ <section class="stage"><nav class="toolbar"><div class="segmented"><button id="perspective" class="active">立体</button><button id="front">正视</button><button id="top">俯视</button><button id="side">侧视</button></div><button id="reset">复位视角</button><button id="rotate">自动旋转</button></nav>
+ <div id="viewport"><div id="loading">正在准备三维结构…</div><div id="fatal" hidden></div></div>
+ <div class="hud"><span id="identity">当前工程</span><span id="scale">尺寸 / mm</span></div><div class="gesture">左键拖动旋转 · 滚轮缩放 · 右键拖动平移</div><div id="selection" hidden></div>
+ </section>
+ <aside><section><h2>显示与装配</h2><div class="segmented modes"><button data-mode="all" class="active">整机</button><button data-mode="windings">绕组</button><button data-mode="core">磁芯</button></div>
+ <label class="slider-label" for="coreHalf">磁芯装配</label><select id="coreHalf" aria-label="磁芯装配"><option value="both">完整装配</option><option value="lower">只看下半芯</option><option value="upper">只看上半芯</option></select>
+ <label class="slider-label">磁芯不透明度 <output id="opacityValue">16%</output></label><input id="opacity" type="range" min="0" max="100" value="16" aria-label="磁芯不透明度">
+ <label class="slider-label">分解装配 <output id="explodeValue">0%</output></label><input id="explode" type="range" min="0" max="100" value="0" aria-label="分解装配">
+ <div class="checks"><label><input id="insulation" type="checkbox">显示层间绝缘</label><label><input id="edges" type="checkbox" checked>磁芯轮廓</label><label><input id="grid" type="checkbox" checked>尺寸参考网格</label></div></section>
+ <section><h2>绕组与物理层 <button id="allLayers" class="link">全部显示</button></h2><div id="layers" class="layers"><p class="muted">等待工程结构</p></div></section>
+ <section><h2>磁芯模型库</h2><select id="catalog" aria-label="磁芯型号"><option value="">当前工程磁芯</option></select><div id="coreInfo" class="info"></div><button id="returnDesign" class="secondary" hidden>返回当前工程装配</button></section>
+ <section><h2>结构说明</h2><div id="notes" class="notes"></div></section>
+ </aside>
+</main><footer><span id="status">等待设计软件发送结构数据</span><span id="meshStatus">WebGL · 毫米制</span></footer>
+<script src="viewer.bundle.js"></script></body></html>

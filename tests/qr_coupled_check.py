@@ -46,6 +46,12 @@ class QRCoupledChecks(unittest.TestCase):
         self.assertLess(float(np.max(np.abs(current[:,0]))),1e-8)
         self.assertLess(float(np.max(np.abs(current[:,-1]))),1e-8)
         self.assertLess(m['blocked_diode_violation_V'],1e-5)
+        # LP includes the off-state clamp tail; its RMS is not MOS RMS.
+        self.assertAlmostEqual(op['I_p_rms'],m['winding_rms'][0],places=12)
+        self.assertAlmostEqual(np.trapezoid(current[0],time)/T,op['I_p_avg'],delta=op['I_p_avg']*.001)
+        self.assertAlmostEqual(np.trapezoid(current[0]**2,time)/T,op['I_p_rms']**2,delta=op['I_p_rms']**2*.002)
+        self.assertEqual(op['I_p_pk'],float(np.max(current[0])))
+        self.assertGreater(op['I_p_rms'],op['I_sw_rms'])
         self.assertAlmostEqual(m['P_in'],m['P_out']+sum(m['P_dcr'])+sum(m['P_rectifier'])+
             sum(m['P_output_blocking'])+m['P_input_blocking']+m['P_mos_conduction']+m['P_sense']+m['P_clamp'],places=5)
 
@@ -58,6 +64,16 @@ class QRCoupledChecks(unittest.TestCase):
         self.assertTrue(low['qr_coupled_model']['design_frequency_limit_exceeded'])
         self.assertAlmostEqual(low['f_sw'],full['f_sw'],delta=1e-3)
         self.assertAlmostEqual(low['Ts'],low['T_on']+low['T_demag']+low['T_ring'],places=14)
+
+    def test_loop_uses_solved_input_bus_without_changing_legacy_point(self):
+        from qr_loop import linearize
+        p=fixture();p.update(d_in_enable=True,Vf_din=1.7)
+        solved=compute_operating_point(p)
+        self.assertAlmostEqual(linearize(p,solved)['vin_bus'],p['V_in']-1.7)
+        nominal_params=dict(p,coupling_config=dict(enabled=False))
+        nominal=compute_operating_point(nominal_params)
+        self.assertEqual(linearize(nominal_params,nominal)['vin_bus'],p['V_in'])
+        self.assertEqual(linearize(p,solved,measured={'vin_bus':275.})['vin_bus'],275.)
 
     def test_pairwise_coupling_and_load_change_the_aux_voltage(self):
         p=fixture();a=compute_operating_point(p)

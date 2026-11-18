@@ -10,6 +10,7 @@ DIMENSIONS = {
     'MLT': ('平均每匝长度 MLT', {'mm': 1e-3, 'cm': 1e-2, 'm': 1.}),
 }
 DISPLAY_UNITS = dict(Ae='mm²', Ve='cm³', Wa='mm²', MLT='mm')
+INPUT_DIMENSIONS = {key: DIMENSIONS[key] for key in ('Ae', 'Ve', 'Wa')}
 
 
 def is_custom(choice):
@@ -23,6 +24,8 @@ def validate_geometry(data):
     if unknown:raise ValueError('自定义磁芯包含未知字段：'+str(sorted(unknown)))
     result={'name':str(data.get('name','')).strip()[:48]}
     for key,(label,units) in DIMENSIONS.items():
+        if key == 'MLT' and key not in data:
+            continue  # legacy custom-core estimate, absent from new inputs
         raw=data.get(key)
         factor=1.
         if isinstance(raw,dict):

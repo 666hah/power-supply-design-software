@@ -357,6 +357,9 @@ export function componentEvaluation(p: Spec, res: Spec) {
   const inputAc = ripple(res.wf.i_cin, res.wf.dt, bank(p, "input"));
   const inputPeak =
     Math.abs(res.op.V_in_bus ?? p.V_in) + Math.max(...inputAc.map(Math.abs));
+  const op = res.op;
+  const deviceStress = stress(op);
+  const edges = new Map<string, Spec>((op.parasitics?.edges || []).map((edge: Spec) => [edge.ref, edge] as const));
   const rows = preview(p).component_rows.map((row) => {
     const item = items[row.ref] || {},
       checks: Spec[] = [];
@@ -397,27 +400,32 @@ export function componentEvaluation(p: Spec, res: Spec) {
     const output = row.output || Number(row.ref.match(/\d+/)?.[0]) || 1,
       rail = res.outputs[output - 1];
     if (row.kind === "mos") {
+      const mos = (row.ref === "Q2" ? deviceStress.auxiliary : undefined) ?? deviceStress.switch;
+      const plateau = mos.V_block;
       add(
         "voltage",
         "mos_voltage",
-        row.ref === "Q2" ? res.op.V_clamp : stress(res.op).switch.V_block,
+        plateau,
         "voltage_V",
         "V",
-        stress(res.op).switch.blocking_voltage_note ||
-          "稳态阻断平台；三温耐压与实测仍须复核",
+        (row.ref === "Q2" ? "" : deviceStress.switch.blocking_voltage_note) ||
+          "稳态阻断平台，样机复测尖峰。",
       );
+      const edgePeak = edges.get(row.ref)?.peak ?? plateau;
+      const clampPeak = row.ref === "Q1" ? op.clamp?.V_peak ?? plateau : plateau;
+      const clampWidth = op.clamp?.t_pulse;
+      const peak = Math.max(edgePeak, clampPeak, op.topology === "ACF-FORWARD" ? mos.V_max : plateau);
       const narrow =
-        res.op.clamp?.t_pulse != null &&
-        res.op.clamp.t_pulse < Math.min(1e-6, res.op.Ts / 50);
+        edgePeak <= plateau && clampPeak > plateau && clampWidth > 0 &&
+        clampWidth < Math.min(1e-6, op.Ts / 50);
       add(
         "peak",
-        narrow || res.op.clamp?.V_peak == null || row.ref === "Q2"
-          ? "mos_spike"
-          : "mos_voltage",
-        row.ref === "Q2" ? null : (res.op.clamp?.V_peak ?? null),
+        narrow || peak <= plateau ? "mos_spike" : "mos_voltage",
+        peak > plateau ? peak : null,
         "voltage_V",
         "V",
-        narrow ? "模型窄尖峰包络" : "未证明窄尖峰宽度条件，采用稳态因数",
+        narrow ? "模型窄尖峰包络，样机复测脉宽。" :
+          peak > plateau ? "选型峰值按稳态因数检查。" : "尖峰及脉宽待实测。",
       );
     } else if (row.kind === "diode") {
       const blocking =
@@ -433,8 +441,10 @@ export function componentEvaluation(p: Spec, res: Spec) {
         "voltage_V",
         "V",
         blocking
-          ? "外部反接/回灌反压未定义，不能用正向电压代替"
-          : "未考虑寄生尖峰；具体反压须实测，选型留有余量",
+          ? "补测外部反接和回灌反压。"
+          : row.special === "snubber" ? "钳位二极管反压待核。"
+          : (edges.has(row.ref) ? "含局部换流峰值" :
+             op.acf_solution ? "周期模型峰值" : "未考虑寄生尖峰") + "，样机复测。",
       );
       checks.push({
         id: row.ref + ".spike",
@@ -477,11 +487,12 @@ export function componentEvaluation(p: Spec, res: Spec) {
           ? res.capacitors.input.caps[row.index]
           : rail?.capacitors.output.caps[row.index];
       const wf = res.wf.outputs?.[output - 1] || res.wf;
+      const snubberVoltage = op.clamp?.V_clamp;
       const peak =
         row.special === "snubber"
-          ? (res.op.clamp?.V_clamp ?? 0) * (1 + (p.dC ?? 0.1) / 2)
+          ? snubberVoltage == null ? null : snubberVoltage * (1 + (p.dC ?? 0.1) / 2)
           : row.special === "clamp"
-            ? res.op.V_clamp
+            ? op.V_clamp + op.V_clamp_hump
             : row.special === "psr"
               ? null
               : row.side === "input"

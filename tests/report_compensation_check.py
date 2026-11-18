@@ -100,8 +100,9 @@ class CompensationReportChecks(unittest.TestCase):
         self.assertEqual((p,st),saved)
         doc=Document(output)
         body='\n'.join(para.text for para in doc.paragraphs)
-        self.assertIn('6.1  补偿电路参数计算',body)
-        self.assertIn('6.2  补偿电路计算关系与回代核验',body)
+        subtitles = {p.text for p in doc.paragraphs if p.style.name == 'Heading 2'}
+        self.assertIn('补偿电路参数计算', subtitles)
+        self.assertIn('补偿电路计算关系与回代核验', subtitles)
         self.assertIn('当前补偿参考电路',body)
         self.assertNotIn('图 1-C1',body)
         self.assertNotIn('图 1-C2',body)

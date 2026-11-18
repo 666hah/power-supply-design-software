@@ -86,6 +86,16 @@ class ComponentChecks(unittest.TestCase):
         self.assertEqual(q['factor'],.85)
         self.assertIn('稳态因数',q['note'])
 
+    def test_local_peak_uses_conservative_limit_and_matching_diode(self):
+        p = dict(self.p, Kc=1., parasitic_config={'mode':'transient', 'lp_pcb':100e-9})
+        res = compute_design(p)
+        checks = {c['id']:c for c in evaluate_components(p,res)['checks']}
+        self.assertGreater(checks['bom_Q1_peak']['value'], checks['bom_Q1_voltage']['value'])
+        self.assertEqual(checks['bom_Q1_peak']['value'], res['op']['V_sw_max'])
+        self.assertEqual(checks['bom_Q1_peak']['factor'], .85)
+        self.assertEqual(checks['bom_D1_voltage']['value'], res['op']['V_d_max'])
+        self.assertIn('含局部换流峰值', checks['bom_D1_voltage']['note'])
+
     def test_multi_output_identity_and_context(self):
         p=sample('6_OUTPUT_FLYBACK_SSR.json');r=compute_design(p)
         data=evaluate_components(p,r);refs={row['ref'] for row in data['rows']}
@@ -131,6 +141,13 @@ class ComponentChecks(unittest.TestCase):
         text='\n'.join(c.text for t in doc.tables for row in t.rows for c in row.cells)
         self.assertIn('厂家甲',text);self.assertIn('测试型号',text);self.assertIn('90%',text)
         self.assertIn('未考虑寄生尖峰',text)
+        stress = [t for t in doc.tables if t.cell(0,0).text == '位号 / 检查项']
+        self.assertEqual(len(stress), 4)
+        labels = [[row.cells[0].text for row in t.rows[1:]] for t in stress]
+        self.assertTrue(all('Vds' in label for label in labels[0]))
+        self.assertTrue(all('反向电压' in label for label in labels[1]))
+        self.assertTrue(any('纹波电流 RMS' in label for label in labels[2]))
+        self.assertTrue(any('电容端电压' in label for label in labels[2]))
 
 
 if __name__=='__main__': unittest.main()

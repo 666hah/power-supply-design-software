@@ -46,7 +46,8 @@ class QRChecks(unittest.TestCase):
         for change in ({'feedback_mode':'PSR-MP6005'},{'control_mode':'Voltage Mode'},
                        {'outputs':[{'V_out':60,'P_out':92}]}):
             with self.assertRaises(ValueError):project_files(dict(self.p,**change),bundle=self.bundle)
-        for cfg in ({'qr_zcd_trigger_v':2.2},{'qr_uvlo_on_v':9},{'qr_zcd_delay_ns':-.5}):
+        for cfg in ({'qr_zcd_trigger_v':2.2},{'qr_uvlo_on_v':9},{'qr_zcd_delay_ns':-.5},
+                    {'qr_zcd_winding':1.5}):
             with self.assertRaises(ValueError):normalize_settings(cfg)
         q=copy.deepcopy(self.p);q['spice_config']['qr_cds_pf']=0
         with self.assertRaisesRegex(ValueError,'谐振电容'):project_files(q,bundle=self.bundle)
@@ -69,6 +70,20 @@ class QRChecks(unittest.TestCase):
         for name in probes:
             self.assertRegex(lib,rf'(?m)^\w+ {name} ')
         self.assertIn('.save V(zcd) V(vcc)',analysis)
+
+    def test_cs_filter_does_not_load_the_power_sense_resistor(self):
+        lib=self.files['GenericQR_L6565.lib'].decode('ascii')
+        self.assertIn('Bcs_buffer cs_drive COM V=V(CS,COM)',lib)
+        self.assertIn('Rcs cs_drive filtered 1',lib)
+        self.assertIn('Ccs filtered COM {CS_TAU}',lib)
+        self.assertNotIn('Rcs CS filtered',lib)
+
+    def test_single_output_zcd_native_and_circuit_use_same_winding(self):
+        self.assertIn(b'XZCD rect1 sgnd zcd 0',self.files['power_stage.inc'])
+        self.assertIn(b'FLAG 1312 576 rect1',self.files['Flyback.asc'])
+        self.assertIn(b'FLAG 1312 656 sgnd',self.files['Flyback.asc'])
+        self.assertIn(b'RATIO={Z_SENSE_RATIO}',self.files['Flyback.asc'])
+        self.assertEqual(json.loads(self.files['manifest.json'])['qr']['zcd_sense']['selected_winding'],1)
 
     def test_qr_latched_cs_evidence_is_recognized(self):
         from spice_analysis import protection_stop

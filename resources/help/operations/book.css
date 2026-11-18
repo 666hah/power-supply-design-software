@@ -1,0 +1,65 @@
+:root {
+  color-scheme: light;
+  --ink: #182636;
+  --blue: #245891;
+  --line: #d6dfe9;
+  --paper: #fff;
+  --header: #e5ebf2;
+  --heading: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #eff3f8;
+  color: var(--ink);
+  font: 17px/1.7 Cambria, SimSun, serif;
+}
+nav {
+  display: flex;
+  justify-content: space-between;
+  padding: .75rem clamp(1rem, 5vw, 3rem);
+  gap: 1.25rem;
+  background: #112a46;
+  font: 14px/1.5 var(--heading);
+}
+nav a { color: #fff; }
+main {
+  max-width: 980px;
+  margin: 24px auto;
+  background: var(--paper);
+  padding: clamp(18px, 5vw, 54px);
+}
+h1, h2 { font-family: var(--heading); line-height: 1.35; color: #101820; }
+h1 { margin: 0 0 1rem; font-size: clamp(25px, 4vw, 36px); }
+h2 { margin: 1.85rem 0 .5rem; font-size: 21px; }
+p { margin: 0 0 .7rem; }
+.entry { color: #334e69; }
+ol, .toc { padding-left: 1.6rem; }
+li { padding-left: .3rem; margin-bottom: .55rem; }
+a { color: var(--blue); text-underline-offset: .19em; }
+a:focus-visible { outline: 2px solid #1b61b5; outline-offset: 4px; }
+figure { margin: 1.65rem 0; }
+img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption, caption { font: 14px/1.55 var(--heading); color: #334e69; }
+figcaption { margin: .6rem 0 .25rem; text-align: center; }
+figure p { font-size: 15px; }
+.table { overflow-x: auto; }
+table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 16px; }
+caption { text-align: left; margin-bottom: .5rem; }
+th, td { border: 1px solid var(--line); padding: .42em .65em; vertical-align: middle; text-align: left; }
+thead th { background: var(--header); color: #101820; }
+thead th:first-child { width: 25%; }
+thead th:nth-child(2) { width: 15%; }
+tbody th { font-weight: normal; }
+tbody td:nth-child(2) { text-align: center; }
+.paging { border-top: 1px solid var(--line); margin-top: 2rem; padding-top: .8rem; display: flex; flex-wrap: wrap; gap: .85rem 2rem; }
+@media (max-width: 700px) { main { margin: 0; } }
+@page { size: A4; margin: 15mm; }
+@media print {
+  body { background: #fff; font-size: 11pt; }
+  main { margin: 0; padding: 0; }
+  nav, .paging { display: none; }
+  figure, tr { break-inside: avoid; }
+  h2, caption { break-after: avoid; }
+  thead { display: table-header-group; }
+}

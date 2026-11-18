@@ -43,18 +43,27 @@ class GeometryChecks(unittest.TestCase):
         with self.assertRaises(ValueError):validate_geometry(dict(geometry(),width=20))
         with self.assertRaises(ValueError):validate_geometry(dict(geometry(),Ae={'v':1,'u':'mm'}))
 
-    def test_same_geometry_preserves_standard_design(self):
+    def test_matching_effective_dimensions_preserve_flux_but_not_winding_geometry(self):
         p=spec(MLT=0.)
         a=compute_design(p)
         b=compute_design(dict(p,core_choice=CUSTOM_CORE,custom_core=geometry()))
-        for key in ('Ae','Ve','Wa','MLT','Np','Ns','B_pk','fill','P_core','P_cu','R_dc_p','dT'):
+        for key in ('Ae','Ve','Wa','Np','Ns','B_pk','fill','P_core'):
             self.assertAlmostEqual(a['mag']['transformer'][key],b['mag']['transformer'][key],places=11,msg=key)
-        self.assertAlmostEqual(a['eta'],b['eta'],places=12)
+        self.assertEqual(a['mag']['transformer']['winding_lengths']['method'],'core_geometry')
+        self.assertEqual(b['mag']['transformer']['winding_lengths']['method'],'catalog_estimate')
+
+    def test_missing_custom_mlt_uses_automatic_core_estimate_without_path(self):
+        g=geometry(); g.pop('MLT')
+        p=spec(core_choice=CUSTOM_CORE,custom_core=g,MLT=.9)
+        self.assertNotIn('MLT',p['custom_core'])
+        design=compute_design(p)['mag']['transformer']
+        self.assertAlmostEqual(design['MLT'],4*(g['Ae']**.5))
+        self.assertIn('等效方形',design['MLT_source'])
 
     def test_geometry_actually_changes_all_calculations(self):
         p=spec(core_choice=CUSTOM_CORE,custom_core=geometry(),MLT=.9)
         a=compute_design(p)['mag']['transformer']
-        self.assertEqual(a['MLT'],.044)  # custom MLT overrides the hidden legacy value
+        self.assertAlmostEqual(a['MLT'],.044)  # old custom reference when no mechanical path exists
         for key,out,ratio in [('Ae','B_pk',.5),('Ve','P_core',2.),('Wa','fill',.5),('MLT','R_dc_p',2.)]:
             g=geometry();g[key]*=2
             b=compute_design(dict(p,custom_core=g))['mag']['transformer']
@@ -74,7 +83,7 @@ class GeometryChecks(unittest.TestCase):
         for case in bundle['cases']:
             self.assertIsNone(case['error'])
             self.assertEqual(case['result']['mag']['transformer']['Ae'],62e-6)
-            self.assertEqual(case['result']['mag']['transformer']['MLT'],.044)
+            self.assertAlmostEqual(case['result']['mag']['transformer']['MLT'],.044)
         a=compute_design(p);fixed=pin_hardware(p,a)
         p['custom_core']['Ae']=999
         fixed['custom_core']['Ae']=888
@@ -115,7 +124,7 @@ class GeometryChecks(unittest.TestCase):
         hw=r['op']['coupled_model']['transformer_hardware']
         t=r['mag']['transformer']
         self.assertEqual(hw['core_geometry']['Ae'],t['Ae'])
-        self.assertEqual(hw['MLT'],.044)
+        self.assertAlmostEqual(hw['MLT'],.044)
         for winding,actual in zip(hw['windings'],t['windings']):
             self.assertAlmostEqual(winding['R_dc'],actual['R_dc'])
 
@@ -133,8 +142,8 @@ class GeometryChecks(unittest.TestCase):
             export_design_docx(None,p,r['op'],r['wf'],r,document=doc,save=False,
                                efficiency_curve=dict(fracs=[1.],etas=[r['eta']],modes=[r['op']['mode']],failures=[]))
         xml=doc.element.xml
-        for value in ('试制磁芯 A','非标准磁芯尺寸输入','有效截面积 Ae','窗口面积 Wa','平均匝长 MLT'):
-            self.assertIn(value,xml)
+        for value in ('试制磁芯 A','旧非标准磁芯参考值','有效截面积 Ae','窗口面积 Wa','MLT / mm'):
+            self.assertTrue(value in xml, value)
 
 
 class CustomCoreUIChecks(unittest.TestCase):
@@ -175,13 +184,13 @@ class CustomCoreUIChecks(unittest.TestCase):
     def test_custom_visibility_and_mm_cm_conversion(self):
         editor=self.custom()
         self.assertTrue(editor.frame.grid_info())
-        self.assertFalse(self.app._param_widgets['MLT'][0].grid_info())
+        self.assertNotIn('MLT', self.app._param_widgets)
+        self.assertNotIn('MLT', editor.values)
         self.assertEqual(float(editor.values['Ae'].get()),62.)
         editor.units['Ae'].set('cm²');editor.change_unit('Ae')
         self.assertAlmostEqual(float(editor.values['Ae'].get()),.62)
         self.assertAlmostEqual(self.app.get_params()['custom_core']['Ae'],62e-6)
-        editor.values['MLT'].set('50')
-        self.assertAlmostEqual(self.app.get_params()['custom_core']['MLT'],.05)
+        self.assertAlmostEqual(self.app.get_params()['custom_core']['MLT'],.044)
         for key in ('k_core','a_core','b_core'):
             self.assertTrue(self.app._param_widgets[key][0].grid_info())
         for size in ('1100x760','1400x880'):
@@ -191,15 +200,15 @@ class CustomCoreUIChecks(unittest.TestCase):
                                      str(child)+' exceeds the geometry editor')
 
     def test_config_round_trip_keeps_units_and_draft(self):
-        editor=self.custom();editor.units['MLT'].set('cm');editor.change_unit('MLT')
+        editor=self.custom();editor.units['Ae'].set('cm²');editor.change_unit('Ae')
         cfg=json.loads(json.dumps(self.app._config_dict(),ensure_ascii=False,allow_nan=False))
         self.app._apply_config(self.original);self.app._apply_config(cfg)
-        self.assertEqual(editor.units['MLT'].get(),'cm')
-        self.assertAlmostEqual(float(editor.values['MLT'].get()),4.4)
+        self.assertEqual(editor.units['Ae'].get(),'cm²')
+        self.assertAlmostEqual(float(editor.values['Ae'].get()),.62)
         self.assertEqual(self.app.get_params()['core_choice'],CUSTOM_CORE)
         self.app.params['core_choice'].set('PQ20-20');self.root.update()
         self.assertFalse(editor.frame.grid_info())
-        self.assertTrue(self.app._param_widgets['MLT'][0].grid_info())
+        self.assertNotIn('MLT', self.app._param_widgets)
         self.assertAlmostEqual(self.app.get_params()['custom_core']['MLT'],.044)
 
     def test_each_forward_output_editor_hidden_in_flyback(self):

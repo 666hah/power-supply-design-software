@@ -39,9 +39,15 @@ SETTINGS={
 }
 
 def is_enabled(p):
+    from cot_settings import active as is_cot
+    if is_cot(p):
+        return False
     return p.get('topology') in ('BUCK','BOOST') and float(p.get('spice_config',{}).get('niso_profile',0))>0
 
 def profile(p):
+    from cot_settings import active as is_cot
+    if is_cot(p):
+        raise ValueError('Buck COT 使用独立的同步交错控制器')
     s=p.get('spice_config',{});n=int(s.get('niso_profile',0))
     n=n or (3 if p['topology']=='BOOST' else 1 if p['control_mode']=='Voltage Mode' else 2)
     d=dict(PROFILES[n],id=n)
@@ -128,6 +134,22 @@ class Kernel:
             end,vi=self.flow(z,2,remain-off);v2+=vi
         return end,(v1+v2)/self.T,off/self.T
 
+    def load_derivative_ccm(self, duty):
+        """Sensitivity to additional sinking current over the same on/off period."""
+        feed = float(self.f.D[0, 0])
+        on_and_off = []
+        for phase, fraction in enumerate((duty, 1-duty)):
+            matrix = self.phases[phase].copy()
+            # Replace the affine forcing with the derivative at fixed duty.
+            # The last state is a unit sinking-current perturbation.
+            matrix[:-1, -1] = np.r_[0., -self.f.B[:, 0], -feed]
+            if self.p['topology'] == 'BUCK' or phase == 1:
+                matrix[0, -1] = feed/self.p['L']
+            on_and_off.append(expm(matrix*fraction*self.T))
+        on, off = on_and_off
+        end = (off @ on)[:-1, -1]
+        return end[:self.n, None], np.array([[end[self.n]/self.T]]), on[0, -1]
+
     def solve(self):
         n=self.n;T=self.T
         def fixed(d):
@@ -181,7 +203,10 @@ def solve(p,nominal):
         dcr=ind['R_dc']
     args={k:q[k] for k in ('topology','V_in','V_out','P_out','f_sw','L','Rs','Rds_on','Vf_diode','Vf_din','Vf_dout','d_in_enable','d_out_enable','C_out','Rc','C_out2','Rc2','cout2_enable')}
     args['spice_config']={'duty_max':s.get('duty_max',.9)}
-    args['output_capacitors']=q.get('output_capacitors')
+    if q.get('output_capacitors') is not None:
+        # Only fixed capacitance/ESR enters the periodic state equations.
+        args['output_capacitors']=[{key:cap[key] for key in ('C','ESR','ESL')}
+                                   for cap in q['output_capacitors']]
     data=copy.deepcopy(_cached_solution(json.dumps(args,sort_keys=True),float(dcr)))
     op=dict(nominal);op.update(data['op'])
     data['model'].update(profile=profile(q),slope_v_per_s=slope(q),Vm=q['Vm'],inductor=ind)
@@ -226,6 +251,15 @@ def waveform(op,n_cycles=2,n_pts=2048):
         vout=op['V_out']+result['vout_ripple'],vcap=op['V_out_cap']+result['vout_ripple'],
         v_esl=np.zeros_like(result['t']),ripple_pp_total=result['ripple_pp'],esl_spike_pp=0.,
         i_c_rms=float(np.sqrt(np.mean(result['i_c']**2))),i_cin_rms=float(np.sqrt(np.mean(result['i_cin']**2))))
+    from capacitor_banks import bank
+    from capacitor_impedance import bank_uses_curves
+    caps = bank(op)
+    has_curve = bank_uses_curves(caps)
+    result['ripple_impedance_model'] = 'curve' if has_curve else 'fixed_rlc'
+    if has_curve:
+        from waveforms import cap_bank_ripple
+        ripple = cap_bank_ripple(result['t'], result['i_c'], caps)
+        result.update(vout_ripple_impedance=ripple, ripple_pp_total=float(np.ptp(ripple)))
     return result
 
 def build_loop(p,op):
@@ -243,16 +277,23 @@ def build_loop(p,op):
         else:dp+=h;dm-=h
         j[:,i]=(response(xp,dp)-response(xm,dm))/(2*h)
     a,b,c,f=j[:n,:n],j[:n,n:],j[n:,:n],j[n:,n:]
+    load_b,load_f,on_current=k.load_derivative_ccm(d)
     if q['control_mode']=='Peak Current Mode':
         E=expm(k.phases[0]*d*T);at=k.flow(x,0,d*T)[0]
         hx=q['Rs']*E[0,:n];hd=(q['Rs']*(k.phases[0]@np.r_[at,0,1])[0]+slope(q))*T
         if hd<=0:raise ValueError('电流比较器上升斜率非正')
+        duty_load = -q['Rs']*on_current/hd
+        load_b += b*duty_load
+        load_f += f*duty_load
         a=a-b@hx[None,:]/hd;c=c-f@hx[None,:]/hd;b=b/hd;f=f/hd
     else:b=b/q['Vm'];f=f/q['Vm']
     radius=float(max(abs(np.linalg.eigvals(a))))
     if radius>=1.000001:raise ValueError(f'峰值采样内环不稳定（周期特征根 {radius:.4g}），请检查斜坡补偿')
     inv=np.linalg.solve(np.eye(n)+a,np.eye(n));ac=2/T*(a-np.eye(n))@inv;bc=2/T*inv@b;cc=2*c@inv;dc=f-c@inv@b
     g=ct.ss(ac,bc,cc,dc);gc=make_compensator(q).get_transfer_function()
+    g._load_plant = ct.ss(ac, np.column_stack((bc, 2/T*inv@load_b)), cc,
+                         np.column_stack((dc, load_f-c@inv@load_b)))
+    g._load_response_note = 'Buck/Boost 周期平均模型，保留每颗输出电容的 C 与 ESR。'
     note=m['note']+' 比较器统一在 CS 等效域；COMP/ITH 增益单独转换，不冒充采样增益。'
     details=dict(kind=m['kind'],profile=profile(q),inner_spectral_radius=radius,esr_included=True,capacitor_banks=k.f.banks,
         assumptions=note,frequency_limit=None,bandwidth_limit_enabled=False,feedback_output=1,

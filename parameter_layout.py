@@ -25,7 +25,7 @@ class FieldSpec:
 SECTION_ORDER = ('spec', 'curves', 'stage', 'device', 'capacitors', 'drive', 'sense', 'mag', 'ctrl')
 SECTION_TITLES = {
     'spec': '① 需求与方案',
-    'curves': '器件计算方式与曲线',
+    'curves': '器件模型精度选择',
     'stage': '② 功率级与钳位',
     'device': '③ MOS 与整流器件',
     'capacitors': '④ 输入/输出电容与防反',
@@ -42,6 +42,8 @@ GROUPS = {
     'curves': [],
     'spec': [
         ('电路需求', ('V_in_min', 'V_in_max', 'V_in', 'V_out', 'P_out', 'f_sw', 'eta_guess', 'ripple_target')),
+        ('Buck 交错与导通时间', ('buck_phases', 'cot_ton_s', 'cot_min_off_s')),
+        ('COT 电压外环 PI（两个增益均为 0 时自动）', ('cot_kp_hz', 'cot_ki_hz_per_s')),
     ],
     'stage': [
         ('储能与变比', ('L', 'N')),
@@ -77,7 +79,7 @@ GROUPS = {
         ('磁密与窗口约束', ('Bmax', 'Bsat', 'Ku')),
         ('磁导率与气隙估算', ('mu_r',)),
         ('绕组与导线', ('Np', 'Ns', 'd_wire_p', 'd_wire_s', 'n_strand_p',
-                      'n_strand_s', 'parallel_wires_p','parallel_wires_s','MLT')),
+                      'n_strand_s', 'parallel_wires_p','parallel_wires_s')),
         ('散热与温升', ('Rth_transformer', 'h_conv', 'temp_rise_limit')),
         ('材料与磁芯损耗系数', ('rho', 'k_core', 'a_core', 'b_core')),
     ],
@@ -129,9 +131,14 @@ META = {
     'Vf_diode': FieldSpec('固定 / 换流近似压降', 'Vf', 'V', required=True),
     'Rd_diode': FieldSpec('动态电阻', 'Rd', 'Ω'),
     'Qrr': FieldSpec('反向恢复电荷', 'Qrr', 'C'),
-    'Rds_aux': FieldSpec('钳位 MOS 导通电阻', 'Rds(on),Q2', 'Ω', topologies=FORWARD_TOPOLOGIES),
-    'Qg_aux': FieldSpec('钳位 MOS 总栅极电荷', 'Qg,Q2', 'C', topologies=FORWARD_TOPOLOGIES),
-    'Coss_aux': FieldSpec('钳位 MOS 输出电容', 'Coss,Q2', 'F', topologies=FORWARD_TOPOLOGIES),
+    'Rds_aux': FieldSpec('辅助 MOS 导通电阻', 'Rds(on),Q2', 'Ω', topologies=('BUCK','ACF-FORWARD')),
+    'Qg_aux': FieldSpec('辅助 MOS 总栅极电荷', 'Qg,Q2', 'C', topologies=('BUCK','ACF-FORWARD')),
+    'Coss_aux': FieldSpec('辅助 MOS 输出电容', 'Coss,Q2', 'F', topologies=('BUCK','ACF-FORWARD')),
+    'buck_phases': FieldSpec('并联相数', 'Nφ', '相', topologies=('BUCK',)),
+    'cot_ton_s': FieldSpec('固定导通时间（0 = 自适应）', 'ton', 's', topologies=('BUCK',)),
+    'cot_min_off_s': FieldSpec('最短关断时间', 'toff,min', 's', topologies=('BUCK',)),
+    'cot_kp_hz': FieldSpec('比例增益', 'Kp', 'Hz', topologies=('BUCK',)),
+    'cot_ki_hz_per_s': FieldSpec('积分增益', 'Ki', 'Hz/s', topologies=('BUCK',)),
     'Cin1': FieldSpec('容量', 'Cin1', 'F', required=True),
     'Rcin1': FieldSpec('等效串联电阻', 'ESRin1', 'Ω'),
     'ESLin1': FieldSpec('等效串联电感', 'ESLin1', 'H'),
@@ -172,7 +179,7 @@ META = {
     'n_strand_s': FieldSpec('副边单根线股数', 'ns', '股', topologies=ISOLATED_TOPOLOGIES),
     'parallel_wires_p': FieldSpec('原边线圈并绕数', 'bp', '根', topologies=ISOLATED_TOPOLOGIES),
     'parallel_wires_s': FieldSpec('副边线圈并绕数', 'bs', '根', topologies=ISOLATED_TOPOLOGIES),
-    'MLT': FieldSpec('每匝平均长度', 'MLT', 'm', auto=True),
+    'MLT': FieldSpec('旧版平均匝长', 'MLT', 'm'),
     'Rth_transformer': FieldSpec('变压器至环境热阻', 'Ri-a', 'K/W', required=True,
                                  topologies=ISOLATED_TOPOLOGIES),
     'h_conv': FieldSpec('电感对流换热系数', 'h', 'W/(m²·K)',
@@ -193,11 +200,16 @@ META = {
 def applicable(key: str, topology: str, control_mode: str) -> bool:
     """Whether a field belongs to the selected model, independent of folding.
 
-    Only the CSA gain and current-equivalent compensation slope are exclusive
-    to PCM.  No condition silently changes a stored parameter value.
+    Control-specific fields retain their stored values when hidden.
     """
     field = META[key]
     if field.topologies and topology not in field.topologies:
+        return False
+    cot = topology == 'BUCK' and control_mode == 'Constant On-Time'
+    if key in ('cot_ton_s', 'cot_min_off_s', 'cot_kp_hz', 'cot_ki_hz_per_s') or (
+            topology == 'BUCK' and key in ('Rds_aux', 'Qg_aux', 'Coss_aux')):
+        return cot
+    if cot and key in ('Vf_diode','Rd_diode','Qrr','Vm','KP','fz1','fz2','fp1','fp2'):
         return False
     if key in ('A_sense', 'ma_slope'):
         return control_mode in ('Peak Current Mode', 'PCM')
@@ -210,7 +222,7 @@ def visible(key: str, topology: str, control_mode: str, advanced: bool,
 
     ``advanced`` is accepted for API compatibility but no longer hides fields.
     """
-    if key in ('Rd_diode','Rd_din','Rd_dout','le_core'):return False
+    if key in ('Rd_diode','Rd_din','Rd_dout','le_core','MLT'):return False
     from inductor_selection import TOPOLOGIES, DESIGN_FIELDS, FIELDS
     bought = topology in TOPOLOGIES and not flags.get('inductor_design_enabled', True)
     if (bought and key in DESIGN_FIELDS) or (not bought and key in FIELDS):

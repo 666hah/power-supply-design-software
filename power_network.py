@@ -140,6 +140,9 @@ def normalize(project):
         xy={axis:number(point.get(axis),'二极管坐标') for axis in ('x','y')}
         if max(xy.values())>10000:raise ValueError('二极管坐标不得超过10000。')
         out['layout']['diodes'][identity]=xy
+    if 'sequence_config' in raw:
+        from system_sequence_config import normalize as normalize_sequence
+        out['sequence_config']=normalize_sequence(out,raw['sequence_config'])
     return out
 
 

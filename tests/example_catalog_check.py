@@ -17,11 +17,11 @@ from design_engine.specification import load_spec
 
 
 class CatalogChecks(unittest.TestCase):
-    def test_curated_isolated_and_three_nonisolated_examples(self):
-        self.assertEqual(len(EXAMPLES),6)
+    def test_curated_isolated_and_nonisolated_examples(self):
+        self.assertEqual(len(EXAMPLES),8)
         self.assertEqual(bootstrap()['examples'],EXAMPLES)
         self.assertEqual([load_spec(read_example(n))['topology'] for n in EXAMPLES],
-                         ['ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BOOST'])
+                         ['ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BUCK','BOOST','BUCK'])
         with self.assertRaises(ValueError):read_example('../main.py')
 
     def test_flyback_preserves_user_requirements_and_winding_structure(self):
@@ -62,6 +62,31 @@ class CatalogChecks(unittest.TestCase):
             self.assertTrue(op['acf_model']['current_mesh_verified'])
             self.assertTrue(all(c['mode']=='CCM' and c['I_L_pk']<2 for c in op['output_ops']))
 
+    def test_public_qr_example_calculates_with_interleaved_reference_transformer(self):
+        from winding_layout import assess_winding_window, transformer_windings
+
+        name='90W_QR_L6565_252_442V_REFERENCE.json'
+        self.assertIn(name,EXAMPLES)
+        p=load_spec(read_example(name))
+        self.assertEqual((p['V_in'],p['V_in_min'],p['V_in_max']),(252.,252.,442.))
+        self.assertEqual((p['Np'],p['Ns'],p['A_sense']),(56,28,1))
+        self.assertEqual([(r['Ns'],r['P_out']) for r in p['outputs']],[(28,92.),(8,.75)])
+        self.assertAlmostEqual(p['L'],800e-6)
+        winding=p['winding_config']
+        self.assertEqual((winding['window_width'],winding['window_height']),(.0176,.0048))
+        self.assertEqual([(s['winding_id'],s['turns']) for s in winding['layer_plan']],
+                         [('P',28),('OUT1',14),('OUT2',8),('OUT1',14),('P',28)])
+        self.assertTrue(winding['model_3d'])
+
+        cases=calculate_parameters(p,analysis='endpoints',include_loop=True,
+                                   include_cross_regulation=False).runtime_bundle()['cases']
+        self.assertEqual([case['p']['V_in'] for case in cases],[252.,442.])
+        for case in cases:
+            self.assertFalse(case.get('error'))
+            self.assertFalse(case.get('loop_error'))
+            layout=assess_winding_window(transformer_windings(case['result']),winding)
+            self.assertTrue(layout['fits'])
+
     def test_desktop_menu_callbacks_load_their_own_example(self):
         import tkinter as tk
         import main
@@ -75,13 +100,13 @@ class CatalogChecks(unittest.TestCase):
                 menu=root.nametowidget(bar.entrycget(example_index,'menu'))
                 entries=[i for i in range(menu.index('end')+1)
                          if menu.type(i)=='command']
-                self.assertEqual(len(entries),6)
+                self.assertEqual(len(entries),8)
                 self.assertEqual([menu.entrycget(i,'label') for i in entries],list(EXAMPLES.values()))
                 with patch.object(app,'load_isolated_example') as loader:
                     for index,name in zip(entries,EXAMPLES):
                         menu.invoke(index)
                         loader.assert_called_with(name)
-                for name,topology in zip(EXAMPLES,('ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BOOST')):
+                for name,topology in zip(EXAMPLES,('ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BUCK','BOOST','BUCK')):
                     app.load_isolated_example(name)
                     p=app.get_params()
                     self.assertEqual(p['topology'],topology)
@@ -89,6 +114,14 @@ class CatalogChecks(unittest.TestCase):
                         self.assertEqual(len(p['outputs']),3)
                     if topology=='ACF-FORWARD':
                         self.assertEqual([r['L'] for r in p['outputs']],[100e-6,330e-6,47e-6])
+                    if name=='96W_BUCK_COT_4PH.json':
+                        self.assertEqual((p['buck_phases'], p['control_mode']), (4, 'Constant On-Time'))
+                        self.assertTrue(app.ctrl_combo.instate(['disabled']))
+                    if topology=='BOOST':
+                        self.assertEqual((p['buck_phases'], p['control_mode']), (1, 'Peak Current Mode'))
+                    if name=='24W_BUCK_CAP_IMPEDANCE.json':
+                        self.assertEqual(len(p['output_capacitors']),3)
+                        self.assertTrue(all(cap['impedance_curve']['points'] for cap in p['output_capacitors']))
         finally:
             for job in root.tk.splitlist(root.tk.call('after','info')):
                 try:root.after_cancel(job)

@@ -1,4 +1,4 @@
-"""One topology-aware sidebar entry for all supported semiconductor curves."""
+"""Model selection and device-specific curve data controls."""
 import copy
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -9,7 +9,7 @@ from diode_curves import cleanup_message
 from mos_curve_ui import MosCurveUI
 from diode_curve_ui import DiodeCurveUI
 
-CHOICES = {'跟随全局': None, '固定值估算': 'fixed', '导入曲线计算': 'curve', '旧跨导兼容': 'legacy'}
+CHOICES = {'跟随默认': None, '固定值估算': 'fixed', '曲线模型': 'curve', '旧跨导兼容': 'legacy'}
 COLORS = {'fixed': '#667587', 'curve': '#237544', 'missing': '#B53232', 'warning': '#A25C00'}
 
 
@@ -31,14 +31,20 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
 
     def _build_device_curve_controls(self, frame, row):
         frame.columnconfigure(0, weight=1)
+        from capacitor_ui import CapacitorModelPicker
+
+        self._cap_model_picker = CapacitorModelPicker(frame, self._capacitor_model_banks)
+        self._cap_model_picker.grid(row=row, column=0, columnspan=4, sticky='ew', pady=(0, 8))
+        self._register_param_extra(frame, [self._cap_model_picker],
+            text='电容 输入 输出 RLC 固定参数 阻抗曲线 模型 精度 C_IN C_O')
         panel = ttk.Frame(frame)
-        panel.grid(row=row, column=0, columnspan=4, sticky='ew')
+        panel.grid(row=row+1, column=0, columnspan=4, sticky='ew')
         self._curve_global = tk.StringVar(value='fixed')
-        ttk.Label(panel, text='器件损耗怎么计算？', style='Param.TLabel').pack(anchor='w', pady=(0, 4))
-        for value, text in (('fixed', '固定值快速估算'), ('curve', '导入曲线精细计算')):
+        ttk.Label(panel, text='半导体计算方式 · MOS 与二极管', style='Param.TLabel').pack(anchor='w', pady=(0, 4))
+        for value, text in (('fixed', '固定值模型'), ('curve', '曲线模型')):
             ttk.Radiobutton(panel, text=text, value=value, variable=self._curve_global,
                             style='CurveMode.TRadiobutton', command=self._choose_global_curve_mode).pack(anchor='w', pady=2)
-        ttk.Label(panel, text='可逐项覆盖；切换全局会重置逐项例外，数据保留。仅切换器件损耗来源，不等同完整电路仿真。',
+        ttk.Label(panel, text='切换默认模型会重置半导体的逐项选择。',
                   style='Muted.TLabel', wraplength=310, justify='left').pack(fill='x', pady=4)
         self._curve_summary = tk.StringVar()
         self._curve_summary_label = ttk.Label(panel, textvariable=self._curve_summary, wraplength=310, justify='left')
@@ -46,7 +52,7 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         box = ttk.Frame(panel); box.pack(fill='x')
         self._curve_tree = ttk.Treeview(box, columns=('object', 'kind', 'state'), show='headings',
                                        height=5, selectmode='browse', takefocus=True)
-        for key, title, width in (('object', '器件 / 输出', 90), ('kind', '所需曲线', 100), ('state', '来源 / 状态', 112)):
+        for key, title, width in (('object', '器件 / 输出', 90), ('kind', '计算项', 100), ('state', '模型 / 状态', 112)):
             self._curve_tree.heading(key, text=title)
             self._curve_tree.column(key, width=width, minwidth=60)
         for tag, color in COLORS.items():
@@ -57,34 +63,125 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         self._curve_tree.bind('<<TreeviewSelect>>', lambda _e: self._curve_selection_note())
         self._curve_detail = tk.StringVar()
         ttk.Label(panel, textvariable=self._curve_detail, wraplength=310, justify='left',
-                  style='Muted.TLabel').pack(fill='x', pady=5)
-        ttk.Label(panel, text='此项计算来源（可覆盖全局）', style='Param.TLabel').pack(anchor='w')
-        self._curve_row_source = tk.StringVar(value='跟随全局')
+                  style='Muted.TLabel').pack(fill='x', pady=3)
+        ttk.Label(panel, text='所选项模型', style='Param.TLabel').pack(anchor='w')
+        self._curve_row_source = tk.StringVar(value='跟随默认')
         self._curve_source_combo = ttk.Combobox(panel, textvariable=self._curve_row_source,
                                                values=tuple(CHOICES)[:3], state='readonly')
         self._curve_source_combo.pack(fill='x')
         self._curve_source_combo.bind('<<ComboboxSelected>>', self._choose_row_curve_source)
-        actions = ttk.Frame(panel); actions.pack(fill='x', pady=(5, 0))
-        ttk.Button(actions, text='导入 / 替换所选…', command=self._import_selected_curve).pack(side='left', expand=True, fill='x')
-        self._curve_preview_button = ttk.Button(actions, text='预览曲线…', command=self._preview_selected_curve)
-        self._curve_preview_button.pack(side='left', padx=(4, 0))
-        actions = ttk.Frame(panel); actions.pack(fill='x', pady=4)
-        self._curve_unbind_button = ttk.Button(actions, text='解除绑定', command=self._unbind_selected_curve)
-        self._curve_unbind_button.pack(side='left', expand=True, fill='x')
-        self._curve_reuse_button = ttk.Button(actions, text='复用到其他二极管…', command=self._reuse_diode_curve)
-        self._curve_reuse_button.pack(side='left', padx=(4, 0))
-        ttk.Button(panel, text='查看 MOS Vinmin / Vinmax 四工况…', command=self._show_mos_four).pack(fill='x', pady=3)
-        ttk.Label(panel, text='文件仍只需 x,y 数值；导入时确认 X/Y 数量级。切换方式不删除曲线或手动值。\n'
-                  '绿色=曲线已校验并启用；灰色=固定值或已停用；橙色=整理/外推；红色=待导入。',
-                  style='Muted.TLabel', wraplength=310, justify='left').pack(fill='x', pady=4)
         def fit(event):
             width = max(180, event.width - 8)
             for child in panel.winfo_children():
                 if isinstance(child, ttk.Label): child.configure(wraplength=width)
         panel.bind('<Configure>', fit)
-        self._register_param_extra(frame, [panel], text='曲线 导入 计算方式 固定值 精细 MOS 二极管 Q1 Vgs Id Qg Vf If CSV JSON')
+        self._register_param_extra(frame, [panel], text='模型 精度 固定值 曲线 MOS 二极管 Q1 Vgs Id Qg Vf If')
         self._curve_signature = None
-        return row + 1
+        return row + 2
+
+    def _capacitor_model_banks(self):
+        if 'input' not in self._cap_editors or 'output' not in self._cap_editors:
+            return {}
+        banks = {'输入': self._cap_editors['input']}
+        if self._multiple_active():
+            banks.update({f'OUT{index+1}': editor
+                          for index, editor in self._inline_cap_editors.items() if self._inline_output_visible(index)})
+        else:
+            banks['输出'] = self._cap_editors['output']
+        return banks
+
+    def _device_data_rows(self, kind, rail):
+        if rail is not None and not self._inline_output_visible(rail-1):
+            return []
+        if kind not in ('mos', 'input') and rail is None and self._multiple_active():
+            return []
+        rows = targets(self._curve_context())
+        if kind == 'mos':
+            return [item for item in rows if item['target'] in (TRANSFER, CHARGE)]
+        if kind == 'input':
+            return [item for item in rows if item['kind'] == 'input']
+        allowed = ('rectifier', 'freewheel') if kind == 'rectifier' else (kind,)
+        return [item for item in rows if item['kind'] in allowed and (rail is None or item.get('rail') == rail)]
+
+    def _build_device_curve_data_button(self, frame, row, label, kind, rail=None):
+        button = ttk.Button(frame, text=label, command=lambda: self._open_curve_data(kind, rail))
+        button.grid(row=row, column=0, columnspan=4, sticky='ew', pady=4)
+        self._register_param_extra(frame, [button], text=label+' 导入 预览 解绑 CSV JSON',
+                                   predicate=lambda: bool(self._device_data_rows(kind, rail)))
+        if kind == 'mos':
+            four = ttk.Button(frame, text='查看 MOS Vinmin / Vinmax 四工况…', command=self._show_mos_four)
+            four.grid(row=row+1, column=0, columnspan=4, sticky='ew', pady=3)
+            self._register_param_extra(frame, [four], text='MOS Vinmin Vinmax 四工况')
+            return row+2
+        return row+1
+
+    def _open_curve_data(self, kind, rail):
+        rows = self._device_data_rows(kind, rail)
+        if not rows:
+            return
+        previous = getattr(self, '_curve_data_dialog', None)
+        if previous is not None and previous.winfo_exists():
+            previous.destroy()
+        from simple_curve_ui import _place_dialog
+        dialog = tk.Toplevel(self.root)
+        self._curve_data_dialog = dialog
+        dialog.title('器件曲线数据')
+        dialog.transient(self.root)
+        content = ttk.Frame(dialog, padding=12)
+        content.pack(fill='both', expand=True)
+        picker = ttk.Combobox(content, state='readonly', width=42,
+                             values=[row['ref']+' · '+row['role'] for row in rows])
+        picker.pack(fill='x')
+        picker.current(0)
+        detail = tk.StringVar()
+        ttk.Label(content, textvariable=detail, wraplength=420, justify='left').pack(fill='x', pady=10)
+
+        def current():
+            return rows[picker.current()]
+
+        def refresh(_event=None):
+            item = current()
+            p = self._curve_context()
+            model = source_for(p, item['target'])
+            curve = curve_for(p, item['target'])
+            detail.set(self._curve_data_note(item, p))
+            preview.state(['!disabled'] if curve else ['disabled'])
+            unbind.state(['!disabled'] if curve and model != 'curve' else ['disabled'])
+            if kind != 'mos':
+                reuse.state(['!disabled'] if curve else ['disabled'])
+
+        def run(action):
+            dialog.grab_release()
+            child = action(current())
+            if child is None:
+                dialog.grab_set()
+                refresh()
+                return
+
+            def return_to_data(event):
+                if event.widget is child and dialog.winfo_exists():
+                    dialog.grab_set()
+                    refresh()
+
+            child.bind('<Destroy>', return_to_data, add='+')
+            child.grab_set()
+
+        actions = ttk.Frame(content)
+        actions.pack(fill='x')
+        ttk.Button(actions, text='导入 / 替换…', command=lambda: run(self._import_selected_curve)).pack(side='left')
+        preview = ttk.Button(actions, text='预览曲线…', command=lambda: run(self._preview_selected_curve))
+        preview.pack(side='left', padx=4)
+        unbind = ttk.Button(actions, text='解除绑定…', command=lambda: run(self._unbind_selected_curve))
+        unbind.pack(side='left')
+        if kind != 'mos':
+            reuse = ttk.Button(content, text='复用到其他二极管…', command=lambda: run(self._reuse_diode_curve))
+            reuse.pack(anchor='w', pady=(6, 0))
+        ttk.Button(content, text='关闭', command=dialog.destroy).pack(anchor='e', pady=(6, 0))
+        picker.bind('<<ComboboxSelected>>', refresh)
+        refresh()
+        _place_dialog(dialog, self.root)
+        dialog.grab_set()
+        return dialog
 
     def _ensure_curve_settings(self):
         if not self._device_curve_settings:
@@ -139,6 +236,7 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
 
     def _sync_device_curve_controls(self):
         if not hasattr(self, '_curve_tree') or not hasattr(self, '_inline_output_vars'): return
+        self._cap_model_picker.refresh()
         p = self._curve_context()
         self._curve_rows = targets(p)
         settings = self._device_curve_settings or inferred_settings(p)
@@ -148,7 +246,7 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         for row in self._curve_rows:
             target = row['target']; source = source_for(p, target); curve = curve_for(p, target)
             if source == 'curve' and not curve:
-                tag, state = 'missing', '待导入'; missing += 1
+                tag, state = 'missing', '曲线 · 待数据'; missing += 1
             elif source == 'curve':
                 tag = 'warning' if self._curve_warning(row, curve) else 'curve'
                 state = '曲线 · 需校核' if tag == 'warning' else '曲线已启用'
@@ -169,10 +267,10 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
                 self._curve_tree.selection_set(target)
             self._curve_signature = signature
         text = source_summary(p)
-        if missing: text += f'\n待导入：{missing} 项。请补齐曲线，或逐项改用固定值后再计算。'
+        if missing: text += f'\n待导入 {missing} 项，请在相应器件分组补齐数据。'
         self._curve_summary.set(text)
         self._curve_summary_label.configure(foreground=COLORS['missing' if missing else 'warning' if '混合' in text else 'curve' if settings['mode']=='curve' else 'fixed'])
-        self._param_summary_vars['curves'].set(text.split('\n')[0])
+        self._param_summary_vars['curves'].set('电容按位号配置 · '+text.split('\n')[0])
         self._curve_selection_note()
 
     def _curve_selection_note(self):
@@ -182,7 +280,12 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         settings = self._device_curve_settings or inferred_settings(p)
         override = settings['overrides'].get(target)
         self._curve_source_combo.configure(values=tuple(CHOICES) if override == 'legacy' else tuple(CHOICES)[:3])
-        self._curve_row_source.set(next((label for label, value in CHOICES.items() if value == override), '跟随全局'))
+        self._curve_row_source.set(next((label for label, value in CHOICES.items() if value == override), '跟随默认'))
+        self._curve_detail.set(f"{row['ref']} · {row['role']} · {LABELS[source]}")
+
+    def _curve_data_note(self, row, p):
+        target = row['target']
+        curve, source = curve_for(p, target), source_for(p, target)
         axes = row['axes']
         if target == TRANSFER and curve.get('kind') == 'output_family': axes = '旧输出曲线族：X=Vds / V；Y=Id / A；按 Vgs 分组'
         text = f"{row['ref']} · {row['role']}\n{axes}\n当前来源：{LABELS[source]}"
@@ -207,31 +310,28 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
             model = getattr(self, '_diode_result_models', {}).get(target)
             if model and getattr(self, '_snapshot_valid', False):
                 text += f"\n当前 Pcond={model['P_cond']:.5g} W；If,pk={model['I_max']:.5g} A。"
-        self._curve_detail.set(text)
-        self._curve_preview_button.configure(state='normal' if curve else 'disabled')
-        self._curve_unbind_button.configure(state='normal' if curve else 'disabled')
-        self._curve_reuse_button.configure(state='normal' if curve and target not in (TRANSFER, CHARGE) else 'disabled')
+        if source == 'curve' and curve:
+            text += '\n要解除绑定，请先在「器件模型精度选择」切换为固定值。'
+        return text
 
-    def _import_selected_curve(self):
-        row = self._selected_curve_row()
-        if not row: return
+    def _import_selected_curve(self, row):
         if row['target'] == TRANSFER: self._import_mos_curve()
         elif row['target'] == CHARGE: self._import_gate_charge()
-        else: self._import_diode_curve()
+        else: self._import_diode_curve(row['target'])
 
-    def _unbind_selected_curve(self):
-        row = self._selected_curve_row()
+    def _unbind_selected_curve(self, row):
         if not row: return
         target = row['target']
-        if not messagebox.askyesno('解除曲线绑定', f"解除 {row['ref']} · {row['role']} 的曲线并明确改用固定值。手动草稿保留，原文件不会删除。继续？", parent=self.root): return
+        if source_for(self._curve_context(), target) == 'curve':
+            return
+        if not messagebox.askyesno('解除曲线绑定', f"解除 {row['ref']} · {row['role']} 的曲线绑定？", parent=self.root): return
         self._ensure_curve_settings()
         if target == TRANSFER: self._mos_miller_curve = {}
         elif target == CHARGE: self._mos_charge_curve = {}
         else: self._diode_curves.pop(target, None)
-        self._set_curve_override(target, 'fixed')
+        self._curve_sources_changed()
 
-    def _preview_selected_curve(self):
-        row = self._selected_curve_row()
+    def _preview_selected_curve(self, row):
         if not row: return
         curve = curve_for(self._curve_context(), row['target'])
         if not curve: return
@@ -261,9 +361,9 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         dialog.bind('<Destroy>',release,add='+')
         ttk.Button(dialog, text='关闭', command=dialog.destroy).pack(pady=6)
         _place_dialog(dialog, self.root)
+        return dialog
 
-    def _reuse_diode_curve(self):
-        row = self._selected_curve_row()
+    def _reuse_diode_curve(self, row):
         if not row or row['target'] in (TRANSFER, CHARGE): return
         curve = self._diode_curves.get(row['target'])
         if not curve: return
@@ -280,12 +380,12 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         def accept():
             selected = [target for target, var in choices.items() if var.get()]
             if not selected: return
-            if not messagebox.askyesno('确认复用', '将复制到 '+ '、'.join(selected)+' 并启用曲线计算。继续？', parent=dialog): return
+            if not messagebox.askyesno('确认复用', '将复制曲线到 '+ '、'.join(selected)+'。继续？', parent=dialog): return
             self._ensure_curve_settings()
             for target in selected:
                 self._diode_curves[target] = copy.deepcopy(curve)
-                self._device_curve_settings['overrides'][target] = 'curve'
             self._curve_sources_changed(); dialog.destroy()
-        ttk.Button(dialog, text='复制并启用所选', command=accept).pack(side='right', padx=10, pady=10)
+        ttk.Button(dialog, text='复制曲线到所选', command=accept).pack(side='right', padx=10, pady=10)
         ttk.Button(dialog, text='取消', command=dialog.destroy).pack(side='right', pady=10)
         _place_dialog(dialog, self.root)
+        return dialog

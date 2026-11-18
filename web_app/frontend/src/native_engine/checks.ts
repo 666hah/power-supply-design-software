@@ -40,7 +40,7 @@ export function reviewCatalog(source: Spec, res: Spec, evaluation: Spec) {
       comparison,
       unit,
       margin:
-        Number.isFinite(value) && limit !== null
+        status !== "reference" && status !== "na" && Number.isFinite(value) && limit !== null
           ? ["<", "<="].includes(comparison)
             ? limit - value
             : value - limit
@@ -56,18 +56,18 @@ export function reviewCatalog(source: Spec, res: Spec, evaluation: Spec) {
     esr = caps.some((c) => !c.ESR)
       ? 0
       : 1 / caps.reduce((s, c) => s + 1 / c.ESR, 0);
-  add(
-    "L_min",
-    "电感量与设计初选建议",
-    op.L,
-    op.L_min || 0,
-    ">=",
-    "H",
-    (op.L_min || 0) <= 0 || (op.topology === "FLYBACK" && op.mode !== "CCM")
-      ? "na"
-      : undefined,
-    "初选建议含裕量，不代替实际电流谷值判断工作模式。",
-  );
+  if (op.topology === "FLYBACK") {
+    add("L_min", "励磁电感 Lm 初选参考", op.L, op.L_min, "参考", "H",
+      op.mode === "CCM" ? "reference" : "na",
+      "CCM 初选采用 40% 原边电流纹波和 1.5 倍系数。工作模式按原边谷值判定，选型核对峰值电流、磁密、气隙及温升。");
+  } else if (op.topology === "QR-FLYBACK") {
+    add("L_min", "励磁电感 Lm", op.L, null, "<=", "H", "na",
+      "按退磁、谷底延迟和实际工作频率检查。");
+  } else {
+    add("L_min", "电感量与设计初选建议", op.L, op.L_min || 0, ">=", "H",
+      (op.L_min || 0) <= 0 ? "na" : undefined,
+      "初选值为 CCM 临界电感的 1.5 倍。工作模式按实际谷值电流判定。");
+  }
   add("C_charge", "电荷纹波所需输出容量", total, op.C_min, ">=", "F");
   add(
     "ESR_ripple",

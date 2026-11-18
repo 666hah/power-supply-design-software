@@ -116,10 +116,11 @@ class ManualUI(unittest.TestCase):
             data=read_simple(f);candidate=to_charge(data['curves'][0])
             with patch('mos_curve_ui.filedialog.askopenfilename',return_value=str(f)),patch('simple_curve_ui.import_simple',return_value=candidate) as dialog:
                 a._import_gate_charge();self.assertTrue(dialog.called)
-            self.assertEqual(a.params['mos_charge_mode'].get(),'curve')
+            self.assertEqual(a.params['mos_charge_mode'].get(),'manual')
             self.assertEqual(a._mos_charge_curve,candidate)
             with patch('mos_curve_ui.filedialog.askopenfilename',return_value=str(f)),patch('simple_curve_ui.import_simple',return_value=None):a._import_gate_charge()
             self.assertEqual(a._mos_charge_curve,candidate)
+            a._set_curve_override('Q1:charge','curve')
             a._manual_event_vars['min','on','Qgs'].set('unused')
             self.assertEqual(str(a._manual_event_entries['min','on','Qgs'].cget('state')),'disabled')
             self.assertTrue(a.update_all())

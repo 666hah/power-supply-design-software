@@ -121,7 +121,9 @@ def active_diodes(p):
             if p['topology']=='ACF-FORWARD':rows.append(dict(ref=f'D_F{n}',role=name+' · 续流',vf_key='Vf_diode',kind='freewheel',rail=n))
             if r.get('d_out_enable'):rows.append(dict(ref=f'D_B{n}',role=name+' · 输出防反',vf_key='Vf_dout',kind='output',rail=n))
     else:
-        rows.append(dict(ref='D1',role='功率级续流' if p['topology']=='BUCK' else '输出整流',vf_key='Vf_diode',kind='rectifier',rail=None))
+        from cot_settings import active as cot_active
+        if not cot_active(p):
+            rows.append(dict(ref='D1',role='功率级续流' if p['topology']=='BUCK' else '输出整流',vf_key='Vf_diode',kind='rectifier',rail=None))
         if p['topology']=='ACF-FORWARD':rows.append(dict(ref='D2',role='输出续流',vf_key='Vf_diode',kind='freewheel',rail=None))
         if p.get('d_out_enable'):rows.append(dict(ref='D_OUT',role='输出防反',vf_key='Vf_dout',kind='output',rail=None))
     return rows

@@ -75,12 +75,19 @@ def _matching_template(tool_root, core_name, settings):
 
 
 class _SimulationDialog:
-    def __init__(self, app, config):
+    def __init__(self, app, config, *, container=None, settings_context=None, navigate=None):
         self.app = app
-        self.win = win = tk.Toplevel(app.root)
-        win.title('变压器仿真与设计闭环')
-        win.transient(app.root)
-        win.grab_set()
+        self.settings_context = settings_context
+        self.embedded = container is not None
+        if self.embedded:
+            self.win = container.winfo_toplevel()
+        else:
+            self.win = tk.Toplevel(app.root)
+            self.win.title('变压器仿真与设计闭环')
+            self.win.transient(app.root)
+            self.win.grab_set()
+        self.navigate = navigate
+        win = self.win
         self.settings = _read_settings()
         self.core = _core_name(config)
         self.job = None
@@ -92,23 +99,28 @@ class _SimulationDialog:
         self.poll_id = None
         self.path_controls = []
 
-        frame = ttk.Frame(win, padding=12)
+        self.frame = frame = ttk.Frame(container if self.embedded else win, padding=12)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(5, weight=1)
-        ttk.Label(frame, text=f'当前变压器 · {self.core}', font='TkHeadingFont').grid(
+        self.title = ttk.Label(frame, text=f'当前变压器 · {self.core}', font='TkHeadingFont')
+        self.title.grid(
             row=0, columnspan=3, sticky='w', pady=(0, 6))
-        ttk.Label(frame, text='以当前匝数和排线导出几何。提取设置提供磁芯实体、材料、坐标和接线，'
-                             '请核对是否与本单元一致。', wraplength=600).grid(
-            row=1, columnspan=3, sticky='w', pady=(0, 8))
-        root_path = self.settings.get('tool_root') or os.environ.get('POWER_DESIGN_TRANSFORMER_TOOL', '')
-        self.tool = tk.StringVar(win, root_path)
-        self.template = tk.StringVar(win, _matching_template(root_path, self.core, self.settings))
         self.output = tk.StringVar(win, self.settings.get('output_directory') or str(Path.home() / '变压器仿真报告'))
-        for row, (label, var, pick) in enumerate((
-                ('本机提取工具目录', self.tool, self.pick_tool),
-                ('提取设置 JSON', self.template, self.pick_template),
-                ('报告保存目录', self.output, self.pick_output)), start=2):
+        if self.embedded:
+            self._build_automatic_inputs(frame)
+            rows = [(4, '报告保存目录', self.output, self.pick_output)]
+        else:
+            ttk.Label(frame, text='以当前匝数和排线导出几何。提取设置提供磁芯实体、材料、坐标和接线，'
+                                 '请核对是否与本单元一致。', wraplength=600).grid(
+                row=1, columnspan=3, sticky='w', pady=(0, 8))
+            root_path = self.settings.get('tool_root') or os.environ.get('POWER_DESIGN_TRANSFORMER_TOOL', '')
+            self.tool = tk.StringVar(win, root_path)
+            self.template = tk.StringVar(win, _matching_template(root_path, self.core, self.settings))
+            rows = [(2, '本机提取工具目录', self.tool, self.pick_tool),
+                    (3, '提取设置 JSON', self.template, self.pick_template),
+                    (4, '报告保存目录', self.output, self.pick_output)]
+        for row, label, var, pick in rows:
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky='w', padx=(0, 8))
             entry = ttk.Entry(frame, textvariable=var, width=50)
             entry.grid(row=row, column=1, sticky='ew', pady=3)
@@ -128,14 +140,17 @@ class _SimulationDialog:
         self.folder = ttk.Button(bar, text='运行目录', command=lambda:self.open_path(self.directory, directory=True))
         for btn in (self.report, self.compare, self.folder):
             btn.pack(side='left', padx=(0, 4))
-        self.prepare = ttk.Button(bar, text='从同型号磁芯准备参考设置…',
-                                  command=lambda:self.start(prepare=True))
-        self.prepare.pack(side='right')
+        self.prepare = None
+        if not self.embedded:
+            self.prepare = ttk.Button(bar, text='从同型号磁芯准备参考设置…',
+                                      command=lambda:self.start(prepare=True))
+            self.prepare.pack(side='right')
         actions = ttk.Frame(frame)
         actions.grid(row=7, columnspan=3, sticky='ew', pady=(5, 0))
         self.apply = ttk.Button(actions, text='采用参数并重算', command=self.apply_result)
         self.stop = ttk.Button(actions, text='停止', command=self.cancel)
-        self.run = ttk.Button(actions, text='一键仿真并生成报告', command=self.start)
+        self.run = ttk.Button(actions, text='开始电磁仿真' if self.embedded else '一键仿真并生成报告',
+                              command=self.start)
         self.apply.pack(side='left')
         for btn in (self.run, self.stop):
             btn.pack(side='right', padx=(4, 0))
@@ -144,14 +159,77 @@ class _SimulationDialog:
             self.write('此单元已保存一次参数采用记录。可查阅当时的场仿真报告和闭环对比。')
             if self.result.get('project_file'):
                 self.write('上次使用的提取设置：' + str(self.result['project_file']))
-            if not root_path and self.result.get('tool_root'):
+            if not self.embedded and not root_path and self.result.get('tool_root'):
                 self.write('上次使用的工具目录：' + str(self.result['tool_root']) + '。请在本机重新选择。')
-        else:
+        elif not self.embedded:
             self.write('首次选择本机工具及提取设置后，后续可直接仿真。每次运行单独保存，完成后可核对结果再采用参数。')
-        if not all((config.get('winding_config') or {}).get(k) for k in ('window_width','window_height')):
+        if self.embedded:
+            self.write('本次任务的几何检查、求解进度与报告位置会显示在这里。')
+            self.refresh_preflight(config)
+        elif not all((config.get('winding_config') or {}).get(k) for k in ('window_width','window_height')):
             self.write('尚缺骨架净窗口尺寸。选好同型号模板后，可点击“从同型号磁芯准备参考设置…”预览参考排线和接线。')
-        win.protocol('WM_DELETE_WINDOW', self.close)
-        win.bind('<Destroy>', self.destroyed, add='+')
+        if not self.embedded:
+            win.protocol('WM_DELETE_WINDOW', self.close)
+        self.frame.bind('<Destroy>', self.destroyed, add='+')
+
+    def _build_automatic_inputs(self, frame):
+        note = ttk.Label(frame, text='复用当前 3D 绕组结构、磁材和气隙，自动准备场仿真输入。',
+                         wraplength=750, justify='left')
+        note.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 8))
+        card = ttk.LabelFrame(frame, text='输入检查', padding=9)
+        card.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        card.columnconfigure(0, weight=1)
+        self.readiness = ttk.Label(card, text='等待检查', wraplength=750, justify='left')
+        self.readiness.grid(row=0, column=0, sticky='ew')
+        if self.navigate is not None:
+            ttk.Button(card, text='本机工具与磁芯模型…', command=lambda:self.navigate('tools')).grid(
+                row=1, column=0, sticky='w', pady=(7, 0))
+        def resize(event):
+            width = max(250, event.width - 44)
+            note.configure(wraplength=width)
+            self.readiness.configure(wraplength=width)
+        frame.bind('<Configure>', resize, add='+')
+
+    def refresh_preflight(self, config):
+        if not self.embedded or self.job is not None:
+            return
+        self.core = _core_name(config)
+        self.title.configure(text=f'当前变压器 · {self.core or "自动选磁芯"}')
+        try:
+            readiness = self._automatic_inputs(config)
+            has_elmer = self._has_elmer(readiness['environment'])
+        except (ValueError, OSError, tk.TclError) as exc:
+            self.readiness.configure(text=str(exc), foreground='#9a5809')
+            return
+        summary = readiness.get('summary') or '已有输入可用于准备本次电磁仿真。'
+        missing = readiness.get('missing') or []
+        if not has_elmer:
+            missing = [*missing, '在本机工具中选择完整的 Elmer 安装目录。']
+        if missing:
+            summary += '\n\n需要处理\n' + '\n'.join(missing)
+            self.readiness.configure(text=summary, foreground='#9a5809')
+        else:
+            self.readiness.configure(text=summary, foreground='#24604b')
+
+    def _snapshot_environment(self, config):
+        if self.settings_context is None:
+            raise ValueError('仿真环境尚未连接，请重新打开仿真配置中心。')
+        self.settings_context.set_config(config)
+        return self.settings_context.snapshot(require_spice=False)
+
+    def _automatic_inputs(self, config):
+        from portable_transformer_project import automatic_field_inputs
+        return automatic_field_inputs(config, self._snapshot_environment(config))
+
+    @staticmethod
+    def _has_elmer(environment):
+        from simulation_environment import normalize_elmer
+        home = normalize_elmer(environment.get('elmer_home'))
+        if not home:
+            return False
+        root = Path(home)
+        return ((root / 'share/elmersolver/lib').is_dir() and all(
+            (root / 'bin' / executable).is_file() for executable in ('ElmerSolver.exe', 'ElmerGrid.exe')))
 
     def pick_tool(self):
         path = filedialog.askdirectory(parent=self.win, title='选择寄生参数提取研究目录或提取工具目录')
@@ -179,7 +257,10 @@ class _SimulationDialog:
 
     def refresh(self):
         busy = self.job is not None
-        for widget in (*self.path_controls, self.run, self.prepare):
+        controls = [*self.path_controls, self.run]
+        if self.prepare is not None:
+            controls.append(self.prepare)
+        for widget in controls:
             widget.state(['disabled'] if busy else ['!disabled'])
         self.stop.state(['!disabled'] if busy and not self.job.is_set() else ['disabled'])
         for button, key in ((self.report, 'report_path'), (self.compare, 'comparison_path')):
@@ -191,19 +272,40 @@ class _SimulationDialog:
     def start(self, *, prepare=False):
         if self.job is not None:
             return
-        paths = [v.get().strip() for v in (self.tool, self.template, self.output)]
-        tool, template, output = paths
-        if not all(paths) or not Path(tool).is_dir() or not Path(template).is_file():
-            self.write('请先选择本机提取工具目录、有效的提取设置 JSON 和报告保存目录。')
+        output = self.output.get().strip()
+        if not output:
+            self.write('请选择报告保存目录。')
             return
         try:
             config = copy.deepcopy(self.app._config_dict())
         except (ValueError, tk.TclError) as exc:
             self.write('请检查当前单元输入：' + str(exc))
             return
-        templates = dict(self.settings.get('templates') or {}) if self.settings.get('tool_root') == tool else {}
-        templates[self.core] = template
-        self.settings = dict(tool_root=tool, templates=templates, output_directory=output)
+
+        run_inputs = {'output_directory': output}
+        template = None
+        if self.embedded:
+            try:
+                auto = self._automatic_inputs(config)
+                if auto['missing']:
+                    raise ValueError('；'.join(auto['missing']))
+                if not self._has_elmer(auto['environment']):
+                    raise ValueError('请在本机工具中选择完整的 Elmer 安装目录。')
+            except (ValueError, OSError, tk.TclError) as exc:
+                self.write('输入需补充：' + str(exc))
+                self.refresh_preflight(config)
+                return
+            run_inputs['environment'] = copy.deepcopy(auto['environment'])
+            self.settings = dict(_read_settings(), output_directory=output)
+        else:
+            tool, template = self.tool.get().strip(), self.template.get().strip()
+            if not tool or not template or not Path(tool).is_dir() or not Path(template).is_file():
+                self.write('请先选择本机提取工具目录和有效的提取设置 JSON。')
+                return
+            run_inputs.update(tool_root=tool, project_file=template)
+            templates = dict(self.settings.get('templates') or {}) if self.settings.get('tool_root') == tool else {}
+            templates[self.core] = template
+            self.settings = dict(tool_root=tool, templates=templates, output_directory=output)
         try:
             _save_settings(self.settings)
         except OSError as exc:
@@ -213,7 +315,10 @@ class _SimulationDialog:
             self.result = {}
             self.directory = output
         self.refresh()
-        self.write('正在按本单元匝数准备参考窗口、层序和接线…' if prepare else '正在冻结当前单元并检查仿真输入…')
+        if prepare:
+            self.write('正在按本单元匝数准备参考窗口、层序和接线…')
+        else:
+            self.write('正在冻结当前单元并检查仿真输入…')
         mailbox = self.queue
         def work():
             try:
@@ -224,8 +329,7 @@ class _SimulationDialog:
                     mailbox.put(('reference', (prepared, config)))
                     return
                 from transformer_simulation import run_transformer_simulation
-                result = run_transformer_simulation(config, tool_root=tool, project_file=template,
-                    output_directory=output, cancelled=cancel.is_set,
+                result = run_transformer_simulation(config, **run_inputs, cancelled=cancel.is_set,
                     progress=lambda message:mailbox.put(('progress', message)))
                 mailbox.put(('done', result))
             except Exception as exc:
@@ -251,13 +355,16 @@ class _SimulationDialog:
                 self.write('已停止本次任务。')
             elif kind == 'error':
                 self.write('本次未完成：' + data[0])
-                self.write('如缺少窗口、层序或接线与模板不符，可从同型号磁芯准备参考设置，核对后重新仿真。')
+                if not self.embedded:
+                    self.write('如缺少窗口、层序或接线与模板不符，可从同型号磁芯准备参考设置，核对后重新仿真。')
             elif kind == 'reference':
                 self.adopt_reference(*data)
             else:
                 self.result = data
                 self.applied = False
                 self.directory = data['directory']
+                if data.get('preparation'):
+                    self.write(data['preparation'])
                 field = data.get('record', {}).get('field', {})
                 if 'primary_self_H' in field and 'primary_short_H' in field:
                     self.write('原边开路自感 %.4g µH；全部副边短路折算漏感 %.4g µH。' %
@@ -339,10 +446,10 @@ class _SimulationDialog:
         if self.job is not None:
             self.cancel()
             return
-        self.win.destroy()
+        (self.frame if self.embedded else self.win).destroy()
 
     def destroyed(self, event):
-        if event.widget is self.win:
+        if event.widget is self.frame:
             if self.job is not None:
                 self.job.set()
             if self.poll_id is not None:

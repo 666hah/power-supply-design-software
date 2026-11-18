@@ -16,9 +16,13 @@ import traceback
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='电源设计软件内置变压器场解工作进程')
-    parser.add_argument('command', choices=('doctor', 'check', 'cad', 'mesh', 'run'))
+    parser.add_argument('command', choices=('doctor', 'check', 'cad', 'mesh', 'run', 'catalog-core'))
     parser.add_argument('--project', type=Path)
     parser.add_argument('--events', type=Path)
+    parser.add_argument('--core-model')
+    parser.add_argument('--destination', type=Path)
+    parser.add_argument('--gap-mm', type=float, default=0.)
+    parser.add_argument('--spacer', action='store_true')
     args = parser.parse_args(argv)
     work = Path(os.environ['POWER_DESIGN_FIELD_WORKDIR']).resolve() if os.environ.get(
         'POWER_DESIGN_FIELD_WORKDIR') else Path(tempfile.mkdtemp(prefix='power-design-field-'))
@@ -38,6 +42,13 @@ def main(argv=None):
             stack.enter_context(redirect_stderr(stream))
         try:
             from transformer_field_runtime.storage import event
+            if args.command == 'catalog-core':
+                if not args.core_model or not args.destination:
+                    raise ValueError('需要提供磁芯型号和求解实体保存路径。')
+                from field_core_cad import write_catalog_core
+                write_catalog_core(args.core_model, args.destination, gap_mm=args.gap_mm, spacer=args.spacer)
+                event('cad', '已从规格轮廓和当前气隙生成闭合参考实体', 100)
+                return 0
             if args.command == 'doctor':
                 import gmsh
                 import meshio

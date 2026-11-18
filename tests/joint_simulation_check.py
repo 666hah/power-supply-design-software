@@ -195,6 +195,25 @@ class WorkflowChecks(unittest.TestCase):
                 self.assertIn('raw_field_after',adopted_metadata)
                 self.assertTrue(events)
 
+    def test_joint_uses_explicit_circuit_plan_when_requested(self):
+        from contextlib import ExitStack
+        with temporary_directory() as tmp:
+            cfg, exe, template, patches = self.fixture(tmp)
+            cfg['spice_config'] = dict(stop_ms=41., step_ms=36., fra_enabled=0., cross_enabled=0.)
+            with ExitStack() as stack:
+                for item in patches:
+                    stack.enter_context(item)
+                planner = stack.enter_context(patch('spice_planning.recommend_settings'))
+                result = joint.run_joint_simulation(cfg, tool_root=tmp, project_file=template,
+                    output_directory=tmp, executable=exe, prepare_reference_inputs=False,
+                    auto_circuit_plan=False)
+                self.assertEqual(result['status'], 'complete', result['summary'])
+                self.assertEqual(result['record']['circuit_plan'], 'design_settings')
+                self.assertEqual(result['record']['adopted_config']['spice_config']['stop_ms'], 41.)
+                self.assertEqual(result['record']['adopted_config']['spice_config']['step_ms'], 36.)
+                self.assertFalse(result['record']['adopted_config']['spice_config']['fra_enabled'])
+                planner.assert_not_called()
+
     def test_failed_field_never_starts_calculation_or_spice(self):
         from contextlib import ExitStack
         with temporary_directory() as tmp:

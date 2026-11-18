@@ -14,6 +14,8 @@ from power_stage import fmt_eng, TOPOLOGIES
 
 def topology_components(p, solved=None):
     """Ordered rows: designator, purpose, current values and source keys."""
+    from cot_settings import active
+    cot = active(p)
     if p.get('outputs') or p.get('feedback_mode')=='PSR-MP6005':
         return isolated_components(p,solved)
     topo = p['topology']
@@ -31,7 +33,8 @@ def topology_components(p, solved=None):
     from component_management import primary_mos_role, controller_reference
     add('Q1', primary_mos_role(p)+'；功率级 Vgs/Vds 图对象',
         [('Rds_on', 'Ω'), ('Qg', 'C'), ('Coss', 'F')])
-    add('R_S1', '主开关电流采样（简化串联）', [('Rs', 'Ω')])
+    if not cot or p.get('Rs', 0) > 0:
+        add('R_S1', '每相高侧电流采样' if cot else '主开关电流采样（简化串联）', [('Rs', 'Ω')])
     controller = controller_reference(p)
     if controller is not None:
         rows.append(controller)
@@ -42,12 +45,15 @@ def topology_components(p, solved=None):
         from inductor_selection import purchased
         add('L1', '外购成品电感' if purchased(p) else '输出滤波电感' if topo == 'ACF-FORWARD' else '储能 / 滤波电感',
             [('L', 'H'), ('inductor_dcr', 'Ω')] if purchased(p) else [('L', 'H')])
-    if topo == 'ACF-FORWARD':
+    if cot:
+        add('Q2', '各相低侧同步 N-MOS', [('Rds_aux', 'Ω'), ('Qg_aux', 'C'), ('Coss_aux', 'F')])
+    elif topo == 'ACF-FORWARD':
         add('Q2', '低侧钳位 P-MOS（负栅压驱动）', [('Rds_aux', 'Ω'), ('Qg_aux', 'C'), ('Coss_aux', 'F')])
         add('C_CL1', '低侧钳位电容', [('C_clamp', 'F'), ('ESR_clamp', 'Ω')])
         add('D2', '次级续流二极管', [('Vf_diode', 'V')])
     role = '续流二极管' if topo == 'BUCK' else '输出整流二极管'
-    add('D1', role, [('Vf_diode', 'V')])
+    if not cot:
+        add('D1', role, [('Vf_diode', 'V')])
     from capacitor_banks import bank
     for side,prefix in (('input','C_IN'),('output','C_O')):
         for i,c in enumerate(bank(p,side),1):
@@ -220,10 +226,95 @@ def _controller_box(s, p, y):
                fontsize=7, bbox=dict(facecolor='white', edgecolor='none', pad=.25))
 
 
-def draw_topology(ax, p, solved=None):
+def _draw_cot_buck(ax, p, solved, show_values):
+    from capacitor_banks import bank
+
+    phases = int(p.get('buck_phases', 1))
+    ys = [(1, 5.5)] if phases == 1 else [(1, 10.3), (phases, 4.6)]
+    top = ys[0][1]+2.4
+    ground = .7
+    ax.clear()
+    ax.set_aspect('equal')
+    ax.set_xlim(-.4, 23)
+    ax.set_ylim(-2.05, top+1.6)
+    ax.set_axis_off()
+    s = _Schematic(ax)
+    s.fontsize = 8
+    s.refs.update(('J1', 'J2', 'U_CTRL', 'R_LOAD'))
+    s.terminal(.3, top)
+    s.terminal(.3, ground)
+    s.text(.4, top+.65, 'J1 · Vin')
+    s.text(.4, ground-.55, 'PGND')
+    if p.get('d_in_enable'):
+        a, b = s.diode(1.42, top, 'D_IN')
+        s.wire((.3, top), a)
+        s.wire(b, (4.9, top))
+    else:
+        s.wire((.3, top), (4.9, top))
+    s.wire((.3, ground), (22.3, ground))
+    s.wire((4.9, top), (4.9, ys[-1][1]+2.4))
+    s.wire((15.6, top), (15.6, ys[-1][1]))
+    for side, prefix, bounds in (('input', 'C_IN', (2.25, 4.2)), ('output', 'C_O', (16.2, 18.0))):
+        values = bank(p, side)
+        s.capacitor_bank(values, [f'{prefix}{i+1}' for i in range(len(values))], bounds, top, ground)
+
+    for phase, y in ys:
+        s.text(5.8, y+.85, f'相 {phase}', ha='left', fontsize=8, fontweight='bold')
+        d, hs = s.mos(8.8, y+1.15, 'Q1', label_offset=(1.1, .22))
+        ld, ls = s.mos(8.8, y-1.15, 'Q2', label_offset=(1.1, -.22))
+        if p.get('Rs', 0) > 0:
+            a, b = s._part((6.55, y+2.4), (1, 0), 'R_S1', 'resistor')
+            s.wire((4.9, y+2.4), a)
+            s.wire(b, (8.8, y+2.4), d)
+        else:
+            s.wire((4.9, y+2.4), (8.8, y+2.4), d)
+        s.node(4.9, y+2.4)
+        s.wire(hs, ld)
+        s.wire(ls, (8.8, y-2.43))
+        for k, width in enumerate((.33, .23, .12)):
+            s.wire((8.8-width, y-2.43-.12*k), (8.8+width, y-2.43-.12*k))
+        a, b = s.inductor(12.55, y, 'L1')
+        s.wire((8.8, y), a)
+        s.wire(b, (15.6, y))
+        s.node(8.8, y)
+        s.node(15.6, y)
+    if phases > 2:
+        s.text(11.6, 7.18, f'… 中间 {phases-2} 相', fontsize=7,
+               bbox=dict(facecolor='white', edgecolor='none', pad=.2))
+
+    s.wire((15.6, top), (18.45, top))
+    if p.get('d_out_enable'):
+        a, b = s.diode(19.55, top, 'D_OUT')
+        s.wire((18.45, top), a)
+        s.wire(b, (22.3, top))
+    else:
+        s.wire((18.45, top), (22.3, top))
+    s.terminal(22.3, top)
+    s.terminal(22.3, ground)
+    s.text(22.0, top+.64, 'J2 · Vout')
+    a, b = s.resistor(21.05, (top+ground)/2, 'R_LOAD', label_side=-1)
+    s.wire((21.05, ground), a)
+    s.wire(b, (21.05, top))
+    s.node(21.05, top)
+    s.wire((5.1, -.15), (18.8, -.15), (18.8, -1.22), (5.1, -1.22), (5.1, -.15))
+    s.text(11.95, -.66, f'U_CTRL · COT · {phases} 相 · 防反前取样，逐相发脉冲', fontsize=8)
+    s.text(11.95, -1.65, 'Q1 / Q2 / L1 按相复制；显示公共标称值，逐相失配见配置。',
+           fontsize=7)
+    if show_values and solved:
+        s.text(10.8, top+.82,
+               f'{fmt_eng(solved["f_sw"], "Hz")} / 相 · ' +
+               (f'相间 {360/phases:g}° · 共用一个输出' if phases > 1 else '单相同步'),
+               fontsize=8)
+    return s.refs
+
+
+def draw_topology(ax, p, solved=None, *, label_operating_values=True):
     """Draw all six supported circuits; return the displayed designators."""
+    from cot_settings import active
+    if active(p):
+        return _draw_cot_buck(ax, p, solved, label_operating_values)
     if p.get('outputs') or p.get('feedback_mode')=='PSR-MP6005':
-        return draw_isolated(ax,p,solved)
+        return draw_isolated(ax,p,solved,label_operating_values=label_operating_values)
     components = topology_components(p,solved)
     refs = {r['ref'] for r in components}
     topo = p['topology']
@@ -392,7 +483,7 @@ def isolated_components(p, solved=None):
     return _diode_curve_labels(rows,p)
 
 
-def draw_isolated(ax,p,solved=None):
+def draw_isolated(ax,p,solved=None,*,label_operating_values=True):
     """Expanded winding drawing. Each secondary has its own local return."""
     from isolated_outputs import output_specs
     rails = output_specs(p) or [dict(p,name='OUT1',id=1)]
@@ -448,8 +539,14 @@ def draw_isolated(ax,p,solved=None):
         s.refs.add(f'R_LOAD{i}'); s.text(21.5,yy-1.4,f'R_LOAD{i}',ha='right',fontsize=7.5)
         s.refs.add(f'J_O{i}'); s.terminal(22.7,yy); s.terminal(22.7,low)
         main=i==p.get('feedback_output',1)
-        name = rail['name']+' ' if len(rails) <= 3 else ''
-        title = f"J_O{i} · {name}{rail['V_out']:.4g}V / {rail['P_out']:.4g}W"+(' ★' if main else '')
+        name = rail['name'] if len(rails) <= 3 else ''
+        if label_operating_values:
+            suffix = f" {name}" if name else ''
+            title = f"J_O{i} ·{suffix} {rail['V_out']:.4g}V / {rail['P_out']:.4g}W"
+        else:
+            title = f"J_O{i}"+(' · '+name if name else '')
+        if main:
+            title += ' ★'
         title += f' · 电容 {len(output_caps)} 颗 · ΣC={fmt_eng(sum(c["C"] for c in output_caps), "F")}'
         s.text(17., yy+1.5, title, fontsize=7 if len(rails) > 3 else 7.5,
                bbox=dict(facecolor='white', edgecolor='none', pad=.3))

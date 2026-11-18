@@ -8,12 +8,20 @@ import {
   Table,
   TableRow,
   TableCell,
+  TableLayoutType,
   WidthType,
   HeadingLevel,
+  Bookmark,
+  InternalHyperlink,
+  SimpleField,
+  LeaderType,
+  Tab,
+  TabStopType,
   Header,
   Footer,
   PageNumber,
   AlignmentType,
+  BorderStyle,
   ImageRun,
   Math as WordMath,
   MathRun,
@@ -22,10 +30,13 @@ import {
   MathSuperScript,
   MathIntegral,
   type MathComponent,
+  type IPageMarginAttributes,
+  type IStylesOptions,
 } from "docx";
 import { zipSync, strToU8 } from "fflate";
 import { type Spec, reference } from "./spec";
 import { VERSION } from "./engine";
+import { sourceFor } from "./devices";
 import {
   normalizeNetwork,
   analyzeNetwork,
@@ -43,6 +54,18 @@ export type Picture = {
 };
 type Row = [string, any, string, string?];
 type Module = { name: string; rows: (c: Spec) => Row[]; pictures: string[] };
+const stressTypes = [
+  ["mos", "MOS 耐压"],
+  ["diode", "二极管反向耐压"],
+  ["capacitor", "电容耐压与纹波电流"],
+  ["resistor", "电阻功耗"],
+] as const;
+const stressMetric = (kind: string, metric: string) => {
+  if (kind === "mos") return metric === "peak" ? "Vds 尖峰" : "Vds 阻断";
+  if (kind === "diode") return "稳态反向电压";
+  if (kind === "capacitor") return metric === "ripple" ? "纹波电流 RMS" : "电压峰值";
+  return "平均耗散";
+};
 const f = (v: any) =>
   v == null
     ? "未计算"
@@ -62,10 +85,13 @@ const f = (v: any) =>
                 review: "需核对",
                 undefined: "待数据 / 未定义",
                 not_configured: "尚未配置",
+                reference: "初选参考",
+                na: "不适用",
                 assessed: "已完成几何评估",
                 invalid_plan: "层序无效",
               } as Spec
             )[String(v)] || String(v);
+const voltageText = (min: number, max: number) => min === max ? f(min) : f(min) + "–" + f(max);
 const unitOf = (key: string) =>
   /^I_/.test(key)
     ? "A"
@@ -158,9 +184,7 @@ const modules: Module[] = [
       return [
         ["拓扑", p.topology, ""],
         ["控制方式", p.control_mode, ""],
-        ["本端输入电压", c.V_in, "V"],
-        ["输入下限", p.V_in_min, "V"],
-        ["输入上限", p.V_in_max, "V"],
+        ["输入电压", voltageText(p.V_in_min, p.V_in_max), "V"],
         ["预设效率", p.eta_guess * 100, "%"],
         ["开关频率", p.f_sw, "Hz"],
         ["反馈路", p.feedback_output, ""],
@@ -396,28 +420,38 @@ const modules: Module[] = [
     pictures: ["loop", "multi_reference", "multi_load"],
   },
   {
-    name: "BOM与降额",
+    name: "器件清单",
     rows: (c) =>
-      c.summary.component_management.rows.flatMap((r: Spec) => [
-        [
+      c.summary.component_management.rows.filter((r: Spec) => r.quantity > 0).map((r: Spec) => [
           r.ref + " " + r.role,
           [r.manufacturer, r.model, r.package].filter(Boolean).join(" / ") ||
             "资料待填",
           "",
           [r.conditions, r.note].filter(Boolean).join("；"),
-        ],
-        ...r.checks.map(
-          (k: Spec) =>
-            [
-              r.ref + " " + k.name,
-              k.value,
-              k.unit,
-              `额定 ${f(k.rating)}；允许 ${f(k.limit)}；${f(k.state)}；${k.note}`,
-            ] as Row,
-        ),
-      ]),
+      ] as Row),
     pictures: [],
   },
+  ...stressTypes.map(([kind, name]): Module => ({
+    name,
+    rows: (c) => {
+      const rows: Row[] = [];
+      for (const part of c.summary.component_management.rows) {
+        if (part.kind !== kind) continue;
+        for (const check of part.checks) {
+          if (kind === "diode" && check.metric === "spike" && check.value == null) continue;
+          rows.push([
+            part.ref + " " + stressMetric(kind, check.metric), check.value, check.unit,
+            `额定 ${f(check.rating)}，降额限值 ${f(check.limit)}，${f(check.state)}` +
+              (kind === "diode" ? "" : "。" + (check.note || "")),
+          ]);
+        }
+      }
+      if (kind === "diode" && rows.length)
+        rows.push(["反压范围", "寄生尖峰与外部反接反压待实测", ""]);
+      return rows;
+    },
+    pictures: [],
+  })),
   {
     name: "工程检查",
     rows: (c) => [
@@ -609,12 +643,47 @@ const modules: Module[] = [
     pictures: [],
   },
 ];
+export function reportCases(snapshot: Spec): Spec[] {
+  const cc: Spec[] = snapshot.cases;
+  const manual = snapshot.spec.mos_manual_events;
+  const differentGateSettings = manual && sourceFor(snapshot.spec, "Q1:transfer") === "fixed" &&
+    ["on", "off"].some(edge => ["Vgp", "Qgs"].some(key => manual.min?.[edge]?.[key] !== manual.max?.[edge]?.[key]));
+  if (cc.length === 2 && cc[0].V_in === cc[1].V_in && cc.every(c => !c.error && c.summary) && !differentGateSettings)
+    return cc.slice(0, 1);
+  return cc;
+}
 function cases(snapshot: Spec) {
-  return snapshot.cases.map((c: Spec) => ({
+  return reportCases(snapshot).map((c: Spec) => ({
     ...c,
     display: snapshot.display.find((r: Spec) => r.id === c.id),
     cross: snapshot.cross_regulation,
   }));
+}
+function caseLabel(c: Spec, count: number) {
+  return (count === 1 ? "固定输入" : c.id) + " · " + c.V_in + " V";
+}
+function keyResult(c: Spec) {
+  if (c.error || !c.summary) return ["计算未完成", null, null, null];
+  const design = c.checks || [];
+  const stress = c.summary.component_management.rows.flatMap((r: Spec) => r.checks);
+  const checks = [...design, ...stress];
+  const review = checks.filter(row => row.state === "review").length;
+  const missing = checks.filter(row => row.state === "undefined").length;
+  return [
+    review || missing ? `需复核 ${review} 项，待补数据 ${missing} 项` : "已列项目满足限值",
+    c.summary.losses.eta * 100,
+    c.summary.operating_point.V_sw_max,
+    c.display?.ripple_pp != null ? c.display.ripple_pp * 1000 : null,
+  ];
+}
+const conclusionHeaders = ["输入工况", "检查结果", "效率 / %", "主 MOS 电压 / V", "主路纹波 / mV"];
+function moduleCases(module: Module, cc: Spec[]) {
+  return ["设计需求", "器件清单", "完整输入参数"].includes(module.name)
+    ? cc.filter(c => !c.error).slice(0, 1)
+    : cc;
+}
+function modulePictures(pictures: Picture[], module: Module, c: Spec) {
+  return pictures.filter(p => p.caseId === c.id && module.pictures.includes(p.kind));
 }
 function flattenedRows(module: Module, c: Spec): Row[] {
   if (c.error) return [["工况失败", c.error, ""]];
@@ -624,9 +693,21 @@ export async function excel(snapshot: Spec, pictures: Picture[] = []) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "PCS 技术货架";
   workbook.created = new Date(snapshot.created_at);
-  workbook.subject = "辅源 Vinmin / Vinmax 设计对比";
+  workbook.subject = "辅源设计与检查";
   const cc = cases(snapshot);
+  const conclusions = workbook.addWorksheet("关键结论");
+  conclusions.columns = [25, 37, 16, 20, 21].map(width => ({ width }));
+  conclusions.addRow(conclusionHeaders);
+  for (const c of cc) conclusions.addRow([caseLabel(c, cc.length), ...keyResult(c)]);
+  conclusions.getRow(1).height = 28;
+  conclusions.getRow(1).eachCell(cell => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF17365D" } };
+  });
+  conclusions.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
   for (const module of modules) {
+    const selected = moduleCases(module, cc);
+    if (!selected.some(c => flattenedRows(module, c).length)) continue;
     const sheet = workbook.addWorksheet(module.name, {
       views: [{ state: "frozen", xSplit: 0, ySplit: 5 }],
       pageSetup: {
@@ -637,10 +718,12 @@ export async function excel(snapshot: Spec, pictures: Picture[] = []) {
         fitToHeight: 0,
       },
     });
-    sheet.columns = [30, 23, 12, 42, 4, 30, 23, 12, 42].map((width) => ({
+    const widths = selected.length === 1 ? [32, 23, 12, 48] : [30, 23, 12, 42, 4, 30, 23, 12, 42];
+    const lastColumn = widths.length;
+    sheet.columns = widths.map((width) => ({
       width,
     }));
-    sheet.mergeCells("A1:I1");
+    sheet.mergeCells(1, 1, 1, lastColumn);
     sheet.getCell("A1").value =
       (snapshot.spec.__web_project_title || "PCS 辅源设计") +
       " · " +
@@ -657,18 +740,18 @@ export async function excel(snapshot: Spec, pictures: Picture[] = []) {
       pattern: "solid",
       fgColor: { argb: "FF0D1726" },
     };
-    sheet.mergeCells("A2:I2");
+    sheet.mergeCells(2, 1, 2, lastColumn);
     sheet.getCell("A2").value =
       "TypeScript 离线计算 · " +
       VERSION +
       " · 同一套固定磁件 · " +
       snapshot.created_at;
     sheet.getCell("A2").font = { size: 10, color: { argb: "FF68788F" } };
-    cc.forEach((c: Spec, index: number) => {
+    selected.forEach((c: Spec, index: number) => {
       const column = index ? 6 : 1;
       sheet.mergeCells(3, column, 3, column + 3);
       const cell = sheet.getCell(3, column);
-      cell.value = c.id + " · Vin " + c.V_in + " V";
+      cell.value = selected.length === 1 && cc.length > 1 ? "共用设计" : caseLabel(c, cc.length);
       cell.fill = {
         type: "pattern",
         pattern: "solid",
@@ -717,9 +800,7 @@ export async function excel(snapshot: Spec, pictures: Picture[] = []) {
               Math.abs(v) < 0.001 && v !== 0 ? "0.0000E+00" : "0.0000";
         }),
       );
-      const own = pictures.filter(
-        (p) => p.caseId === c.id && module.pictures.includes(p.kind),
-      );
+      const own = modulePictures(pictures, module, c);
       let row = values.length + 9;
       for (const pic of own) {
         const id = workbook.addImage({
@@ -760,97 +841,246 @@ export async function excel(snapshot: Spec, pictures: Picture[] = []) {
   }
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }
-const paragraph = (s: string, heading = false, keepNext = false) =>
-  new Paragraph({
-    children: [
-      new TextRun({
-        text: s,
-        font: "Microsoft YaHei",
-        size: heading ? 30 : 21,
-        color: heading ? "152238" : "35465C",
-        bold: heading,
+// Match the technical document defaults used by Python's docx_layout.py.
+// Browser exports retain their PCS titles and engineering report hierarchy.
+const bodyFont = {
+  ascii: "Cambria", hAnsi: "Cambria", cs: "Cambria", eastAsia: "SimSun",
+};
+const headingFont = { ...bodyFont, eastAsia: "Microsoft YaHei" };
+const wordInk = "243547";
+const pageMargin: IPageMarginAttributes = {
+  top: "20mm", bottom: "19mm", left: "15mm", right: "15mm",
+  header: "8mm", footer: "8mm",
+};
+const wordPage = { size: { width: "210mm", height: "297mm" }, margin: pageMargin } as const;
+const wordStyles: IStylesOptions = {
+  default: {
+    document: {
+      run: { font: bodyFont, size: 22, sizeComplexScript: 22, color: "000000" },
+      paragraph: { spacing: { line: 280, after: 100 } },
+    },
+    title: {
+      run: { font: headingFont, size: 60, sizeComplexScript: 60, bold: true, color: "000000" },
+      paragraph: { spacing: { after: 240 }, keepNext: true },
+    },
+    heading1: {
+      run: { font: headingFont, size: 40, sizeComplexScript: 40, bold: true, color: "000000" },
+      paragraph: { spacing: { before: 240, after: 120 }, keepNext: true },
+    },
+    heading2: {
+      run: { font: headingFont, size: 26, sizeComplexScript: 26, bold: true, color: "000000" },
+      paragraph: { spacing: { before: 200, after: 120 }, keepNext: true },
+    },
+  },
+  paragraphStyles: [
+    {
+      id: "Caption",
+      name: "Caption",
+      basedOn: "Normal",
+      run: { font: bodyFont, size: 18, sizeComplexScript: 18, color: wordInk },
+      paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 40, after: 150 } },
+    },
+  ],
+};
+function wordSection(children: (Paragraph | Table)[]) {
+  const running = { font: bodyFont, size: 16, sizeComplexScript: 16, color: wordInk };
+  return {
+    properties: { page: wordPage },
+    headers: {
+      default: new Header({
+        children: [new Paragraph({
+          children: [new TextRun({ ...running, text: "PCS 技术货架  /  辅源设计" })],
+        })],
       }),
-    ],
-    spacing: { before: heading ? 260 : 90, after: heading ? 150 : 100 },
-    keepNext: heading || keepNext,
-    ...(heading ? { heading: HeadingLevel.HEADING_1, keepNext: true } : {}),
-  });
+    },
+    footers: {
+      default: new Footer({
+        children: [new Paragraph({
+          alignment: AlignmentType.RIGHT,
+          children: [
+            new TextRun({ ...running, text: "设计评审 · " + VERSION + "  |  " }),
+            new TextRun({ ...running, children: [PageNumber.CURRENT] }),
+          ],
+        })],
+      }),
+    },
+    children,
+  };
+}
+const paragraph = (text: string) => new Paragraph({ text });
+// The usable width of an A4 page with 15 mm side margins is about 10205 twips.
+const rightTab = 10100;
+
+class WordBook {
+  private readonly body: (Paragraph | Table)[];
+  private readonly chapters: { label: string; anchor: string }[] = [];
+  private contentsPosition = 0;
+  private sections = 0;
+  private tables = 0;
+  private figures = 0;
+  private equations = 0;
+
+  constructor(title: string, ...context: string[]) {
+    this.body = [
+      new Paragraph({ heading: HeadingLevel.TITLE, text: title }),
+      ...context.map(text => paragraph(text)),
+    ];
+  }
+
+  chapter(title: string) {
+    if (this.chapters.length === 1) this.contentsPosition = this.body.length;
+    const number = this.chapters.length + 1;
+    const label = `${String(number).padStart(2, "0")}　${title}`;
+    const anchor = `report_chapter_${number}`;
+    this.chapters.push({ label, anchor });
+    this.sections = this.tables = this.figures = this.equations = 0;
+    this.body.push(new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      keepNext: true,
+      children: [new Bookmark({ id: anchor, children: [new TextRun(label)] })],
+    }));
+  }
+
+  section(title: string) {
+    this.body.push(new Paragraph({
+      text: `${this.chapters.length}.${++this.sections}　${title}`,
+      heading: HeadingLevel.HEADING_2, keepNext: true,
+    }));
+  }
+
+  add(...lines: string[]) {
+    this.body.push(...lines.map(text => paragraph(text)));
+  }
+
+  table(title: string, headers: string[], rows: any[][]) {
+    this.body.push(
+      new Paragraph({
+        style: "Caption", alignment: AlignmentType.LEFT, keepNext: true,
+        text: `表 ${this.chapters.length}-${++this.tables}　${title}`,
+      }),
+      table(headers, rows),
+    );
+  }
+
+  figure(picture: Picture, title = picture.title, maxHeight = 650) {
+    const ratio = Math.min(615 / picture.width, maxHeight / picture.height);
+    this.body.push(new Paragraph({
+      alignment: AlignmentType.CENTER, keepNext: true,
+      children: [new ImageRun({
+        type: "png", data: picture.data,
+        altText: { name: title, title, description: title },
+        transformation: {
+          width: Math.round(picture.width * ratio),
+          height: Math.round(picture.height * ratio),
+        },
+      })],
+    }), new Paragraph({
+      style: "Caption", text: `图 ${this.chapters.length}-${++this.figures}　${title}`,
+    }));
+  }
+
+  equation(children: MathComponent[], symbols: string) {
+    this.body.push(new Paragraph({
+      children: [
+        new WordMath({ children }),
+        new TextRun({
+          children: [new Tab(), `(${this.chapters.length}-${++this.equations})`],
+          size: 18, color: wordInk,
+        }),
+      ],
+      tabStops: [{ type: TabStopType.RIGHT, position: rightTab }],
+      spacing: { after: 60 },
+      keepNext: true,
+    }), paragraph(symbols));
+  }
+
+  sectionWithContents() {
+    const entries = this.chapters.map(({ label, anchor }) =>
+      new Paragraph({
+        children: [
+          new InternalHyperlink({ anchor, children: [new TextRun({ text: label, color: wordInk })] }),
+          new TextRun({ children: [new Tab()] }),
+          new SimpleField(`PAGEREF ${anchor} \\h`),
+        ],
+        tabStops: [{ type: TabStopType.RIGHT, position: rightTab, leader: LeaderType.DOT }],
+        spacing: { after: 45 },
+      }),
+    );
+    return wordSection([
+      ...this.body.slice(0, this.contentsPosition),
+      new Paragraph({ heading: HeadingLevel.HEADING_1, text: "目录", pageBreakBefore: true, keepNext: true }),
+      ...entries,
+      ...this.body.slice(this.contentsPosition),
+    ]);
+  }
+}
+const tableBorder = { style: BorderStyle.SINGLE, size: 4, color: "D9D9D9" } as const;
+const wordStatusColor = (label: string) => {
+  if (["满足", "通过", "模型内满足", "已完成"].includes(label)) return "29633B";
+  if (["需核对", "需复核", "超限", "不满足", "失败"].includes(label)) return "A12D24";
+  if (label.startsWith("待") || ["未计算", "未定义"].includes(label)) return "8C5D16";
+  return "000000";
+};
 function table(headers: string[], rows: any[][]) {
+  const spans = headers[0] === "参数 / 检查项"
+    ? [0.26, 0.24, 0.1, 0.4]
+    : headers[1] === "SHA256"
+      ? [0.34, 0.66]
+      : headers.map(() => 1 / headers.length);
+  const widths = spans.map(share => Math.floor(10204 * share));
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: 10204, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
+    columnWidths: widths,
+    borders: {
+      top: tableBorder, bottom: tableBorder, left: tableBorder, right: tableBorder,
+      insideHorizontal: tableBorder, insideVertical: tableBorder,
+    },
     rows: [headers, ...rows].map(
       (r, i) =>
         new TableRow({
           tableHeader: i === 0,
           cantSplit: true,
-          children: r.map(
-            (v) =>
-              new TableCell({
-                shading: {
-                  fill: i === 0 ? "0D1726" : i % 2 ? "F3F6FA" : "FFFFFF",
-                },
-                margins: { top: 90, bottom: 90, left: 90, right: 90 },
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({
-                        text: f(v),
-                        font: "Microsoft YaHei",
-                        size: 19,
-                        bold: i === 0,
-                        color: i === 0 ? "FFFFFF" : "152238",
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-          ),
+          children: headers.map((_, column) => {
+            const v = column < r.length ? r[column] : "";
+            const text = f(v);
+            const color = i === 0 ? "000000" : wordStatusColor(text);
+            return new TableCell({
+              width: { size: widths[column], type: WidthType.DXA },
+              shading: { fill: i === 0 ? "E5EBF2" : "FFFFFF" },
+              margins: { top: 65, bottom: 65, left: 90, right: 90 },
+              children: [
+                new Paragraph({
+                  spacing: { after: 0 },
+                  keepNext: i === 0,
+                  children: [
+                    new TextRun({
+                      text, font: bodyFont, size: 20, sizeComplexScript: 20,
+                      bold: i === 0 || color !== "000000", color,
+                    }),
+                  ],
+                }),
+              ],
+            });
+          }),
         }),
     ),
   });
 }
 export async function word(snapshot: Spec, pictures: Picture[] = []) {
-  const children: (Paragraph | Table)[] = [
-    new Paragraph({
-      heading: HeadingLevel.TITLE,
-      children: [
-        new TextRun({
-          text: "PCS 辅源设计计算报告",
-          font: "Microsoft YaHei",
-          size: 42,
-          bold: true,
-          color: "000000",
-        }),
-      ],
-      spacing: { after: 240 },
-    }),
-    paragraph(snapshot.spec.__web_project_title || "辅源电源设计"),
-    paragraph(
-      `输入范围 ${snapshot.spec.V_in_min}–${snapshot.spec.V_in_max} V · ${snapshot.spec.topology}`,
-    ),
-    paragraph(
-      "计算来源：浏览器 TypeScript 内核 " +
-        VERSION +
-        "；未启动 Python 或本机服务。",
-    ),
-    paragraph(
-      "本报告保留迁移模型的边界与未完成检查。整流二极管反压不含寄生尖峰；效率、磁件温升与曲线外推需按实际器件条件复核。",
-    ),
-  ];
   const cc = cases(snapshot);
-  children.push(
-    table(
-      ["工况", "输入 / V", "计算效率 / %", "MOS 应力 / V", "主路纹波 / mV"],
-      cc.map((c: Spec) => [
-        c.id,
-        c.V_in,
-        c.summary.losses.eta * 100,
-        c.summary.operating_point.V_sw_max,
-        c.display.ripple_pp * 1000,
-      ]),
-    ),
+  const minVin = snapshot.spec.V_in_min;
+  const maxVin = snapshot.spec.V_in_max;
+  const book = new WordBook(
+    "PCS 辅源设计计算报告",
+    snapshot.spec.__web_project_title || "辅源电源设计",
+    `输入 ${voltageText(minVin, maxVin)} V · ${snapshot.spec.topology}`,
   );
-  children.push(paragraph("计算关系与口径", true));
+  book.chapter("关键结论");
+  book.table("输入端点设计检查", conclusionHeaders,
+    cc.map(c => [caseLabel(c, cc.length), ...keyResult(c)]));
+  book.chapter("计算关系");
+  book.add("下列公式给出共用计算关系。磁件、器件损耗和补偿的具体适用项见各设计章节。");
   const run = (s: string) => new MathRun(s),
     sub = (s: string, index: string) =>
       new MathSubScript({ children: [run(s)], subScript: [run(index)] }),
@@ -921,111 +1151,52 @@ export async function word(snapshot: Spec, pictures: Picture[] = []) {
     ],
     [sub("f", "z,RC"), run("="), fraction([run("1")], [run("2πRC")])],
   ];
-  for (const formula of equations)
-    children.push(
-      new Paragraph({
-        children: [new WordMath({ children: formula })],
-        spacing: { after: 130 },
-      }),
-    );
+  const symbolNotes = [
+    "式中，Pin,预设 为估计输入功率（W），Pout 为输出功率（W），η预设 为输入的效率估计（无量纲）。",
+    "式中，Pcond,MOS 为 MOSFET 导通损耗（W），IRMS 为该器件电流有效值（A），RDS(on) 为导通电阻（Ω）。",
+    "式中，Pcond,D 为二极管导通损耗（W），T 为开关周期（s），i(t) 为瞬时正向电流（A），Vf 为该电流下的正向压降（V）。",
+    "式中，RDCR 为绕组直流电阻（Ω），ρ 为导体电阻率（Ω·m），MLT 为平均每匝长度（m），N 为匝数，n 为等效并联铜股总数，d 为单股裸铜直径（m）。",
+    "式中，η计算 为由损耗回算的效率（无量纲），Pout 为输出功率（W），ΣPloss 为所列模型损耗之和（W）。",
+    "式中，Mij 为第 i 与第 j 个绕组间的互感（H），Li、Lj 为各自自感（H），kij 为相同端点参考方向下的耦合系数（无量纲）。",
+    "式中，ΔTtransformer 为变压器温升（K），Pcu+core 为铜损与磁芯损耗之和（W），Ri-a 为变压器至环境热阻（K/W）。",
+    "式中，Gc,type2 为二型补偿器传递函数，s 为拉普拉斯变量（s⁻¹），KP 为补偿增益系数，ωz1、ωp1 为零点和极点角频率（rad/s）。",
+    "式中，fz,RC 为一阶 RC 网络的特征频率（Hz），R 为参与构成该时间常数的电阻（Ω），C 为电容（F）。",
+  ];
+  equations.forEach((formula, index) => book.equation(formula, symbolNotes[index]));
   for (const module of modules) {
     if (["完整输入参数", "电容频带明细"].includes(module.name)) continue;
-    children.push(paragraph(module.name, true));
-    for (const c of module.name === "完整输入参数" ? cc.slice(0, 1) : cc) {
-      children.push(
-        new Paragraph({
-          text: c.id + " · Vin " + c.V_in + " V",
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 200, after: 120 },
-          keepNext: true,
-        }),
-      );
-      children.push(
-        table(
-          ["参数 / 检查项", "计算值", "单位", "说明 / 判定"],
-          flattenedRows(module, c),
-        ),
-      );
-      for (const pic of pictures.filter(
-        (p) => p.caseId === c.id && module.pictures.includes(p.kind),
-      )) {
-        children.push(paragraph(pic.title, false, true));
-        children.push(
-          new Paragraph({
-            children: [
-              new ImageRun({
-                type: "png",
-                data: pic.data,
-                transformation: {
-                  width: Math.round(
-                    Math.min(615, (740 * pic.width) / pic.height),
-                  ),
-                  height: Math.round(
-                    Math.min(740, (615 * pic.height) / pic.width),
-                  ),
-                },
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-          }),
-        );
+    const selected = moduleCases(module, cc);
+    if (!selected.some(c => flattenedRows(module, c).length)) continue;
+    book.chapter(module.name);
+    for (const c of selected) {
+      const rows = flattenedRows(module, c);
+      if (!rows.length) continue;
+      const operatingPoint = selected.length === 1 && cc.length > 1
+        ? "共用设计" : caseLabel(c, cc.length);
+      book.section(operatingPoint);
+      book.table(`${module.name} ${operatingPoint}`,
+        ["参数 / 检查项", "计算值", "单位", "说明 / 判定"], rows);
+      for (const pic of modulePictures(pictures, module, c)) {
+        const title = pic.kind === "topology" ? "共用拓扑与器件位号" : pic.title;
+        book.figure(pic, title);
       }
     }
   }
-  children.push(
-    paragraph("输入与复现", true),
-    paragraph(
-      "主要需求与器件设置见各模块；完整输入参数表见 Excel，曲线点集请随工程 JSON 留档复现。两种输入工况固定使用 Vinmin 选定的磁件；修改参数后需重新计算。",
-    ),
-    paragraph("参考源文件 SHA256（用于复现版本）"),
-    table(
-      ["参考模块", "SHA256"],
-      Object.entries(snapshot.provenance.reference_source_hashes).map(
-        ([key, value]) => [key, String(value).replace(/(.{32})/g, "$1 ")],
-      ),
+  book.chapter("输入与复现");
+  book.add("计算来源为浏览器内核 " + VERSION + "。完整输入见 Excel，器件曲线见工程 JSON。");
+  book.table(
+    "用于复现版本的源文件校验值", ["参考模块", "SHA256"],
+    Object.entries(snapshot.provenance.reference_source_hashes).map(
+      ([key, value]) => [key, String(value).replace(/(.{32})/g, "$1 ")],
     ),
   );
   const doc = new Document({
     creator: "PCS 技术货架",
     title: "辅源设计报告",
     description: "浏览器离线 TypeScript 计算",
-    styles: {
-      default: {
-        document: {
-          run: { font: "Microsoft YaHei", size: 21 },
-          paragraph: { spacing: { line: 300 } },
-        },
-      },
-    },
-    sections: [
-      {
-        properties: {
-          page: {
-            size: { width: 11906, height: 16838 },
-            margin: { top: 900, bottom: 850, left: 850, right: 850 },
-          },
-        },
-        headers: {
-          default: new Header({
-            children: [paragraph("PCS 技术货架  /  AUXILIARY POWER DESIGN")],
-          }),
-        },
-        footers: {
-          default: new Footer({
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [
-                  new TextRun("设计评审 · " + VERSION + "  |  "),
-                  new TextRun({ children: [PageNumber.CURRENT] }),
-                ],
-              }),
-            ],
-          }),
-        },
-        children,
-      },
-    ],
+    styles: wordStyles,
+    features: { updateFields: true },
+    sections: [book.sectionWithContents()],
   });
   return new Uint8Array(await (await Packer.toBlob(doc)).arrayBuffer());
 }
@@ -1041,129 +1212,72 @@ export async function overview(
   manifest: Spec,
   picture?: Picture,
 ) {
-  const children: (Paragraph | Table)[] = [
-    paragraph("PCS 技术货架 · 辅源架构与交付总览", true),
-    paragraph(project.title),
-    paragraph(
-      "浏览器 TypeScript 本地计算 · " +
-        VERSION +
-        " · 各单元报告采用相同输入端点与固定磁件口径。",
-    ),
-    table(
-      ["单元", "名称", "计算状态", "说明"],
-      manifest.units.map((r: Spec) => [
-        r.id,
-        r.name,
-        r.state === "completed" ? "已完成" : "失败",
-        r.error || "见单元目录中的 Word / Excel 与输入 JSON",
-      ]),
-    ),
-  ];
-  if (picture)
-    children.push(
-      new Paragraph({
-        children: [
-          new ImageRun({
-            type: "png",
-            data: picture.data,
-            transformation: {
-              width: Math.round(
-                picture.width *
-                  Math.min(615 / picture.width, 650 / picture.height),
-              ),
-              height: Math.round(
-                picture.height *
-                  Math.min(615 / picture.width, 650 / picture.height),
-              ),
-            },
-          }),
-        ],
-      }),
-    );
-  children.push(
-    paragraph("输入母线", true),
-    table(
-      ["编号", "名称", "输入范围 / V", "配置容量 / W"],
-      project.sources.map((s: Spec) => [
-        s.id,
-        s.name,
-        s.min + "–" + s.max,
-        s.capacity,
-      ]),
-    ),
+  const book = new WordBook("PCS 技术货架 · 辅源架构与交付总览", project.title);
+  book.chapter("关键结论");
+  book.add(`已完成 ${manifest.units.filter((r: Spec) => r.state === "completed").length}/${manifest.units.length} 个单元报告。`);
+  book.table("单元报告完成情况", ["单元", "名称", "计算状态", "说明"],
+    manifest.units.map((r: Spec) => [
+      r.id,
+      r.name,
+      r.state === "completed" ? "已完成" : "失败",
+      r.error || "见单元目录中的 Word / Excel 与输入 JSON",
+    ]),
+  );
+  book.chapter("系统架构与输入母线");
+  if (picture) book.figure(picture);
+  book.table("输入母线配置", ["编号", "名称", "输入范围 / V", "配置容量 / W"],
+    project.sources.map((s: Spec) => [
+      s.id,
+      s.name,
+      voltageText(s.min, s.max),
+      s.capacity,
+    ]),
   );
   if (project.schema_version === NETWORK_SCHEMA) {
     const p = normalizeNetwork(project),
       r = analyzeNetwork(p);
-    children.push(
-      paragraph("OR 汇流、负载与竞争供电预算", true),
-      paragraph(r.method),
-    );
+    book.chapter("OR 汇流、负载与竞争供电预算");
+    book.add(r.method);
     for (const section of networkSections(p, r, manifest)) {
-      children.push(
-        paragraph(section.title, true),
-        table(
-          section.header,
-          section.rows.slice(0, section.title === "竞争供电工况" ? 24 : 256),
-        ),
-      );
+      book.section(section.title);
+      book.table(section.title, section.header,
+        section.rows.slice(0, section.title === "竞争供电工况" ? 24 : 256));
     }
-    children.push(
-      paragraph(
-        "Word仅概览前24个竞争工况；完整工况、分配功率、导通支路与失电节点见供电网络预算.xlsx和供电网络计算.json。覆盖不完整时不可判为通过。停用节点仍保留独立设计报告。",
-      ),
+    book.add(
+      (r.coverage_complete ? "" : "部分竞争组合待检查。") +
+        "完整工况及分配功率见供电网络预算.xlsx。",
     );
   } else {
-    children.push(paragraph("辅源与供电关系", true));
+    book.chapter("辅源与供电关系");
     for (const unit of project.units) {
       const p = unit.spec,
         rr = p.outputs?.length ? p.outputs : [p];
-      children.push(
-        paragraph(unit.id + " · " + unit.name, true),
-        table(
-          ["项目", "配置"],
-          [
-            [
-              "上游",
-              (unit.source.kind === "none" ? "未连接" : unit.source.id) +
-                (unit.source.kind === "unit"
-                  ? " / OUT" + unit.source.output
-                  : ""),
-            ],
-            ["设计输入 / V", p.V_in_min + "–" + p.V_in_max],
-            ["拓扑", p.topology],
-            ["预设效率", f(p.eta_guess * 100) + " %"],
-            ...rr.map((r: Spec, i: number) => [
-              "OUT" + (i + 1),
-              f(r.V_out) + " V / " + f(r.P_out) + " W",
-            ]),
-          ],
-        ),
-      );
+      book.section(unit.id + " · " + unit.name);
+      book.table("上游与输出端口配置", ["项目", "配置"], [
+        [
+          "上游",
+          (unit.source.kind === "none" ? "未连接" : unit.source.id) +
+            (unit.source.kind === "unit"
+              ? " / OUT" + unit.source.output
+              : ""),
+        ],
+        ["设计输入 / V", voltageText(p.V_in_min, p.V_in_max)],
+        ["拓扑", p.topology],
+        ["预设效率", f(p.eta_guess * 100) + " %"],
+        ...rr.map((r: Spec, i: number) => [
+          "OUT" + (i + 1),
+          f(r.V_out) + " V / " + f(r.P_out) + " W",
+        ]),
+      ]);
     }
   }
-  children.push(
-    paragraph("复现与工程边界", true),
-    paragraph(
-      "辅源工程.json 保存连接关系和各单元输入。交付清单中失败的单元没有有效设计结论。架构预算并非整机动态、样机或安规验证；物理模型边界以单元报告为准。",
-    ),
-  );
+  book.chapter("工程文件");
+  book.add("辅源工程.json 保存连接关系与单元输入。详细结果见各单元报告。");
   const document = new Document({
     creator: "PCS 技术货架",
-    styles: {
-      default: { document: { run: { font: "Microsoft YaHei", size: 21 } } },
-    },
-    sections: [
-      {
-        properties: {
-          page: {
-            size: { width: 11906, height: 16838 },
-            margin: { top: 900, bottom: 850, left: 850, right: 850 },
-          },
-        },
-        children,
-      },
-    ],
+    styles: wordStyles,
+    features: { updateFields: true },
+    sections: [book.sectionWithContents()],
   });
   return new Uint8Array(await (await Packer.toBlob(document)).arrayBuffer());
 }
@@ -1186,10 +1300,10 @@ function networkSections(p: Spec, r: Spec, manifest: Spec) {
         kind === "load"
           ? `${n.power}W；允许${n.min}–${n.max || "不限"}V`
           : kind === "bus"
-            ? `${n.min}–${n.max}V；${n.capacity}W`
+            ? `${voltageText(n.min, n.max)} V，${n.capacity} W`
             : kind === "junction"
               ? `${n.capacity}W`
-              : `${n.spec.topology}；Vin ${n.spec.V_in_min}–${n.spec.V_in_max}V`,
+              : `${n.spec.topology}，输入 ${voltageText(n.spec.V_in_min, n.spec.V_in_max)} V`,
         n.enabled ? "启用" : "停用",
       ]),
     },
@@ -1269,7 +1383,7 @@ function networkSections(p: Spec, r: Spec, manifest: Spec) {
         u.id,
         u.name,
         u.state === "completed" ? "已完成" : "失败",
-        u.error || "各单元 Vinmin/Vinmax 详见独立报告",
+        u.error || "见单元报告",
       ]),
     },
   ];
@@ -1283,12 +1397,13 @@ export async function networkExcel(
     r = review || analyzeNetwork(p),
     book = new ExcelJS.Workbook();
   book.creator = "PCS 技术货架";
-  const info = book.addWorksheet("方法与覆盖");
+  const info = book.addWorksheet("关键结论");
   info.addRows([
     ["项目", p.title],
+    ["容量待复核", r.capacity.filter((row: Spec) => !row.ok).length],
+    ["输入接口待复核", r.interfaces.filter((row: Spec) => !row.ok).length],
+    ["工况覆盖", r.coverage_complete ? "完整" : "部分竞争组合待检查"],
     ["方法", r.method],
-    ["覆盖完整", r.coverage_complete ? "是" : "否，不能判为通过"],
-    ["计算边界", "固定Vf稳态；非动态切换或实际均流；负载电压0为不限定。"],
   ]);
   info.getColumn(1).width = 22;
   info.getColumn(2).width = 100;

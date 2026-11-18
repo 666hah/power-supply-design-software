@@ -35,6 +35,7 @@ export interface Preview {
   targets: CurveTarget[];
 }
 export interface Bootstrap {
+  cot_engineering?: Spec;
   native?: boolean;
   parasitics: Spec;
   spice_options: {key:string;default:number;minimum:number;maximum:number;label:string;unit:string;group:string;topologies:string[];choices?:Record<string,string>}[];
@@ -44,6 +45,7 @@ export interface Bootstrap {
   spice_qr_logic: Spec;
   spice_acf_logic: Spec;
   spice_niso_logic: Spec;
+  spice_cot_logic?: Spec;
   token: string;
   version: string;
   spec: Spec;
@@ -74,6 +76,13 @@ export interface Summary {
   error?: string;
   topology: string;
   operating_point: Record<string, any>;
+  cot?: {
+    phases: number;
+    ton_s: number;
+    toff_s: number;
+    total_output_current_ripple_A: number;
+    scope: string;
+  };
   losses: Record<string, number>;
   magnetics: Spec;
   checks: Check[];
@@ -91,6 +100,28 @@ export interface Case {
   error: string | null;
   loop_error: string | null;
 }
+export interface LoadStepMetrics {
+  min_V: number;
+  max_V: number;
+  droop_V: number;
+  overshoot_V: number;
+  final_voltage_V: number;
+  settling_s: number | null;
+  settling_band_V: number;
+}
+export type LoadStep =
+  | { available: false; reason: string }
+  | {
+      available: true;
+      feedback_output: number;
+      output_voltage_V: number;
+      current_low_A: number;
+      current_high_A: number;
+      rise: LoadStepMetrics;
+      fall: LoadStepMetrics;
+      notes: string | null;
+      warning: string | null;
+    };
 export interface Snapshot {
   schema: string;
   snapshot_id: string;

@@ -145,7 +145,7 @@ class ParameterReorganisationChecks(unittest.TestCase):
         self.assertAlmostEqual(self.app.get_param('eta_guess'), .915)
 
     def test_switch_display_unit_does_not_change_physical_value(self):
-        for key in ('L', 'Rds_on', 'f_sw', 'C_out', 'MLT'):
+        for key in ('L', 'Rds_on', 'f_sw', 'C_out'):
             with self.subTest(key=key):
                 physical = self.app.get_param(key)
                 choices = self.app._param_unit_choices(key)
@@ -162,7 +162,7 @@ class ParameterReorganisationChecks(unittest.TestCase):
                 self.assertAlmostEqual(self.app.get_param(key), physical, places=12)
 
     def test_auto_switch_round_trip_preserves_manual_values_and_other_inputs(self):
-        manual = {'Np': 13., 'Ns': 26., 'd_wire_p': .00045, 'd_wire_s': .0006, 'MLT': .07}
+        manual = {'Np': 13., 'Ns': 26., 'd_wire_p': .00045, 'd_wire_s': .0006}
         for key, value in manual.items():
             with self.subTest(key=key):
                 self.app.set_param(key, value)

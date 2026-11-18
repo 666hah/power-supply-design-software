@@ -219,9 +219,12 @@ def execute(run, action, options, path, *, cancelled=lambda: False, progress=Non
 
 def _tune(p, result, opts, path):
     import numpy as np
+    from cot_settings import active as cot_active
     from plants import build_loop_models, make_compensator, resolve_controller_type
     from loop_tuning import kfactor_tune, analyze_loop
     op = result['op']
+    if cot_active(p):
+        return _tune_cot(p, op, opts, path)
     psr = p.get('feedback_mode') == 'PSR-MP6005'
     (plant, _, _), _device = build_loop_models(p, op)
     metadata = getattr(plant, '_loop_metadata', {})
@@ -258,7 +261,7 @@ def _tune(p, result, opts, path):
         candidate = make_compensator(tuned).get_transfer_function()
         models = (plant, candidate, plant*candidate)
     loop = analyze_loop(tuned, models, op)
-    achieved = {k: loop.get(k) for k in ('fc', 'pm', 'min_pm', 'gm_db', 'gm_infinite', 'all_crosses', 'closed_loop_stable')}
+    achieved = _tuning_margins(loop)
     # Coupled state-space stability is available from the shared scan. For all
     # other models check the actual closed-loop poles rather than PM alone.
     import control as ct
@@ -267,6 +270,40 @@ def _tune(p, result, opts, path):
     feasible = stable and loop['fc'] is not None and loop['min_pm'] is not None and loop['min_pm'] >= pm-1
     if not feasible:
         notes.append('候选未通过闭环极点或全部穿越裕度校验，未提出写回参数。')
+    _draw_tuning_candidate(path, loop, fc)
+    return dict(feasible=bool(feasible), design=design, achieved=achieved, spec_updates=updates if feasible else {}, notes=notes)
+
+
+def _tune_cot(p, op, opts, path):
+    from cot_loop import tune
+    from plants import build_loop_models
+    from loop_tuning import analyze_loop
+
+    fc, pm = opts['fc'], opts['pm']
+    design = dict(comp_type='cot-pi')
+    try:
+        design.update(tune(p, op, fc, pm))
+    except ValueError as exc:
+        return dict(feasible=False, design=design, achieved=None, spec_updates={}, notes=[str(exc)])
+    updates = {key: design[key] for key in ('cot_kp_hz', 'cot_ki_hz_per_s')}
+    updates.update(fc_target=fc, pm_target=pm)
+    tuned = dict(p, **updates)
+    models, _ = build_loop_models(tuned, op)
+    loop = analyze_loop(tuned, models, op)
+    _draw_tuning_candidate(path, loop, fc)
+    return dict(feasible=True, design=design, achieved=_tuning_margins(loop), spec_updates=updates,
+                notes=['COT 电压外环 PI 已按所选工况回代校验。'])
+
+
+def _tuning_margins(loop):
+    return {key: loop.get(key) for key in ('fc', 'pm', 'min_pm', 'gm_db', 'gm_infinite',
+                                          'gm_scan_limited', 'gm_band_limited',
+                                          'all_crosses', 'closed_loop_stable')}
+
+
+def _draw_tuning_candidate(path, loop, fc):
+    import numpy as np
+
     def draw(fig):
         axes = fig.subplots(2, 1)
         axes[0].semilogx(loop['f'], 20*np.log10(np.maximum(abs(loop['gains'][2]), 1e-300)))
@@ -276,11 +313,13 @@ def _tune(p, result, opts, path):
             ax.axvline(fc, color='#27885e', ls=':'); ax.grid(alpha=.2); ax.set_xlabel('频率 / Hz')
         axes[0].set(ylabel='环路幅值 / dB', title='候选补偿 · 回代校验（未应用）'); axes[1].set_ylabel('相位 / °')
     _figure(path, draw)
-    return dict(feasible=bool(feasible), design=design, achieved=achieved, spec_updates=updates if feasible else {}, notes=notes)
 
 
 def _compensate(p, result, opts, path):
     from compensation_report import compensation_snapshot, NETWORKS
+    from cot_settings import active as cot_active
+    if cot_active(p):
+        raise ValueError('COT 使用电压外环 PI，请在环路页配置或整定 Kp、Ki')
     if p.get('feedback_mode') == 'PSR-MP6005':
         raise ValueError('MP6005 使用物理 COMP 网络；SSR 四种参考网络不适用，请使用 PSR 自动整定或输入 Rcomp/Ccomp/Cpole')
     key, direction = opts.get('key', 'opamp3'), opts.get('direction', 'fwd')

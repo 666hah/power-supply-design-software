@@ -32,24 +32,28 @@ class GeometryDcrChecks(unittest.TestCase):
         before = copy.deepcopy(p)
         model = resolve_winding_model(p)
         hw = model['transformer_hardware']
-        expected = [p['rho'] * p['MLT'] * hw['Np'] /
+        expected = [p['rho'] * hw['copper_length_m'] /
                     (hw['n_strand_p'] * math.pi * hw['d_wire_p'] ** 2 / 4)]
-        expected += [p['rho'] * p['MLT'] * w['Ns'] /
+        expected += [p['rho'] * w['copper_length_m'] /
                      (w['n_strand_s'] * math.pi * w['d_wire_s'] ** 2 / 4)
                      for w in hw['windings']]
         np.testing.assert_allclose(model['R'], expected, rtol=1e-13)
         self.assertEqual(model['dcr_source'], 'geometry')
         self.assertEqual(p, before)
 
-    def test_mlt_diameter_and_strands_change_dcr_by_their_geometry(self):
+    def test_legacy_mlt_is_ignored_and_wire_dimensions_change_dcr(self):
         p = parameters()
-        reference = resolve_winding_model(p)['R']
+        reference = resolve_winding_model(p)
+        old = reference['transformer_hardware']
         q = copy.deepcopy(p); q['MLT'] *= 2
-        np.testing.assert_allclose(resolve_winding_model(q)['R'], 2 * reference)
+        np.testing.assert_array_equal(resolve_winding_model(q)['R'], reference['R'])
         q = copy.deepcopy(p); q['d_wire_p'] *= 2
-        self.assertAlmostEqual(resolve_winding_model(q)['R'][0], reference[0] / 4)
+        new = resolve_winding_model(q)['transformer_hardware']
+        self.assertAlmostEqual(new['R_dc_p'] / new['copper_length_m'], old['R_dc_p'] / (4 * old['copper_length_m']))
         q = copy.deepcopy(p); q['outputs'][1]['n_strand_s'] *= 2
-        self.assertAlmostEqual(resolve_winding_model(q)['R'][2], reference[2] / 2)
+        before = old['windings'][1]
+        after = resolve_winding_model(q)['transformer_hardware']['windings'][1]
+        self.assertAlmostEqual(after['R_dc'] / after['copper_length_m'], before['R_dc'] / (2 * before['copper_length_m']))
 
     def test_legacy_dcr_is_inactive_including_invalid_saved_entries(self):
         p = parameters()
@@ -58,12 +62,13 @@ class GeometryDcrChecks(unittest.TestCase):
             q = copy.deepcopy(p); q['coupling_config']['dcr'] = old
             np.testing.assert_array_equal(resolve_winding_model(q)['R'], reference)
 
-    def test_core_default_mlt_is_used_when_input_zero(self):
+    def test_missing_user_layout_uses_the_standard_core_geometry(self):
         p = parameters(); p['MLT'] = 0
-        import magnetics
         model = resolve_winding_model(p)
         hw = model['transformer_hardware']
-        self.assertEqual(hw['MLT'], magnetics.CORE_DB[hw['core']]['MLT'])
+        self.assertEqual(hw['winding_lengths']['method'], 'core_geometry')
+        self.assertEqual(hw['MLT'], hw['winding_lengths']['windings']['P']['mlt_m'])
+        self.assertEqual(len({w['MLT'] for w in hw['windings']}), 3)
 
     def test_fixed_hardware_geometry_is_not_resized_at_another_load(self):
         p = parameters()
@@ -94,6 +99,43 @@ class GeometryDcrChecks(unittest.TestCase):
                     'n_strand_p','n_strand_s','R_dc_p','R_dc_s'):
             self.assertEqual(fixed[key],original[key],key)
         self.assertEqual(fixed['windings'][0]['R_dc'],original['windings'][0]['R_dc'])
+
+    def test_qr_bobbin_radius_changes_geometry_once_for_both_endpoints(self):
+        import json
+        from design_engine.service import calculate
+        root = Path(__file__).resolve().parents[1]
+        p = json.loads((root/'examples/90W_QR_L6565_252_442V_REFERENCE.json').read_text(encoding='utf-8'))
+
+        def run(spec):
+            cases = calculate(spec, analysis='endpoints', include_loop=False,
+                              include_cross_regulation=False).runtime_bundle()['cases']
+            self.assertEqual(len(cases), 2)
+            self.assertTrue(all(case['error'] is None for case in cases), [case['error'] for case in cases])
+            records = [case['result']['mag']['transformer'] for case in cases]
+            self.assertEqual(records[0]['winding_lengths'], records[1]['winding_lengths'])
+            return records[0]
+
+        original = run(p)
+        changed = copy.deepcopy(p)
+        changed['winding_config']['model_3d']['frame']['r0_m_if_circular'] += .00025
+        enlarged = run(changed)
+        self.assertEqual(original['winding_lengths']['method'], 'winding_geometry')
+        self.assertGreater(enlarged['MLT'], original['MLT'])
+        self.assertGreater(enlarged['R_dc_p'], original['R_dc_p'])
+        self.assertTrue(all(after['R_dc'] > before['R_dc']
+                        for before, after in zip(original['windings'], enlarged['windings'])))
+
+    def test_psr_aux_winding_has_separate_copper_length(self):
+        import json
+        from design_engine.specification import load_spec
+        root = Path(__file__).resolve().parents[1]
+        p = load_spec(json.loads((root/'examples/MP6005_PSR_FLYBACK.json').read_text(encoding='utf-8')))
+        item = compute_design(p)['mag']['transformer']
+        aux = item['auxiliary']
+        length = item['winding_lengths']['windings']['AUX']
+        self.assertEqual(length['turns'], aux['Na'])
+        self.assertEqual(length['mlt_m'], aux['MLT'])
+        self.assertAlmostEqual(aux['R_dc'], p['rho']*length['length_m']/(math.pi*aux['d_wire']**2/4))
 
 
 class IdealGeometryChecks(unittest.TestCase):

@@ -2737,26 +2737,118 @@ a {
 .spice-settings label { display:grid; gap:6px; }
 .spice-settings input,.spice-settings select { width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:8px; font:inherit; background:white; }
 /* Controller map shares semantic data with the desktop Canvas. */
-.spice-layout { display:grid;grid-template-columns:minmax(320px,1fr) minmax(410px,1fr);gap:24px;align-items:start; }
-.spice-layout .spice-settings { grid-template-columns:1fr; }
-.controller-logic { position:sticky;top:16px;min-width:0;padding:18px;background:#f4f8ff;border:1px solid #c9d9ed;border-radius:12px; }
-.controller-logic h4 { margin:0 0 12px;color:#1d3554; }
-.controller-logic .logic-description { font-size:15px;line-height:1.7; }
-.controller-logic .logic-description strong { color:#135bb0; }
-.controller-logic .logic-description p { margin:6px 0;color:#334155; }
-.controller-logic .logic-description .logic-state { color:#9a5b00; }
-.controller-logic .logic-caption { font-size:13px;line-height:1.6;margin:10px 0; }
-.logic-scroll { max-height:65vh;overflow:auto;border-top:1px solid #dbe6f3; }
-.logic-scroll svg { display:block;width:100%;min-width:390px; }
-.logic-node { cursor:pointer; }
-.logic-node:focus-visible { outline:none; }
-.logic-node:focus-visible rect { stroke:#0d4c98;stroke-width:3; }
-.logic-node-title,.logic-chip-title { font:bold 17px 'Microsoft YaHei UI',sans-serif;fill:#23364d; }
-.logic-node-body { font:14px 'Microsoft YaHei UI',sans-serif;fill:#23364d; }
-.logic-node-value { font:14px 'Microsoft YaHei UI',sans-serif;fill:#1763bb; }
-.controller-logic>a { display:block;font-size:13px;margin-top:10px;line-height:1.5; }
-@media(max-width:1350px) { .spice-layout { grid-template-columns:1fr; }.controller-logic { position:static; }.logic-scroll svg { max-width:760px;margin:auto; } }
-.controller-logic { top:16px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden; }
-.logic-description,.logic-caption,.controller-logic>h4,.controller-logic>a { flex-shrink:0; }
-.controller-logic .logic-scroll { flex:1;min-height:160px; }
-@media(max-width:1350px) { .controller-logic { max-height:none; }.controller-logic .logic-scroll { max-height:65vh; } }
+.spice-card { container-type: inline-size; }
+.spice-layout {
+  display: grid;
+  grid-template-columns: clamp(248px, 32cqi, 344px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.spice-layout > div { min-width: 0; }
+.spice-layout .spice-settings {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 12px 0 20px;
+}
+.spice-layout .spice-settings label {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+}
+.spice-layout .spice-settings label:has(select) {
+  grid-template-columns: 1fr;
+}
+.spice-layout .spice-settings :is(input, select) {
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.spice-layout .spice-settings select { max-width: 255px; }
+.controller-logic {
+  position: sticky;
+  top: 12px;
+  min-width: 0;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #cdd8e3;
+  border-radius: 8px;
+}
+.logic-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 9px;
+}
+.controller-logic h4 { margin: 0; color: #23364d; }
+.logic-zoom { display: flex; gap: 4px; }
+.logic-zoom button {
+  min-width: 32px;
+  height: 30px;
+  padding: 0 7px;
+  background: #fff;
+  color: #284768;
+  border: 1px solid #cdd8e3;
+  border-radius: 4px;
+}
+.logic-zoom button:hover:not(:disabled) { background: #f1f6fb; }
+.logic-zoom button:disabled { color: #64748b; cursor: default; }
+.logic-scroll {
+  max-height: min(64vh, 730px);
+  overflow: auto;
+  border: 1px solid #dde5ed;
+  background: #fcfdff;
+  border-radius: 4px;
+}
+.logic-scroll svg { display: block; height: auto; }
+.logic-boundary { fill: #fff; stroke: #8293a3; stroke-width: 1.4; stroke-dasharray: 6 4; }
+.logic-wire { fill: none; stroke: #344956; stroke-width: 1.6; stroke-linejoin: round; }
+.logic-wire-external { stroke-dasharray: 5 3; }
+.logic-wire-protection { stroke: #52677e; }
+.logic-junction { fill: #344956; }
+.logic-shape { fill: #fff; stroke: #344956; stroke-width: 1.6; }
+.logic-selectable { cursor: pointer; }
+.logic-selectable:focus-visible { outline: none; }
+.logic-selected .logic-shape, .logic-selectable:focus-visible .logic-shape {
+  fill: #e5f2ff;
+  stroke: #1467b8;
+  stroke-width: 2.5;
+}
+.logic-selected text, .logic-selectable:focus-visible text { fill: #1058a1; }
+.logic-chip-title, .logic-node-title {
+  font: 600 17px 'Microsoft YaHei UI', sans-serif;
+  fill: #23364d;
+}
+.logic-symbol-name, .logic-pin {
+  font: 600 16px 'Microsoft YaHei UI', sans-serif;
+  fill: #26394b;
+  dominant-baseline: central;
+}
+.logic-node-body, .logic-node-value, .logic-signal {
+  font: 14px 'Microsoft YaHei UI', sans-serif;
+  fill: #344956;
+}
+.logic-node-value { fill: #1467b8; }
+.logic-signal {
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.logic-symbol-pin { stroke: transparent; }
+.logic-note { pointer-events: auto; text-decoration: underline; }
+.logic-description { margin-top: 10px; font-size: 14px; line-height: 1.5; }
+.logic-description strong { color: #135bb0; }
+.controller-logic .logic-description p { margin: 4px 0; color: #334155; line-height: inherit; }
+.controller-logic .logic-description .logic-state { color: #855006; }
+.controller-logic .logic-caption { font-size: 13px; line-height: 1.4; margin: 10px 0 4px; }
+.controller-logic > a { font-size: 13px; line-height: 1.4; }
+@container (max-width: 730px) {
+  .spice-layout { grid-template-columns: minmax(0, 1fr); }
+  .controller-logic { position: static; grid-row: 1; }
+  .spice-layout .spice-settings { max-width: 490px; }
+  .spice-layout .spice-settings label:has(select) { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+}

@@ -2,7 +2,7 @@
 import math
 
 STATE_LABELS = {'pass': '满足', 'review': '需复核', 'undefined': '未计算',
-                'na': '不适用'}
+                'na': '不适用', 'reference': '初选参考'}
 
 
 def check_catalog(p, res, loop=None, loop_error=None):
@@ -21,18 +21,80 @@ def check_catalog(p, res, loop=None, loop_error=None):
                       '<': lambda: actual < limit, '>': lambda: actual > limit}[comparison]()
                 state = 'pass' if ok else 'review'
         margin = (limit-actual if comparison in ('<=', '<') else actual-limit) if (
-            isinstance(actual, (int, float)) and limit is not None) else None
+            state not in ('reference', 'na') and isinstance(actual, (int, float)) and limit is not None) else None
         checks.append(dict(id=cid, name=name, value=actual, limit=limit,
                            comparison=comparison, unit=unit, margin=margin,
                            pass_=state == 'pass', state=state, note=note))
 
-    ccm = op['mode'] == 'CCM'
-    l_note = ('按 40% 原边电流纹波初选再乘 1.5 倍裕量，不是 CCM 临界值；DCM 反激不按此项判不合格。'
-              if op['topology'] == 'FLYBACK' else
-              'CCM 边界含 1.5 倍建议裕量；工作模式由实际谷值电流判断。')
-    add('L_min', '电感量与设计初选建议', op['L'], op.get('L_min', 0), '>=', 'H',
-        state='na' if op.get('L_min', 0) <= 0 or (op['topology'] == 'FLYBACK' and not ccm) else None,
-        note=l_note)
+    cot = op.get('cot')
+    if cot:
+        add('L_min', '每相电感与零谷值临界值', op['L'], op['L_min'], '参考', 'H',
+            state='reference', note='同步强制开关可出现负谷值。')
+        add('cot_phase_valley', '每相电感电流谷值', op['I_L_min'], 0., '>=', 'A',
+            note='负谷值提示回流。轻载减相及二极管模拟模式需单独核对。')
+        if cot['min_off_s'] > 0:
+            add('cot_min_off', '每相关断时间', cot['toff_s'], cot['min_off_s'], '>=', 's')
+        eng=cot.get('engineering') or {}; cfg=eng.get('configuration') or {}
+        if eng:
+            add('cot_imbalance','最大相均流偏差',eng['phase_imbalance_pct'],cfg['phase_imbalance_limit_pct'],unit='%',
+                note='以全相平均电流为基准，含每相导通压降、定时、采样失配及有界均流修正。')
+            add('cot_trim','均流调节未触及修正限幅',int(eng['trim_saturated']),0.,unit='',
+                note='达到限幅后，继续增大均流增益不能消除该相偏差。')
+            dyn=eng['dynamic']
+            if dyn['enabled']:
+                for key,name,limit in (('droop','负载增加电压跌落','droop_limit_V'),('overshoot','掉载电压上冲','overshoot_limit_V')):
+                    add('cot_dynamic_'+key,name,dyn[key+'_bound_V'],dyn[limit] or None,unit='V',
+                        state=None if dyn[limit]>0 else 'undefined',note=dyn['note'])
+                response=dyn.get('closed_loop') or {}
+                if response.get('available'):
+                    excursion=max(response['droop_V'],response['overshoot_V'])
+                    for key,title in (('droop','加负载平均闭环最大偏差'),('overshoot','掉载平均闭环最大偏差')):
+                        limit=dyn[key+'_limit_V']
+                        add('cot_closed_loop_'+key,title,excursion,limit or None,unit='V',
+                            state=None if limit>0 else 'undefined',note=response['note'])
+                elif response:
+                    add('cot_closed_loop_transient','平均闭环负载响应',None,state='undefined',note=response.get('reason','不可用'))
+            else:
+                add('cot_dynamic_configuration','输出电容动态约束',None,state='undefined',
+                    note='填写负载阶跃、响应延迟、允许跌落及上冲；稳态交错抵消不构成动态容量通过依据。')
+            for row in eng['protection']:
+                add(f'cot_phase_{row["id"]}_ocp',f'第 {row["id"]} 相采样峰值与限流阈值',row['sampled_peak_A'],
+                    row['limit_A'],unit='A',state=None if row['limit_A'] else 'undefined',
+                    note='阈值在采样电流口径；保护延迟后的峰值另与电感饱和能力核对。')
+                saturation=p.get('inductor_saturation_current',0.)
+                if row['delayed_trip_peak_A'] is not None and saturation>0:
+                    add(f'cot_phase_{row["id"]}_trip_peak',f'第 {row["id"]} 相延迟限流峰值与 Isat',
+                        row['delayed_trip_peak_A'],saturation,unit='A')
+            for row in cot['phase_data']:
+                if p.get('inductor_rated_current',0)>0:
+                    add(f'cot_phase_{row["id"]}_rms',f'第 {row["id"]} 相电感 RMS',row['current_rms_A'],p['inductor_rated_current'],unit='A')
+                if p.get('inductor_saturation_current',0)>0:
+                    add(f'cot_phase_{row["id"]}_peak',f'第 {row["id"]} 相电感峰值',max(abs(row['current_valley_A']),abs(row['current_peak_A'])),p['inductor_saturation_current'],unit='A')
+            if cfg['light_load']=='diode_emulation' and cot['reverse_current']:
+                add('cot_light_load','二极管模拟零电流区',None,state='undefined',
+                    note='连续导通计算已越过零电流；此工况使用开关模型核对，当前 FCCM 波形不能作为二极管模拟结果。')
+            if cfg['uvlo_on_V']:
+                add('cot_uvlo','输入满足启动欠压阈值',op['V_in'],cfg['uvlo_on_V'],'>=','V')
+            if cfg['ovp_V']:
+                add('cot_ovp','输出低于过压阈值',cot['output_cap_voltage_V'],cfg['ovp_V'],'<','V')
+            if cfg['dead_time_s']:
+                shortest=min(min(r['ton_s'],r['toff_s']) for r in cot['phase_data'])
+                add('cot_deadtime','死区短于最短导通或关断窗口',cfg['dead_time_s'],shortest,'<','s',
+                    note='死区损耗一阶估算；时序与换流仍在开关模型验证。')
+            if cfg['source_inductance_H'] or cfg['source_resistance_ohm']:
+                add('cot_input_network','输入阻抗与滤波互动',None,state='review',
+                    note='源电阻直流压降与损耗已计入；当前平均电压环按刚性母线，输入 R/L/C 动态在开关 FRA 和阶跃中核对。')
+    elif op['topology'] == 'FLYBACK':
+        add('L_min', '励磁电感 Lm 初选参考', op['L'], op.get('L_min'), '参考', 'H',
+            state='reference' if op['mode'] == 'CCM' else 'na',
+            note='CCM 初选采用 40% 原边电流纹波和 1.5 倍系数。工作模式按原边谷值判定，选型核对峰值电流、磁密、气隙及温升。')
+    elif op['topology'] == 'QR-FLYBACK':
+        add('L_min', '励磁电感 Lm', op['L'], unit='H', state='na',
+            note='按退磁、谷底延迟和实际工作频率检查。')
+    else:
+        add('L_min', '电感量与设计初选建议', op['L'], op.get('L_min', 0), '>=', 'H',
+            state='na' if op.get('L_min', 0) <= 0 else None,
+            note='初选值为 CCM 临界电感的 1.5 倍。工作模式按实际谷值电流判定。')
     from capacitor_banks import bank,total
     ctot = total(p)
     target = p['ripple_target'] * op['V_out']
@@ -41,7 +103,8 @@ def check_catalog(p, res, loop=None, loop_error=None):
     # swing (not the diode peak). Parallel screening neglects frequency/ESL.
     rs=[c['ESR'] for c in bank(p)]
     r=0. if 0 in rs else 1/sum(1/x for x in rs)
-    di = op['dI_L'] if op['topology'] in ('BUCK', 'ACF-FORWARD') else op['I_d_pk']
+    di = (cot['total_output_current_ripple_A'] if cot else op['dI_L']
+          if op['topology'] in ('BUCK', 'ACF-FORWARD') else op['I_d_pk'])
     add('ESR_ripple', 'ESR 纹波初筛', di*r, target, unit='V',
         note='低频并联 ESR 初筛；最终以复阻抗分流后的输出纹波检查为准。')
     add('ripple', '低频输出纹波', wf['ripple_pp'], target, unit='V',
@@ -105,7 +168,8 @@ def check_catalog(p, res, loop=None, loop_error=None):
                  '没有有限相位穿越，不表示无限硬件稳定裕量。')
     if loop and loop.get('model'):
         model = loop['model']
-        add('loop_model', '多路环路模型适用性', None, state='review', note=model['assumptions'])
+        model_label = 'COT 电压外环模型适用性' if model.get('kind') == 'cot-cadence-pi' else '多路环路模型适用性'
+        add('loop_model', model_label, None, state='review', note=model['assumptions'])
         add('loop_closed_poles', '近似闭环极点实部最大值', loop['closed_loop_max_pole_real'], 0, '<', 'rad/s',
             note='近似模型的极点检查，不替代所有角点、控制器与样机 FRA 验证。')
         if model.get('experimental') and 'derivative_error' in model:
@@ -150,6 +214,11 @@ def check_catalog(p, res, loop=None, loop_error=None):
         if dev.get('ok'):
             add(f'OUT{i}_L_B',f'OUT{i} 输出电感峰值磁密',dev['B_pk'],p['Bsat'],'<','T')
             add(f'OUT{i}_L_T',f'OUT{i} 输出电感温升',dev['dT'],p.get('temp_rise_limit',40),unit='K')
+    for dev in res.get('mag',{}).get('phase_inductors',[]):
+        if dev.get('ok') and dev.get('design_enabled') is not False:
+            i=dev['id']
+            add(f'cot_phase_{i}_B',f'第 {i} 相电感峰值磁密',dev['B_pk'],p['Bsat'],'<','T')
+            add(f'cot_phase_{i}_T',f'第 {i} 相电感温升',dev['dT'],p.get('temp_rise_limit',40),unit='K')
     psr = res.get('psr')
     if psr:
         add('psr_vin_low','MP6005 输入下限',op['V_in'],8.,'>=','V')

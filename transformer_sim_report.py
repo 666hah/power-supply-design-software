@@ -16,6 +16,18 @@ def _table(headers, rows):
     return f'<div class="table"><table><thead><tr>{heading}</tr></thead><tbody>{data}</tbody></table></div>'
 
 
+def distinct_endpoint_metrics(rows, *, comparison=()):
+    def matching_pair(values):
+        if len(values) != 2 or {row.get('case') for row in values} != {'Vinmin', 'Vinmax'}:
+            return False
+        left, right = ({key: value for key, value in row.items() if key != 'case'} for row in values)
+        return left.get('vin_V') is not None and left == right
+
+    if matching_pair(rows) and (not comparison or matching_pair(comparison)):
+        return [dict(rows[0], case='固定输入')]
+    return rows
+
+
 def write_comparison(path, record):
     f = record['field']
     labels = f['port_order']
@@ -31,7 +43,14 @@ def write_comparison(path, record):
         report_url = field_report.as_uri()
     bobbin = settings['bobbin']
     status = '已按场解参数复算' if record['after'] else '场解完成 · 参数待复核'
+    target_delta = f'{100 * (lp / target - 1):+.2f}%' if target else '待补目标'
     parts = [f'<h1>变压器仿真与设计复算</h1><p class="status">{status}</p>',
+             _table(('设计电感 / µH', '场解原边开路自感 / µH', '相对目标偏差', '其余端口短路时原边电感 / µH'), [
+                 (_number(target, 1e6), _number(lp, 1e6), target_delta, _number(f['primary_short_H'], 1e6))]),
+             _table(('验证项目', '本次状态'), [
+                 (name, '有验证记录' if record['validation'].get(key) else '待验证')
+                 for key, name in [('mesh_converged', '网格收敛'), ('air_domain_converged', '空气域收敛'),
+                                   ('measurement_validated', '样机实测')]]),
              f'<p>{escape(record["topology"])} · {escape(source["name"])} · '
              f'<a href="{report_url}">打开完整磁场报告与绕组剖面</a></p>',
              '<h2>场解的工作条件</h2>',
@@ -47,10 +66,7 @@ def write_comparison(path, record):
                   '磁静态提取，电源开关频率见下表'),
                  ('网格 / 空气域半径', f'{settings["solver"]["mesh_profile"]} / '
                   f'{settings["solver"]["air_radius_m"]*1000:g} mm', '精度按独立收敛与实测记录判断')]),
-             '<h2>原边电感与端口耦合</h2>',
-             _table(('设计目标', '场解原边开路自感', '相对目标偏差', '其余端口理想短路时的原边电感'), [
-                 (_number(target, 1e6)+' µH', _number(lp, 1e6)+' µH',
-                  f'{100*(lp / target-1):+.2f}%', _number(f['primary_short_H'], 1e6)+' µH')]),
+             '<h2>端口电感与耦合</h2>',
              '<h3>自感与互感 / µH</h3>',
              _table(['端口'] + labels, [[name] + [_number(v, 1e6) for v in row]
                                        for name, row in zip(labels, f['L_ports_H'])]),
@@ -65,20 +81,21 @@ def write_comparison(path, record):
                ('switch_peak_A', 'MOS 峰值电流 / A', 1), ('switch_stress_V', '设计 MOS 电压应力 / V', 1),
                ('primary_short_H', '功率级使用的原边漏感 / µH', 1e6),
                ('clamp_loss_W', 'RCD 损耗估算 / W', 1), ('efficiency', '设计效率 / %', 100)]
-    parts.append('<h2>同一电源的输入端点</h2><p>两列均由电源计算器求得。复算列使用场解映射后的磁件参数。</p>')
-    for i, before in enumerate(record['before']):
-        after = record['after'][i] if record['after'] else {}
+    after_cases = record.get('after') or []
+    parts.append('<h2>电路参数复算</h2>' +
+                 ('<p>复算采用场解映射后的磁件参数。</p>' if after_cases else
+                  '<p>参数待复核。下表列出原设计，原因见适用范围与追溯。</p>'))
+    for i, before in enumerate(distinct_endpoint_metrics(record['before'], comparison=after_cases)):
+        after = after_cases[i] if i < len(after_cases) else {}
         parts.append(f'<h3>{escape(before["case"])} · {before["vin_V"]:g} V</h3>')
-        parts.append(_table(('指标', '原设计', '场解参数复算'), [
-            (title, _number(before.get(key), factor), _number(after.get(key), factor))
-            for key, title, factor in metrics if before.get(key) is not None or after.get(key) is not None]))
+        columns = ('指标', '原设计', '场解参数复算') if after_cases else ('指标', '原设计')
+        rows = [(title, _number(before.get(key), factor)) +
+                ((_number(after.get(key), factor),) if after_cases else ())
+                for key, title, factor in metrics if before.get(key) is not None or after.get(key) is not None]
+        parts.append(_table(columns, rows))
     parts.append('<h2>适用范围与追溯</h2><ul>')
     parts.extend('<li>' + escape(note) + '</li>' for note in record['limits'])
     parts.append('</ul>')
-    parts.append(_table(('验证', '本次状态'), [
-        (name, '有验证记录' if record['validation'][key] else '待验证')
-        for key, name in [('mesh_converged', '网格收敛'), ('air_domain_converged', '空气域收敛'),
-                          ('measurement_validated', '样机实测')]]))
     parts.append(f'<p>求解工具 {escape(str(record["solver_version"]))}<br>源几何 SHA-256 · '
                  f'{escape(record["geometry_sha256"])}<br>场解结果 SHA-256 · {escape(record["field_result_sha256"])}</p>')
     css = """

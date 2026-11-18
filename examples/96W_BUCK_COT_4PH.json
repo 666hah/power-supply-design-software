@@ -1,0 +1,448 @@
+{
+  "topology": "BUCK",
+  "control_mode": "Constant On-Time",
+  "buck_phases": 4,
+  "cot_ton_s": 0.0,
+  "cot_min_off_s": 1.2e-07,
+  "fc_target": 20000.0,
+  "pm_target": 80.0,
+  "V_in": 10.0,
+  "V_in_min": 10.0,
+  "V_in_max": 14.0,
+  "V_out": 1.2,
+  "P_out": 96.0,
+  "f_sw": 400000.0,
+  "L": 3e-07,
+  "inductor_design_enabled": false,
+  "inductor_dcr": 0.00175,
+  "inductor_rated_current": 27.6,
+  "inductor_saturation_current": 41.0,
+  "inductor_extra_loss": 0.15,
+  "eta_guess": 0.9,
+  "Rs": 0.0,
+  "Rds_on": 0.0053,
+  "Rds_aux": 0.0024,
+  "Qg": 1.3e-08,
+  "Qg_aux": 2.5e-08,
+  "Coss": 2.08e-10,
+  "Coss_aux": 3.89e-10,
+  "Vgs": 4.5,
+  "Vth": 1.4,
+  "Vgp_on": 2.8,
+  "Vgp_off": 2.8,
+  "Qg_th": 2.5e-09,
+  "Qgs": 5.1e-09,
+  "Qgd": 2.8e-09,
+  "d_in_enable": false,
+  "d_out_enable": false,
+  "ripple_target": 0.01,
+  "input_capacitors": [
+    {
+      "C": 0.00033,
+      "ESR": 0.014,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.014,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.014,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.014,
+      "ESL": 2e-09
+    }
+  ],
+  "output_capacitors": [
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    },
+    {
+      "C": 0.00033,
+      "ESR": 0.009,
+      "ESL": 2e-09
+    }
+  ],
+  "__example_note": "四相1.2V/80A工程参考。真实离散器件参数与TI D-CAP+公开控制结构分别引用；不等同TPS536C7原厂参考电路。",
+  "gfs": 76.0,
+  "mos_miller_mode": "gfs",
+  "mos_charge_mode": "manual",
+  "cot_kp_hz": 2450332.0777366706,
+  "cot_ki_hz_per_s": 93670158021.42029,
+  "cot_config": {
+    "model": "current_feedback",
+    "controller_reference": "ti_dcap_plus",
+    "current_feedback_hz_per_a": 4000.0,
+    "current_filter_hz": 30000.0,
+    "balance_gain_v_per_a": 0.02,
+    "balance_bandwidth_hz": 2000.0,
+    "balance_max_duty": 0.05,
+    "phase_limit_A": 32.0,
+    "limit_delay_s": 2e-08,
+    "fault_mode": "hiccup",
+    "fault_delay_s": 0.0002,
+    "hiccup_s": 0.002,
+    "uvlo_on_V": 8.0,
+    "uvlo_off_V": 7.5,
+    "ovp_V": 1.38,
+    "dead_time_s": 2e-08,
+    "body_diode_V": 0.8,
+    "body_qrr_C": 1.47e-08,
+    "light_load": "forced",
+    "source_resistance_ohm": 0.01,
+    "source_inductance_H": 1e-07,
+    "source_rise_s": 0.001,
+    "prebias_V": 0.0,
+    "shutdown_s": 0.007,
+    "load_mode": "current",
+    "load_rise_s": 1e-06,
+    "phase_imbalance_limit_pct": 10.0,
+    "phase_parameters": [
+      {
+        "L_scale": 0.95,
+        "dcr_scale": 0.95,
+        "rhigh_scale": 1.0,
+        "rlow_scale": 1.0,
+        "ton_scale": 1.0,
+        "sense_gain": 1.005,
+        "sense_offset_A": 0.1
+      },
+      {
+        "L_scale": 1.05,
+        "dcr_scale": 1.05,
+        "rhigh_scale": 1.0,
+        "rlow_scale": 1.0,
+        "ton_scale": 1.0,
+        "sense_gain": 0.995,
+        "sense_offset_A": -0.1
+      },
+      {
+        "L_scale": 1.0,
+        "dcr_scale": 1.02,
+        "rhigh_scale": 1.0,
+        "rlow_scale": 1.0,
+        "ton_scale": 1.0,
+        "sense_gain": 1.01,
+        "sense_offset_A": 0.05
+      },
+      {
+        "L_scale": 1.0,
+        "dcr_scale": 0.98,
+        "rhigh_scale": 1.0,
+        "rlow_scale": 1.0,
+        "ton_scale": 1.0,
+        "sense_gain": 0.99,
+        "sense_offset_A": -0.05
+      }
+    ],
+    "dynamic": {
+      "step_A": 40.0,
+      "rise_s": 1e-06,
+      "delay_s": 1e-06,
+      "droop_V": 0.06,
+      "overshoot_V": 0.06
+    },
+    "acceptance": {
+      "pm_min_deg": 45.0,
+      "gm_min_db": 6.0,
+      "overshoot_pct": 5.0,
+      "undershoot_pct": 5.0,
+      "recovery_s": 0.001,
+      "settling_band_pct": 2.0,
+      "imbalance_pct": 10.0,
+      "input_peak_A": 20.0
+    }
+  },
+  "spice_config": {
+    "enable_delay_ms": 2.0,
+    "soft_start_ms": 2.0,
+    "step_ms": 5.0,
+    "stop_ms": 8.0,
+    "load_after": 0.5,
+    "include_cap_esl": 0.0,
+    "simulation_threads": 4.0,
+    "fra_enabled": 0.0,
+    "simulation_timeout_s": 180.0,
+    "fra_start_hz": 2000.0,
+    "fra_stop_hz": 40000.0
+  },
+  "component_management": {
+    "version": 1,
+    "zone": "I",
+    "items": {
+      "U_CTRL": {
+        "manufacturer": "Texas Instruments",
+        "model": "TPS536C7B1 · D-CAP+ 结构参考",
+        "conditions": "SLUSDI9 §7.6；本例为公开结构的频率域行为实现；增益与保护阈值为本项目配置，未对应芯片寄存器。"
+      },
+      "Q1": {
+        "manufacturer": "Texas Instruments",
+        "model": "CSD17577Q3A",
+        "conditions": "每相高侧。SLPS515A §5.1：25°C，Rds 5.3mΩ@4.5V/10A；Qg 13nC、Coss 208pF@15V；采用电气表值。",
+        "voltage_V": 30.0
+      },
+      "Q2": {
+        "manufacturer": "Texas Instruments",
+        "model": "CSD17576Q5B",
+        "conditions": "每相低侧。SLPS497A §5.1：25°C，Rds 2.4mΩ@4.5V/25A；Qg25nC、Coss389pF@15V；Qrr14.7nC@15V25A300A/µs。",
+        "voltage_V": 30.0
+      },
+      "L1": {
+        "manufacturer": "Coilcraft",
+        "model": "XAL7030-301MEC",
+        "conditions": "每相。Document863-1：0.30µH±20%，DCR典型1.75mΩ/最大1.92mΩ；Isat41A对应L下降30%；Irms27.6A对应40K温升。"
+      },
+      "C_IN1": {
+        "manufacturer": "Panasonic",
+        "model": "25SVPF330M",
+        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 25.0,
+        "ripple_A": 5.0
+      },
+      "C_IN2": {
+        "manufacturer": "Panasonic",
+        "model": "25SVPF330M",
+        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 25.0,
+        "ripple_A": 5.0
+      },
+      "C_IN3": {
+        "manufacturer": "Panasonic",
+        "model": "25SVPF330M",
+        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 25.0,
+        "ripple_A": 5.0
+      },
+      "C_IN4": {
+        "manufacturer": "Panasonic",
+        "model": "25SVPF330M",
+        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 25.0,
+        "ripple_A": 5.0
+      },
+      "C_O1": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O2": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O3": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O4": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O5": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O6": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O7": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O8": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O9": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O10": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O11": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O12": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O13": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O14": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O15": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      },
+      "C_O16": {
+        "manufacturer": "Panasonic",
+        "model": "2R5TPE330M9",
+        "conditions": "330µF±20%，100kHz ESR上限9mΩ，纹波3.9A；ESL2nH为项目几何假设。",
+        "capacitor_type": "other",
+        "voltage_V": 2.5,
+        "ripple_A": 3.9
+      }
+    },
+    "overrides": {
+      "other_voltage": 0.8,
+      "other_ripple": 0.8
+    },
+    "override_reason": "本工程聚合物电容电压和纹波采用0.8初选余量，非原厂统一降额标准。"
+  },
+  "__cot_sources": {
+    "controller": "https://www.ti.com/lit/ds/symlink/tps536c7.pdf",
+    "high_mos": "https://www.ti.com/lit/ds/symlink/csd17577q3a.pdf",
+    "low_mos": "https://www.ti.com/lit/ds/symlink/csd17576q5b.pdf",
+    "inductor": "https://www.coilcraft.com/getmedia/0d05a05e-d55d-4a0c-911d-46bd73686633/xal7030.pdf",
+    "input_cap": "https://na.industrial.panasonic.com/products/capacitors/polymer-capacitors/series/91057/model/91095",
+    "output_cap": "https://util01.industrial.panasonic.com/ww/utilities/ds/chr-vw/2R5TPE330M9",
+    "assumptions": "每颗ESL2nH、电感附加损耗0.15W、源R/L、采样误差、死区及所有控制增益/保护/验收阈值为工程配置；Coss按15V单点，未拟合非线性曲线。"
+  }
+}

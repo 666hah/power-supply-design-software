@@ -158,12 +158,14 @@ def loop_margins_for(p, op=None):
 
 
 def autotune_loop(spec, fc, pm):
-    """K-factor tune against the plant, verify by re-computing margins."""
+    """Tune against the active plant, then verify the resulting margins."""
+    from cot_settings import active as cot_active
+
     p = load_spec(spec)
     psr=p.get('feedback_mode')=='PSR-MP6005'
     multi_flyback = p['topology']=='FLYBACK' and bool(p.get('outputs') or p.get('coupling_config',{}).get('enabled'))
     if p['topology'] not in ('BUCK','ACF-FORWARD') and not psr and not multi_flyback:
-        raise ValueError('autotune_loop: 目前支持 BUCK / ACF-FORWARD (VM/PCM); '
+        raise ValueError('autotune_loop: 目前支持 BUCK (VM/PCM/COT) / ACF-FORWARD (VM/PCM); '
                          '其它拓扑请用 GUI ④页')
     from input_voltage_range import has_input_voltage_range, calculate_input_operating_point
     if has_input_voltage_range(p):
@@ -172,6 +174,21 @@ def autotune_loop(spec, fc, pm):
     else:
         op = compute_design(p)['op']
     p['control_mode'] = p.get('control_mode', 'Voltage Mode')
+    if cot_active(p):
+        from cot_loop import recommended_fc_max, tune
+
+        limit = recommended_fc_max(op)
+        try:
+            tuned = tune(p, op, fc, pm)
+        except ValueError as exc:
+            return dict(comp_type='cot-pi', feasible=False, achieved=None,
+                        fc_target=fc, fc_recommended_max=limit,
+                        message=str(exc), spec_updates={})
+        updates = {key: tuned[key] for key in ('cot_kp_hz', 'cot_ki_hz_per_s')}
+        updates.update(fc_target=fc, pm_target=pm)
+        margins = loop_margins_for(dict(p, **updates), op)
+        return dict(comp_type='cot-pi', feasible=True, achieved=margins,
+                    fc_target=fc, fc_recommended_max=limit, spec_updates=updates)
     if p['topology'] == 'ACF-FORWARD':
         fc = min(fc, op['fc_recommended_max'])
     (Gvc, _, _), _ = plants.build_loop_models(p, op)

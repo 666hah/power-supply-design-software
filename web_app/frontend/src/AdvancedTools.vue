@@ -15,6 +15,8 @@ const pending = ref(false), error = ref(''), status = ref(''), action = ref(''),
 let generation = 0, imageAbort: AbortController | null = null;
 const ready = computed(() => !!props.job && !props.dirty && !props.busy && !pending.value);
 const psr = computed(() => props.spec.feedback_mode === 'PSR-MP6005');
+const cot = computed(() => props.spec.topology === 'BUCK' &&
+  (props.spec.control_mode === 'Constant On-Time' || Number(props.spec.buck_phases || 1) > 1));
 const compensationKeys = computed(() => (props.spec.controller_type === 'type2' || ((props.spec.controller_type || 'auto') === 'auto' && props.spec.control_mode === 'Peak Current Mode')) ? ['KP', 'fz1', 'fp1'] : ['KP', 'fz1', 'fz2', 'fp1', 'fp2']);
 const outputCount = computed(() => Array.isArray(props.spec.outputs) && props.spec.outputs.length ? props.spec.outputs.length : 1);
 const unavailable = computed(() => !props.job ? '请先运行计算，生成当前工程快照。' : props.dirty ? '参数已修改，请先重新计算，再运行分析。' : props.busy ? '主计算运行中，请稍候。' : '');
@@ -87,6 +89,7 @@ const chosenFractions = ref([.1, .5, 1]), extraFraction = ref(.25), freezeName =
 const freezePending = ref(false), freezeError = ref('');
 const titles: Record<string, string> = { tune: '环路自动整定', compensate: '补偿网络设计', sweep: '效率参数扫描', find_target: '查找目标效率', optimize: '效率多变量优化', corners: '固定硬件角点分析', loop_response: '多路响应分析' };
 const fieldNames: Record<string, string> = { KP: '补偿器增益 KP', fz1: '零点 fz1', fz2: '零点 fz2', fp1: '极点 fp1', fp2: '极点 fp2', fc: '穿越频率', fc_target: '目标穿越频率', pm: '相位裕度', min_pm: '全部穿越最小相位裕度', gm_db: '增益裕度', gm_infinite: '无有限增益裕度穿越', boost: '相位提升', boost_required: '所需相位提升', K: 'Venable K 因子', feasible: '目标可实现', closed_loop_stable: '闭环极点稳定', inner_spectral_radius: '周期内环谱半径', eta: '模型效率', nit: '迭代次数', evaluations: '已评估候选数', limited_budget: '受限计算预算', ok: '优化器收敛', R_lower: '下分压电阻 R_lower', fp_opto: '光耦自身极点', R_LED_max: 'LED 电阻上限', Vref: '基准电压', Vref_check: '基准电压回代', target_value: '达到目标的参数值', target_eta: '目标模型效率', fixed_hardware: '固定同一套硬件', snapshot_unchanged: '原设计快照未改变', same_requirements: '需求一致', target: '目标值', actual: '回代值', realized: '回代值', error: '误差 / 说明', match: '一致', within_tolerance: '误差在容许范围', buildable: '物理网络可实现', controller_type: '补偿器类型', comp_type: '补偿器类型', action: '分析类型', case: '输入工况', load_output: '扰动注入输出编号', feedback_output: '主反馈输出编号' };
+Object.assign(fieldNames, { cot_kp_hz: '比例增益 Kp', cot_ki_hz_per_s: '积分增益 Ki' });
 function label(key: string) { return fieldNames[key] || vars.find(item => item.key === key)?.label || key; }
 function valueText(value: any, key = ''): string {
   if (value === null || value === undefined) return '—';
@@ -96,6 +99,7 @@ function valueText(value: any, key = ''): string {
     if (variable) return fmt(value / (variable.scale || 1), variable.unit, 6);
     if (key === 'eta' || key === 'load_frac') return fmt(value * 100, '%', 5);
     if (key === 'target_eta') return fmt(value * 100, '%', 5);
+    if (key === 'cot_kp_hz' || key === 'cot_ki_hz_per_s') return fmt(value, key === 'cot_kp_hz' ? 'Hz' : 'Hz/s', 5);
     if (/^(fz[12]|fp[12]|fc|fc_target|fp_opto|frequency)$/.test(key)) return fmt(value, 'Hz', 5);
     if (/^(pm|min_pm|boost|boost_required)$/.test(key)) return fmt(value, '°', 5);
     if (/^(C\d|Copto|C_pz|C2_tot)$/.test(key)) return fmt(value * 1e9, 'nF', 5);
@@ -104,6 +108,7 @@ function valueText(value: any, key = ''): string {
     if (key === 'gm_db') return fmt(value, 'dB', 5);
     return fmt(value, '', 6);
   }
+  if (key === 'comp_type' && value === 'cot-pi') return 'COT 频率 PI';
   if (Array.isArray(value)) return value.length ? value.map(item => typeof item === 'object' ? String(item?.note || item?.message || item?.name || '详细校核项') : String(item)).join('；') : '无';
   if (typeof value === 'object') return Object.entries(value).filter(([, v]) => typeof v !== 'object').map(([k, v]) => `${label(k)}：${valueText(v, k)}`).join('；') || '见下方明细';
   return String(value);
@@ -174,7 +179,7 @@ async function cancel() {
   try { await post(`/operations/${operationId.value}/cancel`, {}); status.value = '已请求取消，后台将在安全检查点停止。'; }
   catch (e: any) { error.value = e.message; }
 }
-function tune() { void run('tune', { fc: fc.value, pm: pm.value, controller_type: controller.value }); }
+function tune() { void run('tune', { fc: fc.value, pm: pm.value, ...(cot.value ? {} : { controller_type: controller.value }) }); }
 function compensate() {
   if (partFields.value.some(field => !Number.isFinite(Number(compInputs.value[field.key])))) { error.value = '请完整填写有限的阻容参数。'; return; }
   void run('compensate', { key: net.value, direction: direction.value, type2: type2.value, inputs: { ...compInputs.value } });
@@ -246,15 +251,16 @@ function exportComparison() {
     <div v-if="unavailable" class="at-notice">{{ unavailable }} 以下分析始终基于已计算快照，不会混用未计算的输入。</div>
 
     <section v-if="mode === 'loop'" class="card at-card">
-      <header class="at-heading"><div><h3>Venable K 因子自动整定</h3><p>选择当前 {{ caseId }} 工况设计补偿器；先检查候选结果，再显式写入参数。</p></div><span class="at-badge">{{ psr ? 'MP6005 物理 COMP 网络' : 'SSR 外环' }}</span></header>
+      <header class="at-heading"><div><h3>{{ cot ? 'COT 电压外环自动整定' : 'Venable K 因子自动整定' }}</h3><p>按 {{ caseId }} 工况计算候选参数，确认后写入工程。</p></div><span class="at-badge">{{ cot ? '频率 PI' : psr ? 'MP6005 物理 COMP 网络' : 'SSR 外环' }}</span></header>
       <div class="at-grid">
         <AdvancedNumber v-model="fc" label="目标穿越频率 fc" unit="kHz" :scale="1000" :min="0" />
-        <AdvancedNumber v-model="pm" label="目标相位裕度 PM" unit="°" :min="1" :max="89" />
-        <label class="at-field"><span>补偿器类型</span><select v-model="controller"><option value="auto">自动（沿用原版控制模式规则）</option><option value="type2">二型补偿</option><option value="type3">三型补偿</option></select></label>
+        <AdvancedNumber v-model="pm" label="目标相位裕度 PM" unit="°" :min="1" :max="cot ? 179 : 89" />
+        <label v-if="!cot" class="at-field"><span>补偿器类型</span><select v-model="controller"><option value="auto">自动（沿用原版控制模式规则）</option><option value="type2">二型补偿</option><option value="type3">三型补偿</option></select></label>
       </div>
-      <div class="at-actions"><button class="primary" :disabled="!ready" @click="tune">计算候选补偿参数</button></div>
-      <p class="at-limit">沿用 EXE 的整定算法。耦合多路模型需检查周期内环与闭环稳定性；过高目标频率、相位提升不足或不适用的模型会明确提示，不会静默写回。最终仍需实机 FRA 与负载阶跃验证。</p>
-      <div v-if="outputCount > 1" class="at-subsection"><h4>多路输出闭环响应</h4><div class="at-actions"><label class="at-inline">负载扰动注入路<select v-model.number="loadOutput"><option v-for="n in outputCount" :key="n" :value="n">OUT{{ n }}</option></select></label><button :disabled="!ready" @click="run('loop_response', { load_output: loadOutput })">计算各路响应</button></div><p class="at-limit">只有主反馈路闭环调节；其他输出仅显示参考跟踪和所选负载电流扰动响应，不能等同于独立稳压环。</p></div>
+      <div class="at-actions"><button class="primary" :disabled="!ready" @click="tune">{{ cot ? '计算候选 PI 增益' : '计算候选补偿参数' }}</button></div>
+      <p v-if="cot" class="at-limit">应用候选增益后，复算输入范围两端的频率和相位裕度。PI 可实现的相位范围由当前功率级决定。</p>
+      <p v-else class="at-limit">沿用 EXE 的整定算法。耦合多路模型需检查周期内环与闭环稳定性；过高目标频率、相位提升不足或不适用的模型会明确提示，不会静默写回。最终仍需实机 FRA 与负载阶跃验证。</p>
+      <div v-if="!cot && outputCount > 1" class="at-subsection"><h4>多路输出闭环响应</h4><div class="at-actions"><label class="at-inline">负载扰动注入路<select v-model.number="loadOutput"><option v-for="n in outputCount" :key="n" :value="n">OUT{{ n }}</option></select></label><button :disabled="!ready" @click="run('loop_response', { load_output: loadOutput })">计算各路响应</button></div><p class="at-limit">只有主反馈路闭环调节；其他输出仅显示参考跟踪和所选负载电流扰动响应，不能等同于独立稳压环。</p></div>
     </section>
 
     <section v-if="mode === 'compensation'" class="card at-card">

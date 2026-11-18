@@ -1,10 +1,12 @@
 import { reference, type Spec, roundEven } from "./spec";
 import { gamma } from "./math";
 import { purchased, purchasedInductor } from "./inductor_selection";
+const customCore = (choice: string) => ['自定义（非标准）', 'CUSTOM', 'custom'].includes(choice);
+
 export function core(p: Spec, ap: number, fixed: Spec = {}) {
   const choice = fixed.core || p.core_choice;
   let geometry = fixed.core_geometry || reference.cores[choice];
-  if (choice === "custom" || choice === "CUSTOM") geometry = p.custom_core;
+  if (!geometry && customCore(choice)) geometry = p.custom_core || {};
   if (!geometry) {
     const candidates = Object.entries(reference.cores)
       .filter(
@@ -18,9 +20,25 @@ export function core(p: Spec, ap: number, fixed: Spec = {}) {
     if (!candidates.length) throw Error("磁芯数据库中没有满足面积积的磁芯");
     return { name: candidates[0][0], ...(candidates[0][1] as Spec) };
   }
-  for (const k of ["Ae", "Ve", "Wa", "MLT"])
-    if (!(geometry[k] > 0)) throw Error("磁芯尺寸 " + k + " 必须大于 0");
-  return { name: choice, ...geometry };
+  const resolved = { ...geometry };
+  const baseUnits: Record<string, number> = { m: 1, cm: 1e-2, mm: 1e-3 };
+  for (const [key, power] of Object.entries({ Ae: 2, Ve: 3, Wa: 2, MLT: 1 })) {
+    const value = resolved[key];
+    if (key === 'MLT' && value == null) continue;
+    if (value?.u != null) {
+      const suffix = power === 2 ? '²' : power === 3 ? '³' : '';
+      const baseUnit = Object.keys(baseUnits).find(unit => value.u === unit + suffix);
+      resolved[key] = baseUnit && Number.isFinite(value.v) ? value.v * baseUnits[baseUnit] ** power : NaN;
+    }
+    if (!Number.isFinite(resolved[key]) || resolved[key] <= 0) throw Error('磁芯尺寸 ' + key + ' 必须大于 0');
+  }
+  return { ...resolved, name: geometry.name || choice };
+}
+
+function estimateMlt(p: Spec, c: Spec, fixed: Spec) {
+  if (fixed.MLT) return { MLT: fixed.MLT, MLT_source: fixed.MLT_source || '磁芯估算' };
+  if (c.MLT) return { MLT: c.MLT, MLT_source: customCore(p.core_choice) ? '旧非标准磁芯参考值（估算）' : '标准磁芯目录（估算）' };
+  return { MLT: 4 * Math.sqrt(c.Ae), MLT_source: '按有效截面积等效方形估算（无骨架尺寸）' };
 }
 export function wire(current: number, strands: number, p: Spec, diameter = 0) {
   const d = diameter || Math.sqrt(current / strands / p.J / Math.PI) * 2;
@@ -76,7 +94,7 @@ export function transformer(op: Spec, p: Spec) {
   const fixed = p._fixed_transformer || {},
     ap = (2 * op.P_out) / (p.Bmax * p.J * p.Ku * op.f_sw),
     c = core(p, ap, fixed),
-    mlt = fixed.MLT || p.MLT || c.MLT;
+    { MLT: mlt, MLT_source } = estimateMlt(p, c, fixed);
   const np =
       fixed.Np ||
       p.Np ||
@@ -112,7 +130,7 @@ export function transformer(op: Spec, p: Spec) {
     Ve: c.Ve,
     Wa: c.Wa,
     MLT: mlt,
-    MLT_source: p.MLT ? "用户指定平均匝长" : "磁芯数据库",
+    MLT_source,
     ap,
     Np: np,
     Ns: ns,
@@ -145,7 +163,7 @@ export function inductor(op: Spec, p: Spec) {
   const fixed = p._fixed_inductor || {},
     ap = (op.L * op.I_L_pk * op.I_L_rms) / (p.Bmax * p.J * p.Ku),
     c = core(p, ap, fixed),
-    mlt = fixed.MLT || p.MLT || c.MLT,
+    { MLT: mlt, MLT_source } = estimateMlt(p, c, fixed),
     n = fixed.N || Math.max(1, Math.ceil((op.L * op.I_L_pk) / p.Bmax / c.Ae)),
     d = fixed.d_wire || Math.sqrt((4 * op.I_L_rms) / p.J / Math.PI),
     area = (Math.PI * d * d) / 4,
@@ -164,6 +182,7 @@ export function inductor(op: Spec, p: Spec) {
     Ve: c.Ve,
     Wa: c.Wa,
     MLT: mlt,
+    MLT_source,
     N: n,
     d_wire: d,
     R_dc: rd,

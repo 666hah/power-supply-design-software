@@ -11,8 +11,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx_layout import new_document, paragraph, table, section, equation
+from docs.apply_book_style_to_help import apply_book_style, register_basis_notation
 from design_engine.sizing_basis import DOCUMENT, REVISION, SCOPE, SOURCES
-import word_math as wm
 
 
 def vendor_link(p, key):
@@ -44,15 +44,7 @@ def build(vm, pcm, boost, flyback, dcm, multi, output):
             or not all(v['model_ok'] for v in (fb,dc)) or not mx['cross_regulation']['complete']
             or len(mx['cross_regulation']['summary'])!=3):
         raise ValueError('需要当版反激 CCM、DCM 及三路交叉负载完整算例')
-    wm.ALIASES.update({'Vhigh':'V_in,max','Vlow':'V_in,min','ΔVlim':'ΔV_o,pp',
-                       'Ccharge':'C_charge','Cstep':'C_step','Cin':'C_in','ΔIstep':'ΔI_step',
-                       'Vcsmin':'V_CS,min','Rcs':'R_CS','Ics':'I_CS','Iload':'I_load',
-                       'Dstar':'D_*','ΔVin':'ΔV_in','ΔVc':'ΔV_C','Dmax':'D_max','Ilow':'I_in,ref',
-                       'Ipkb':'I_pk,est','Vramp':'V_ramp','Vcsmax':'V_CS,max','Vcsmin':'V_CS,min',
-                       'Rext':'R_ext','Vrampmax':'V_ramp,max','fRHP':'f_RHP','Kpin':'K_P,COMP',
-                       'Lccm':'L_m,CCM','Ldcm':'L_m,DCM','Prated':'P_rated','Vwind':'V_w,j',
-                       'Nsecj':'N_s,j','Nsecfb':'N_s,fb','Vcapfb':'V_cap,fb','Vrectfb':'V_F,fb'})
-    wm.NAMES = sorted(wm.ALIASES,key=len,reverse=True)
+    register_basis_notation()
     r = a['rules']
     doc = new_document('自动计算参数依据','从规格到第一套可复算的器件值  ·  规则版 '+REVISION,
                        '开关电源设计与环路分析  /  参数选择依据')
@@ -248,7 +240,7 @@ def build(vm, pcm, boost, flyback, dcm, multi, output):
         vendor_link(p,key)
         p.add_run('  ·  '+detail)
     note('反激补充资料见第 8–10 页。每个拓扑区分原厂规格、项目自定余量、实物料号及其测试条件。')
-    doc.save(output)
+    apply_book_style(doc, kind='basis').save(output)
 
 
 if __name__=='__main__':

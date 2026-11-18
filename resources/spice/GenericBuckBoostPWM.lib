@@ -1,14 +1,22 @@
-* Original reference-inspired Buck/Boost model. Not manufacturer silicon.
+* GenericBuckBoostPWM 1.3. Original reference-inspired model, not manufacturer silicon.
+* MOS conductance changes continuously over 0.3*VG..0.7*VG, as in GPWR_MOS.
+* This finite transition is an engineering switch approximation, not a measured
+* gate-charge/Miller model or switching-loss model. PWM/OCP thresholds are unchanged.
+* All Buck/Boost power and body diodes explicitly use 1uV I-V knee rounding.
+* Nominal Vf/Ron/Roff are unchanged; GPWR_DIODE remains EPS=0 for other topologies.
+* Age has exact unit slope during the PWM window; finite reset is confined to
+* the off window. This avoids the former 1ps reset stiffness without ramp gain change.
 .subckt GNISO_PMOS D G S params: RON=.05 COSS=200p CG=1n VG=10 CJ=20p
 Smain S D S G PSW
-.model PSW SW(Ron={RON} Roff=1e9 Vt={VG/2} Vh=0.01)
+.model PSW SW(Ron={RON} Roff=1e9 Vt={VG/2} Vh={-VG*0.2})
 Coss D S {COSS}
 Cgate G S {CG}
-Xbody D S GPWR_DIODE VF=.8 CJ={CJ}
+Xbody D S GPWR_DIODE VF=.8 CJ={CJ} EPS=1u
 .ends GNISO_PMOS
 .subckt GNISO_CORE COMP CS EN VCC GATE RAMP ILIM COM params: FSW=250e3 MODE=1 DMAX=0.7 VM=1 A_CS=1 SLOPE=0 TBLANK=100e-9 TONMIN=100e-9 TPROP=20e-9 VG=10 RDRV=2 UVLO=4.5 COFF=0 LIMIT_RAMP=0
 Vclock clock COM PULSE(0 1 0 1e-9 1e-9 {min(20e-9,0.01/FSW)} {1/FSW})
-Vage age COM PULSE(0 {1/FSW} 0 {1/FSW-1e-12} 1e-12 0 {1/FSW})
+.param AGE_RESET={min(1e-9,min(0.001/FSW,(1-DMAX)/(2*FSW)))}
+Vage age COM PULSE(0 {1/FSW-AGE_RESET} 0 {1/FSW-AGE_RESET} {AGE_RESET} 0 {1/FSW})
 Bon active COM V=if((V(EN,COM)>0.5)&(V(VCC,COM)>{UVLO}),1,0)
 Bramp RAMP COM V=if({MODE}>0.5,{A_CS}*V(CS,COM)+{SLOPE}*V(age,COM),{VM}*{FSW}*V(age,COM))
 Breset reset COM V=if((V(active,COM)<0.5)|(V(age,COM)>={DMAX/FSW})|((V(age,COM)>={TBLANK})&((V(CS,COM)+{LIMIT_RAMP*SLOPE}*V(age,COM))>=V(ILIM,COM)))|((V(age,COM)>={max(TBLANK,TONMIN)})&(V(RAMP,COM)>=max(0,V(COMP,COM)-{COFF}))),1,0)
@@ -46,8 +54,8 @@ Xcore COMP cs_filtered active VCC GATE RAMP ilim COM GNISO_CORE FSW={FSW} MODE={
 
 .subckt GNISO_NMOS D G S params: RON=0.05 COSS=200e-12 CG=1e-9 VG=10 CJ=20e-12
 Smain D S G S MSW
-.model MSW SW(Ron={RON} Roff=1e9 Vt={VG/2} Vh=0.01)
+.model MSW SW(Ron={RON} Roff=1e9 Vt={VG/2} Vh={-VG*0.2})
 Coss D S {COSS}
 Cgate G S {CG}
-Xbody S D GPWR_DIODE VF=0.8 CJ={CJ}
+Xbody S D GPWR_DIODE VF=0.8 CJ={CJ} EPS=1u
 .ends GNISO_NMOS

@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import platform
+import re
 import tempfile
 import os
 from typing import Any, Callable, Literal
@@ -92,11 +93,13 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _provenance(spec):
+    from capacitor_impedance import active_curve
     root = Path(__file__).resolve().parents[1]
-    names = ('capacitor_banks.py','power_stage.py', 'loss_model.py', 'semiconductor.py', 'magnetics.py', 'inductor_selection.py',
+    names = ('capacitor_banks.py','capacitor_impedance.py','power_stage.py', 'loss_model.py', 'semiconductor.py', 'magnetics.py', 'inductor_selection.py',
              'waveforms.py', 'capripple.py', 'plants.py', 'qr_loop.py', 'loop_tuning.py',
              'design_checks.py', 'isolated_outputs.py', 'coupled_flyback.py', 'qr_coupled.py',
-             'winding_coupling.py', 'winding_layout.py', 'transformer_geometry.py', 'transformer_geometry_contract.py',
+             'winding_coupling.py', 'winding_layout.py', 'winding_length.py', 'core_shape_catalog.py',
+             'resources/core_shapes/catalog.json', 'transformer_geometry.py', 'transformer_geometry_contract.py',
              'transformer_turns.py', 'transformer_gap.py', 'voltage_nodes.py', 'custom_cores.py',
              'input_voltage_range.py', 'analysis_workflows.py', 'flyback_clamp.py',
              'active_clamp.py', 'mp6005.py', 'multi_output_loop.py', 'output_capacitors.py', 'cross_regulation.py',
@@ -114,6 +117,14 @@ def _provenance(spec):
             packages[name] = None
     curves = {key: content_hash(json_value(spec[key])) for key in
               ('mos_miller_curve', 'mos_charge_curve', 'diode_curves') if spec.get(key)}
+    banks = {key: spec.get(key) for key in ('input_capacitors', 'output_capacitors')}
+    banks.update({f'OUT{index}.output_capacitors': rail.get('output_capacitors')
+                  for index, rail in enumerate(spec.get('outputs') or (), 1)})
+    for label, bank in banks.items():
+        for index, cap in enumerate(bank or (), 1):
+            curve = active_curve(cap)
+            if curve:
+                curves[f'{label}.{index}'] = content_hash(json_value(curve))
     return dict(model_version=MODEL_VERSION,
                 code_fingerprint=content_hash(sources) if sources else None,
                 source_complete=all((root/name).is_file() for name in names),
@@ -269,6 +280,181 @@ def read_snapshot(path: str | Path) -> dict[str, Any]:
     if payload.get('snapshot_id') != content_hash(content):
         raise ValueError('设计快照内容哈希不匹配，文件可能被修改或损坏')
     return payload
+
+
+def _restore_nonfinite(snapshot):
+    nonfinite = {'NaN': math.nan, '+Infinity': math.inf, '-Infinity': -math.inf}
+    diagnostics = snapshot.get('numeric_diagnostics', [])
+    if not isinstance(diagnostics, list):
+        raise ValueError('设计快照的非有限数诊断格式无效')
+    for entry in diagnostics:
+        try:
+            path = entry['path']
+            parts = re.findall(r'\.([^.[\]]+)|\[(\d+)\]', path[1:])
+            if path != '$' + ''.join(f'.{key}' if key else f'[{index}]' for key, index in parts):
+                raise ValueError('invalid field path')
+            keys = [key if key else int(index) for key, index in parts]
+            target = snapshot
+            for key in keys[:-1]:
+                target = target[key]
+            if entry['kind'] != 'nonfinite' or target[keys[-1]] is not None:
+                raise ValueError('invalid nonfinite entry')
+            target[keys[-1]] = nonfinite[entry['value']]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ValueError('设计快照的非有限数诊断与数据不一致') from exc
+
+
+def _restore_waveforms(wf, label):
+    import numpy as np
+    required = ('t', 'iL', 'i_sw', 'i_d', 'v_sw', 'v_d', 'i_c', 'i_in',
+                'vout_ripple', 'vout', 'v_esl', 'ripple_pp')
+    if not isinstance(wf, dict) or any(key not in wf for key in required):
+        raise ValueError(f'{label} 缺少完整时域波形')
+    time = wf['t']
+    if not isinstance(time, list) or len(time) < 2:
+        raise ValueError(f'{label} 时间轴缺少采样点')
+    for key, values in wf.items():
+        if isinstance(values, list) and key != 'outputs':
+            if len(values) != len(time) or any(type(item) not in (int, float) for item in values):
+                raise ValueError(f'{label} 波形 {key} 与时间轴不一致')
+            wf[key] = np.asarray(values, dtype=float)
+    if any(not isinstance(wf[key], np.ndarray) for key in required[:-1]):
+        raise ValueError(f'{label} 缺少波形采样序列')
+    if not np.isfinite(wf['t']).all() or np.any(np.diff(wf['t']) <= 0):
+        raise ValueError(f'{label} 时间轴无效')
+    children = wf.get('outputs', [])
+    if not isinstance(children, list):
+        raise ValueError(f'{label} 各输出波形格式无效')
+    for index, child in enumerate(children, 1):
+        _restore_waveforms(child, f'{label} OUT{index}')
+
+
+def _restore_loop(loop):
+    import numpy as np
+
+    def complex_array(points, shape):
+        source = np.asarray(points, dtype=object)
+        if source.shape != shape:
+            raise ValueError('频响数组维度不一致')
+        values = [complex(sample['real'], sample['imag']) for sample in source.flat]
+        return np.asarray(values, dtype=complex).reshape(shape)
+
+    frequency = np.asarray(loop['f'], dtype=float)
+    if (frequency.ndim != 1 or len(frequency) < 2 or not np.isfinite(frequency).all()
+            or frequency[0] <= 0 or np.any(np.diff(frequency) <= 0)):
+        raise ValueError('频率轴无效')
+    shape = (3, len(frequency))
+    phases = np.asarray(loop['phases'], dtype=float)
+    if phases.shape != shape:
+        raise ValueError('相频数组维度不一致')
+    loop.update(f=frequency, gains=complex_array(loop['gains'], shape), phases=phases)
+    multi = loop.get('multi_output')
+    if multi:
+        count = len(multi['outputs'])
+        multi['reference'] = complex_array(multi['reference'], (count, len(frequency)))
+        if multi['load'] is not None:
+            multi['load'] = complex_array(multi['load'], (count, count, len(frequency)))
+
+
+def _shared_saved_endpoint(left, right):
+    """Only the named endpoint and a matching manual MOS label may differ."""
+    if any(left[key] != right[key] for key in ('loop_error', 'checks', 'efficiency_curve')):
+        return False
+    if any(dict(case['parameters'], input_voltage_case='min') != left['parameters']
+           for case in (left, right)):
+        return False
+    a, b = left['result'], right['result']
+    if a == b:
+        return True
+    gate = b['semi']['switch'].get('gate') or {}
+    if gate.get('manual_case') != 'max' or gate.get('label') != '手动四事件 Vinmax':
+        return False
+    gate = dict(gate, manual_case='min', label='手动四事件 Vinmin')
+    return a == dict(b, semi=dict(b['semi'], switch=dict(b['semi']['switch'], gate=gate)))
+
+
+def restore_report_bundle(payload: dict[str, Any]) -> dict[str, Any]:
+    """Restore report data from a verified complete endpoint snapshot.
+
+    Pass the result of read_snapshot. Rebuild only presentation arrays and
+    saved metadata. Transfer functions and private solver traces stay absent.
+    """
+    from input_voltage_range import normalize_input_voltage_spec
+    from mos_manual import distinct_endpoints
+
+    if (not isinstance(payload, dict) or payload.get('schema') != CONTRACT_VERSION
+            or payload.get('analysis') != 'endpoints'):
+        raise ValueError('完整设计报告需要双端点设计快照')
+    options = payload.get('options')
+    if (not isinstance(options, dict) or options.get('include_details') is not True
+            or options.get('include_waveforms') is not True):
+        raise ValueError('设计快照未保存完整计算明细与波形')
+    snapshot = copy.deepcopy(payload)
+    _restore_nonfinite(snapshot)
+    try:
+        base = normalize_input_voltage_spec(snapshot['spec'])
+        hardware = snapshot['hardware']
+        if not isinstance(hardware, dict):
+            raise ValueError('设计快照的固定硬件格式无效')
+        saved = snapshot['cases']
+        by_id = {case['id']: case for case in saved}
+        if len(saved) != 2 or set(by_id) != {'Vinmin', 'Vinmax'}:
+            raise ValueError('快照须包含 Vinmin 与 Vinmax 两个具名工况')
+        left, right = (by_id[key] for key in ('Vinmin', 'Vinmax'))
+        same_voltage = base['V_in_min'] == base['V_in_max']
+        shared = (same_voltage and not distinct_endpoints(base)
+                  and all(case.get('result') and not case.get('error') for case in (left, right))
+                  and _shared_saved_endpoint(left, right))
+        cases = []
+        for case, selector in ((left, 'min'), (right, 'max')):
+            label = case['id']
+            p = case['parameters']
+            voltage = case['V_in']
+            if (voltage != base[f'V_in_{selector}'] or p['V_in'] != voltage
+                    or p['topology'] != base['topology']):
+                raise ValueError(f'{label} 快照工况与需求不一致')
+            if case.get('error'):
+                result = None
+            else:
+                result = case['result']
+                if not isinstance(result, dict) or any(
+                        not isinstance(result.get(key), dict) or not result[key]
+                        for key in ('op', 'wf', 'capacitors', 'mag', 'semi')):
+                    raise ValueError(f'{label} 缺少完整电路计算结果')
+                if not isinstance(case['checks'], list) or not case['checks']:
+                    raise ValueError(f'{label} 缺少设计核查结果')
+                result['checks'] = case['checks']
+                efficiency = case['efficiency_curve']
+                if (not isinstance(efficiency, dict) or not efficiency.get('fracs')
+                        or len(efficiency['fracs']) != len(efficiency['etas'])
+                        or len(efficiency['fracs']) != len(efficiency['modes'])):
+                    raise ValueError(f'{label} 缺少完整效率扫描')
+                if shared and cases:
+                    result.update(op=cases[0]['result']['op'], wf=cases[0]['result']['wf'])
+                else:
+                    _restore_waveforms(result['wf'], label)
+                if result.get('loop') is not None:
+                    _restore_loop(result['loop'])
+                elif options.get('include_loop') and not case.get('loop_error'):
+                    raise ValueError(f'{label} 缺少环路数据或失败记录')
+                if result.get('outputs') and len(result['outputs']) != len(result['wf'].get('outputs') or []):
+                    raise ValueError(f'{label} 各输出明细与波形数量不一致')
+                rcd = (result['op'].get('qr_coupled_model') or {}).get('rcd_hardware')
+                if rcd:
+                    p['_qr_rcd_hardware'] = rcd
+            for key, value in hardware.items():
+                p['_fixed_' + key] = value
+            cases.append(dict(id=label, voltage=voltage, V_in=voltage, p=p,
+                              result=result, models=None, checks=case['checks'],
+                              error=case['error'], loop_error=case['loop_error'],
+                              efficiency_curve=case['efficiency_curve']))
+    except (KeyError, TypeError, OverflowError) as exc:
+        raise ValueError(f'设计快照明细缺失或格式无效：{exc}') from exc
+    return dict(base_spec=base, hardware=hardware,
+                hardware_reference=snapshot.get('hardware_reference'),
+                fixed_hardware=bool(snapshot.get('fixed_hardware')),
+                reference_voltage=base['V_in_min'], same_voltage=same_voltage, cases=cases,
+                cross_regulation=snapshot.get('cross_regulation'))
 
 
 def calculate(spec: dict[str, Any], *, analysis: Analysis = 'selected', include_loop: bool = True,

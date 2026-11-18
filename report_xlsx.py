@@ -10,6 +10,9 @@ import re
 
 from xlsx_report_writer import (Sheet, WIDTHS, SIDE_PX, fitted_height,
                                 numeric_text, number_format, save_workbook)
+from report_architecture import (acceptance_columns, acceptance_snapshot, block_pairs,
+                                 case_heading, missing_evidence_note, paired_table_data, report_cases, review_findings,
+                                 shared_report_images)
 
 
 MODULES = OrderedDict([
@@ -128,17 +131,35 @@ def _spans(count):
     return result
 
 
-def _write_block(sheet, row, offset, block, label):
+def _state_style(text):
+    if any(term in text for term in ('需复核','需整改','超限','超出限值','不满足','失败')):
+        return 10
+    if any(term in text for term in ('待','未计算','未评估','失效')):
+        return 8
+    if text in ('满足','通过','模型内满足') or '结论 满足' in text:
+        return 11
+    return None
+
+
+def _write_block(sheet, row, offset, block, label, columns=8):
     kind = block['kind']
     if kind == 'table':
         spans = _spans(len(block['rows'][0]))
         if len(block['rows'][0])==5 and block['rows'][0][1]=='直流范围 / V':
             spans=[1,2,2,1,2]
+        if columns==17:
+            spans=[2*span for span in spans]
+            spans[0]+=1
         for i, values in enumerate(block['rows']):
             col = offset
             for j, (text, span) in enumerate(zip(values, spans)):
                 value, fmt = (str(text), None) if i == 0 else numeric_text(text)
-                style = (2 if label == 'Vinmin' else 3) if i == 0 else (6 if i%2 else 0)
+                header = block['rows'][0][j]
+                style = (3 if label == 'Vinmax' or header == 'Vinmax' else 2) if i == 0 else (6 if i%2 else 0)
+                if i and (header.endswith('结论') or header in ('固定输入','Vinmin','Vinmax')):
+                    status = _state_style(str(text))
+                    if status is not None:
+                        style = status
                 sheet.span(row+i, col, span, value, style, fmt)
                 width = sum(WIDTHS[col:col+span])
                 height = fitted_height(text, width)
@@ -146,7 +167,9 @@ def _write_block(sheet, row, offset, block, label):
                 col += span
         return len(block['rows'])+1
     if kind == 'image':
-        blobs = block['images']; width = (SIDE_PX-12*(len(blobs)-1))/len(blobs)
+        blobs = block['images']
+        available = SIDE_PX*1.4 if columns==17 and block.get('topology') else SIDE_PX
+        width = (available-12*(len(blobs)-1))/len(blobs)
         height = max(sheet.image(row,offset,blob,label+' 工程图',width,index*(width+12))
                      for index, blob in enumerate(blobs))
         rows = math.ceil((height+12)/32)
@@ -154,52 +177,50 @@ def _write_block(sheet, row, offset, block, label):
         return rows
     text = block.get('text','')
     style = 4 if kind == 'caption' else 9 if kind == 'equation' else 7
-    sheet.span(row, offset, 8, text, style)
-    height = fitted_height(text, sum(WIDTHS[offset:offset+8]))
+    sheet.span(row, offset, columns, text, style)
+    height = fitted_height(text, sum(WIDTHS[offset:offset+columns]))
     sheet.heights[row] = max(sheet.heights.get(row,24),height)
     return 2
 
 
-def _block_pairs(left, right):
-    """Pair like content even when one endpoint lacks a table/plot/model."""
-    def keyed(blocks):
-        counters, out = {}, OrderedDict()
-        for block in blocks:
-            kind = block['kind']
-            key = (kind, tuple(block['rows'][0])) if kind == 'table' else (kind,)
-            counters[key] = counters.get(key,0)+1
-            out[key+(counters[key],)] = block
-        return out
-    a,b = keyed(left),keyed(right)
-    for key in dict.fromkeys([*a,*b]): yield a.get(key),b.get(key)
+def _shared_block(left, right):
+    if not left or not right:
+        return False
+    kind = left['kind']
+    if kind == 'image':
+        return shared_report_images(left, right)
+    if kind == 'table':
+        return left['rows'] == right['rows']
+    return left.get('text') == right.get('text')
 
 
 def _headers(sheet, cases, note):
     sheet.heights.update({1:12, 2:34, 3:36, 4:30})
-    sheet.span(2,0,17,sheet.name,1)
-    sheet.span(3,0,17,note,7)
+    sheet.span(2,0,sheet.column_count,sheet.name,1)
+    sheet.span(3,0,sheet.column_count,note,7)
     for offset, case in zip((0,9),cases):
-        text = case['id']+f"  输入 {case['voltage']:.8g} V"
+        text = case_heading(case, len(cases))
         if case.get('error') or not case.get('result'): text += '  计算不可用'
         sheet.span(4,offset,8,text,2 if offset == 0 else 3)
 
 
 def export_input_range_xlsx(path, range_result, *, compensation_state=None,
-                            mos_real_time=False, comparison=None, corners=None):
+                            mos_real_time=False, comparison=None, corners=None,
+                            tolerance_result=None):
     """Write an offline XLSX report; never change parameters or auto-tune.
 
-    Every worksheet compares independently calculated Vinmin and Vinmax data.
+    Worksheets display each distinct input operating point once.
     The workbook is a report snapshot, not a second implementation of the
     switching solver. Graphs and mathematical descriptions use the Word
     report's exact source. Numeric single quantities remain numeric in Excel.
     """
-    by_id = {case['id']:case for case in range_result.get('cases',[])}
-    if len(range_result.get('cases',[])) != 2 or set(by_id) != {'Vinmin','Vinmax'}:
-        raise ValueError('输入范围报告必须包含 Vinmin 与 Vinmax 两个具名工况')
-    cases = [by_id[key] for key in ('Vinmin','Vinmax')]
+    cases = report_cases(range_result)
+    endpoints = range_result['cases']
+    single = len(cases) == 1
+    column_count = 8 if single else 17
     from docx import Document
-    from report_docx import export_design_docx, _chart
-    from input_range_report import _metrics, METRICS, _worse, _draw_comparison
+    from report_docx import export_design_docx
+    from input_range_report import _metrics, METRICS, _worse
     content, details = [], []
     for case in cases:
         if case.get('error') or not case.get('result'):
@@ -210,50 +231,73 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
             corners=case.get('corners') or (corners if case['id']=='Vinmin' else None),
             comparison=comparison if case['id']=='Vinmin' else None,
             mos_real_time=mos_real_time,efficiency_curve=case.get('efficiency_curve'),
-            compensation_state=compensation_state,document=doc,save=False))
+            compensation_state=compensation_state,document=doc,save=False,include_conclusion=False))
         content.append(_capture_document(doc))
         del doc
     fixed = bool(range_result.get('fixed_hardware',range_result.get('hardware')))
-    common = '导出时的计算快照，修改单元格不会重算模型。左侧 Vinmin，右侧 Vinmax。'
-    common += '磁件与绕组按 Vinmin 固定，补偿不单独整定。' if fixed else '未固定有效磁件，报告不完整。'
-    if cases[0]['voltage'] == cases[1]['voltage']:
-        from mos_manual import distinct_endpoints
-        common += '上下限相同，但手动 MOS 事件参数不同，分别核算。' if distinct_endpoints(range_result['base_spec']) else '上下限相同，两端结果一致。'
-    if len(details) != 2: common += '存在失败工况，不以另一端点替代。'
-    # Acceptance consumes the same completed snapshot as Word; it neither
-    # launches simulations nor treats missing measurements as zero.
-    from report_architecture import acceptance_snapshot, acceptance_rows
+    common = '固定输入，列出一次计算结果。' if single else '左侧 Vinmin，右侧 Vinmax。'
+    common += '磁件待核对。' if not fixed else '' if single else '两端采用同一套磁件与补偿。'
+    if not single and cases[0]['voltage'] == cases[1]['voltage'] and len(details) == 2:
+        common += '输入电压相同，各工况结果分别列出。'
     acceptance=acceptance_snapshot(range_result['base_spec'],range_result)
-    acceptance_sheet=Sheet('00 工程验收')
+    evidence_labels, evidence_rows = acceptance_columns(acceptance, range_result)
+    evidence_width = 8 if len(evidence_labels) == 1 else 17
+    acceptance_sheet=Sheet('00 工程验收', column_count=evidence_width)
     _headers(acceptance_sheet,cases,common)
     summary=acceptance.get('summary') or {}
-    acceptance_sheet.span(5,0,17,'当前结论：'+str(summary.get('label','待评估'))+
-        '；仅覆盖已配置目标和证据来源，不等同整机认证。'+
-        '；'.join(case['id']+' 计算失败：'+str(case.get('error') or '无结果')
-                  for case in cases if case.get('error') or not case.get('result')),7)
-    acceptance_sheet.heights[5]=36
-    rows=acceptance_rows(acceptance)
-    used=0
-    for side in (0,1):
-        used=max(used,_write_block(acceptance_sheet,7,side*9,dict(kind='table',
-            rows=[['验收指标','需求阈值','证据与结论'],
-                  *[[row[0],row[1],row[2+side]] for row in rows]]),cases[side]['id']))
-    row=8+used
+    findings, pending = review_findings(cases)
+    failure_lines = [case['id']+' 求解失败 '+str(case.get('error') or '无结果')
+                     for case in endpoints if case.get('error') or not case.get('result')]
+    conclusion = [f"工程验收 {summary.get('label','待评估')}",
+                  f"重点复核 {len(findings)} 项，待补数据 {pending} 项", *failure_lines]
+    missing = missing_evidence_note(acceptance)
+    if missing:
+        conclusion.append(missing)
+    cross = range_result.get('cross_regulation') or {}
+    if cross.get('supported') and not cross.get('complete'):
+        conclusion.append('交叉调整率部分角点待核对。')
+    summary_style = 10 if findings or failure_lines or summary.get('state')=='review' else 11 if summary.get('state')=='pass' else 8
+    summary_text = '\n'.join(conclusion)
+    acceptance_sheet.span(5,0,evidence_width,summary_text,summary_style)
+    acceptance_sheet.heights[5]=fitted_height(summary_text,sum(WIDTHS[:evidence_width]))
+    row=7
+    if findings:
+        row += _write_block(acceptance_sheet,row,0,dict(kind='table',
+            rows=[['优先复核','当前值与要求'],*findings[:5]]),'共同',evidence_width)
+    if evidence_rows:
+        row += _write_block(acceptance_sheet,row,0,dict(kind='table',
+            rows=[['验收指标','需求阈值',*evidence_labels],*evidence_rows]),'共同',evidence_width)
     for note in acceptance.get('evidence_notes') or []:
-        acceptance_sheet.span(row,0,17,str(note),7)
-        acceptance_sheet.heights[row]=max(30,fitted_height(note,sum(WIDTHS)))
+        acceptance_sheet.span(row,0,evidence_width,str(note),7)
+        acceptance_sheet.heights[row]=max(30,fitted_height(note,sum(WIDTHS[:evidence_width])))
         row+=2
     sheets = [acceptance_sheet]
+    if tolerance_result is not None:
+        from tolerance_report import TITLE, report_sections, result_summary, result_notes
+
+        sheet = Sheet(TITLE, column_count=17)
+        notes = result_notes(tolerance_result)
+        _headers(sheet, cases, result_summary(tolerance_result))
+        row = 6
+        for note in notes:
+            row += _write_block(sheet, row, 0, dict(kind='note', text=note), '共同', 17)
+        for title, headers, data, _ in report_sections(tolerance_result):
+            sheet.span(row, 0, 17, title, 4)
+            row += 2
+            row += _write_block(sheet, row, 0, dict(kind='table', rows=[headers, *data]), '共同', 17)
+        sheets.append(sheet)
     for module, name in MODULES.items():
-        left,right = content[0][module],content[1][module]
+        left = content[0][module]
+        right = {} if single else content[1][module]
         if module != 'overview' and not left and not right: continue
-        sheet = Sheet(name); _headers(sheet,cases,common)
+        sheet = Sheet(name, column_count=column_count)
+        _headers(sheet,cases,common)
         row, page_start = 6, 6
         if module == 'overview':
             metrics = [_metrics(case) for case in cases]
             for index, (key,label,unit,scale,direction) in enumerate(METRICS):
                 vals = [m.get(key) for m in metrics]
-                worse = _worse(vals[0], vals[1], direction)
+                worse = _worse(*vals, direction) if not single else ''
                 sheet.heights[row] = 30
                 for side, value in enumerate(vals):
                     offset = side*9
@@ -264,40 +308,29 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
                     sheet.span(row,offset+4,2,numeric,6 if index%2 else 0,fmt if valid else None)
                     sheet.span(row,offset+6,2,'较不利端' if worse == cases[side]['id'] else worse if worse in ('两端相同','未完整计算') else '',7)
                 row += 1
-            sheet.span(row+1,0,17,'较不利端仅比较这两个输入端点，不代表全输入区间、所有负载或温度容差已经通过。',7)
-            sheet.heights[row+1]=30; row+=3
-            from mos_four_cases import event_rows
-            if any((c.get('result') or {}).get('semi',{}).get('switch',{}).get('gate') for c in cases):
-                sheet.span(row,0,17,'MOS 四开关事件的电压与电荷',4);row+=2
-                used=0
-                for side,case in enumerate(cases):
-                    rows=event_rows(dict(cases=[case]))
-                    header=['事件','Id / A','Vgp / V','Qgs / nC','Qgd / nC','Qg(th) / nC','总Qg / nC']
-                    values=[[r[1]]+[f'{v*(1e9 if i>=4 else 1):.6g}' if isinstance(v,(int,float)) else v for i,v in enumerate(r[2:],2)] for r in rows]
-                    used=max(used,_write_block(sheet,row,side*9,dict(kind='table',rows=[header,*values]),case['id']))
-                row+=used
-                sheet.span(row,0,17,'Qgs 为到平台电荷，Qgd 为平台段电荷差。复用同一 Vgs–Qg 参考曲线时，Qgd / Qg(th) / 总 Qg 可能相同；不强制改出四个不同数值。',7)
-                sheet.heights[row]=38;row+=3
-            if details:
-                blob = _chart((14.2,5.2),lambda fig:_draw_comparison(fig,cases))
-                height=sheet.image(row,0,blob,'双端点同轴对比',SIDE_PX*2+26)
-                used=math.ceil((height+12)/32)
-                for r in range(row,row+used): sheet.heights[r]=24
-                row+=used+2
+            row += 2
         for title in dict.fromkeys([*left,*right]):
             # Keep corresponding subsection starts at identical vertical rows.
             if sum(sheet.heights.get(r,24) for r in range(page_start,row)) > 520:
                 sheet.breaks.append(row); page_start=row
-            for side in (0,1): sheet.span(row,side*9,8,title,4)
+            sheet.span(row,0,column_count,title,4)
             sheet.heights[row]=30; row+=2
-            for a,b in _block_pairs(left.get(title,[]),right.get(title,[])):
+            for a,b in block_pairs(left.get(title,[]),right.get(title,[])):
+                if single or _shared_block(a,b):
+                    block = a or b
+                    # The topology caption and drawing describe the shared circuit.
+                    if block['kind']=='image' and title.startswith('0 '):
+                        block = dict(block, topology=True)
+                    row += _write_block(sheet,row,0,block,'固定输入' if single else '共同',column_count)
+                    continue
+                if a and b and a['kind']=='table' and a['rows'][0][0]=='位号 / 检查项':
+                    headers, rows = paired_table_data(a['rows'][0],a['rows'][1:],b['rows'][1:])
+                    row += _write_block(sheet,row,0,dict(kind='table',rows=[headers,*rows]),'共同',column_count)
+                    continue
                 used=0
                 for side, block in enumerate((a,b)):
                     if block:
                         used=max(used,_write_block(sheet,row,side*9,block,cases[side]['id']))
-                    elif cases[side].get('error') or not cases[side].get('result'):
-                        # One unmistakable failure note per section, not fake 0s.
-                        pass
                 row+=used
         for side,case in enumerate(cases):
             if case.get('error') or not case.get('result'):
@@ -305,10 +338,11 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
                 sheet.heights[5]=max(sheet.heights.get(5,24),fitted_height(str(case.get('error','')),100))
         sheets.append(sheet)
     save_workbook(path,sheets)
-    failed=[case['id'] for case in cases if case.get('error') or not case.get('result')]
+    failed=[case['id'] for case in endpoints if case.get('error') or not case.get('result')]
     cross = range_result.get('cross_regulation')
     cross_incomplete = bool(cross and cross.get('supported') and not cross.get('complete'))
     return dict(path=str(path),case_count=2,successful_cases=2-len(failed),failed_cases=failed,
+                displayed_case_count=len(cases),
                 incomplete=bool(failed) or not fixed or cross_incomplete,hardware_fixed=fixed,
                 cross_regulation_complete=cross.get('complete') if cross else None,
                 acceptance_summary=acceptance.get('summary'),

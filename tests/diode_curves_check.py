@@ -157,7 +157,8 @@ class DiodeUIChecks(unittest.TestCase):
         a._folded_sections.clear();a._filter_params();self.root.update()
         self.assertEqual(set(a._curve_tree.get_children()),{'Q1:transfer','Q1:charge','D1','D_IN','D_OUT'})
         a._curve_tree.selection_set('D_OUT');a._curve_selection_note()
-        self.assertIn('D_OUT',a._curve_detail.get());self.assertIn('X=Vf',a._curve_detail.get())
+        self.assertIn('D_OUT',a._curve_detail.get())
+        self.assertIn('X=Vf',a._curve_data_note(a._selected_curve_row(),a._curve_context()))
         for k in ('Rd_diode','Rd_din','Rd_dout'):
             self.assertFalse(a._param_widgets[k][0].grid_info())
             self.assertFalse(a._scalar_parameter_active(k))
@@ -167,10 +168,12 @@ class DiodeUIChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             path=Path(directory)/'我的二极管.json';path.write_text('[[0.5,0.1],[0.8,2.0]]',encoding='utf-8')
             with patch('diode_curve_ui.filedialog.askopenfilename',return_value=str(path)),patch('simple_curve_ui.import_simple',return_value=curve('已确认曲线')) as dialog:
-                a._import_diode_curve()
+                a._import_diode_curve('D_OUT')
             self.assertEqual(set(a._diode_curves),{'D_OUT'})
+            from device_curve_sources import source_for
+            self.assertEqual(source_for(a.get_params(),'D_OUT'),'fixed')
             self.assertIn('D_OUT',dialog.call_args.kwargs['target'])
-            with patch('diode_curve_ui.filedialog.askopenfilename',return_value=str(path)),patch('simple_curve_ui.import_simple',return_value=None):a._import_diode_curve()
+            with patch('diode_curve_ui.filedialog.askopenfilename',return_value=str(path)),patch('simple_curve_ui.import_simple',return_value=None):a._import_diode_curve('D_OUT')
             self.assertEqual(a._diode_curves['D_OUT']['name'],'已确认曲线')
 
 

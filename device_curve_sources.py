@@ -77,7 +77,7 @@ def validate_requests(p):
                if source_for(p, row['target']) == 'curve' and not curve_for(p, row['target'])]
     if missing:
         raise ValueError('已选择曲线计算，但以下项目待导入：' + '；'.join(missing) +
-                         '。请在左栏“器件计算方式与曲线”导入，或明确将该项改为固定值。')
+                         '。请在对应器件树导入曲线，或在“器件模型精度选择”将该项改为固定参数。')
 
 
 def effective_sources(p):

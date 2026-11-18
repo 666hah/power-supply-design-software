@@ -189,7 +189,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         from inductor_selection import DESIGN_FIELDS, FIELDS
         if self._purchased_inductor() and key in DESIGN_FIELDS:return False
         if not self._purchased_inductor() and key in FIELDS:return False
-        if key == 'MLT' and not self._standard_mlt_active():return False
+        if key == 'MLT':return False
         topo, mode = self._presentation_context()
         spec = META[key]
         if key == 'gfs' and self._mos_resolved_mode() != 'gfs':return False
@@ -222,7 +222,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         self._param_search_terms = {}
         self._cap_editors={}
         self._cap_bank_active={'input':False,'output':False}
-        self._build_param_filters(parent)
+        self._build_param_filters(self._param_filter_host)
         by_key = {key: (label, units) for key, label, units, _section in specifications}
         # Optional switches must exist before any summaries or filters run.
         from power_stage import DEFAULT_PARAMS
@@ -236,7 +236,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
             summary = tk.StringVar()
             self._param_summary_vars[section] = summary
             label = ttk.Label(frame._section_container, textvariable=summary, style='Muted.TLabel',
-                              wraplength=350, padding=(6, 0, 6, 4), justify='left')
+                              wraplength=350, padding=(9, 4, 9, 7), justify='left')
             label.pack(fill='x', before=frame)
             frame._section_summary = label
             row = 0
@@ -251,8 +251,8 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
             if section == 'device':
                 row = self._build_manual_events(frame, row)
             for title, keys in GROUPS[section]:
-                group_label = ttk.Label(frame, text=title, style='TLabelframe.Label', padding=(2, 6, 2, 3))
-                group_label.grid(row=row, column=0, columnspan=4, sticky='ew')
+                group_label = ttk.Label(frame, text=title, style='WorkspaceGroup.TLabel', padding=(6, 4))
+                group_label.grid(row=row, column=0, columnspan=4, sticky='ew', pady=(6, 2))
                 self._param_subgroups.append((frame, group_label, keys))
                 row += 1
                 for key in keys:
@@ -275,15 +275,24 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
                     self._param_row(frame, row, key, label_text, units)
                     self._param_group_keys[section].append(key)
                     row += 1
+                if title.startswith('Q1 ·'):
+                    row = self._build_device_curve_data_button(frame, row, 'Q1 曲线数据…', 'mos')
+                elif title.startswith('D1 ·'):
+                    row = self._build_device_curve_data_button(frame, row, '整流与续流曲线数据…', 'rectifier')
+                elif 'Vf_din' in keys:
+                    row = self._build_device_curve_data_button(frame, row, '输入防反曲线数据…', 'input')
+                elif 'Vf_dout' in keys:
+                    row = self._build_device_curve_data_button(frame, row, '输出防反曲线数据…', 'output')
             if section == 'capacitors':
                 from capacitor_ui import BankEditor
                 from capacitor_banks import bank
                 for side,label in (('input','输入并联电容组'),('output','输出并联电容组')):
                     holder=ttk.LabelFrame(frame,text=label)
                     holder.grid(row=row,column=0,columnspan=4,sticky='ew',pady=5)
-                    editor=BankEditor(holder,bank(DEFAULT_PARAMS,side),lambda s=side:self._capacitor_bank_changed(s))
+                    editor=BankEditor(holder,bank(DEFAULT_PARAMS,side),lambda s=side:self._capacitor_bank_changed(s),
+                                      rail=None if side=='input' else 0)
                     editor.pack(fill='x',padx=3,pady=3);self._cap_editors[side]=editor
-                    self._register_param_extra(frame,[holder],text=label+' C ESR ESL 电容数量 capacitors',
+                    self._register_param_extra(frame,[holder],text=label+' C ESR ESL 电容数量 阻抗曲线 热阻 capacitors',
                         predicate=(lambda:self._multiple_active()==False) if side=='output' else None)
                     row+=1
             if section == 'stage':
@@ -295,7 +304,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
                 row+=1
             if section == 'device':
                 self.mos_gate_readout = tk.StringVar(value='当前 MOS 平台：待计算')
-                note = ttk.Label(frame, text='导入、切换来源与四工况核算已集中到上方“器件计算方式与曲线”。曲线模式仍需填写 Rds(on)、Coss、Vth、内部栅阻及驱动参数。',
+                note = ttk.Label(frame, text='曲线模型仍需填写 Rds(on)、Coss、Vth、内部栅阻和驱动参数。',
                                  style='Muted.TLabel', wraplength=350, justify='left')
                 reading = ttk.Label(frame, textvariable=self.mos_gate_readout, style='Muted.TLabel', wraplength=350, justify='left')
                 note.grid(row=row, column=0, columnspan=4, sticky='ew', pady=4)
@@ -336,24 +345,28 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         if spec.required:
             label += ' *'
         lab = ttk.Label(parent, text=label, style='Param.TLabel', wraplength=170, justify='left')
-        lab.grid(row=row, column=0, sticky='w', padx=(2, 6), pady=3)
+        lab.grid(row=row, column=0, sticky='w', padx=(3, 9), pady=3)
         self.param_labels.append(lab)
         parent.columnconfigure(0, weight=1)
         display = tk.StringVar()
         self._param_display_vars[key] = display
-        entry = ttk.Entry(parent, textvariable=display, width=8)
-        entry.grid(row=row, column=1, sticky='ew', padx=2, pady=3)
+        if key == 'buck_phases':
+            entry = ttk.Combobox(parent, textvariable=display, values=tuple(range(1, 17)),
+                                 state='readonly', width=8)
+        else:
+            entry = ttk.Entry(parent, textvariable=display, width=8)
+        entry.grid(row=row, column=1, sticky='ew', padx=(0, 6), pady=3)
         widgets = [lab, entry]
         shown = tk.StringVar()
         self._param_unit_vars[key] = shown
         if len(units) > 1:
             combo = ttk.Combobox(parent, textvariable=shown, values=list(self._param_unit_choices(key)), width=7, state='readonly')
-            combo.grid(row=row, column=2, padx=(2, 4), pady=3)
+            combo.grid(row=row, column=2, sticky='ew', padx=(0, 5), pady=3)
             combo.bind('<<ComboboxSelected>>', lambda _event, k=key: self._change_param_unit(k))
             widgets.append(combo)
         else:
             unit_label = ttk.Label(parent, textvariable=shown, style='Muted.TLabel', wraplength=78, justify='left')
-            unit_label.grid(row=row, column=2, sticky='w', padx=4)
+            unit_label.grid(row=row, column=2, sticky='w', padx=(4, 5))
             widgets.append(unit_label)
         density = key in ('d_wire_p', 'n_strand_p', 'd_wire_s', 'n_strand_s','parallel_wires_p','parallel_wires_s')
         side = ttk.Frame(parent) if density else parent
@@ -388,6 +401,26 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         Tooltip(entry, note)
         self._sync_param_field(key)
 
+    def _resize_parameter_fields(self, content_width):
+        signature = (content_width, self._font_k)
+        if signature == getattr(self, '_parameter_wrap_signature', None):
+            return
+        self._parameter_wrap_signature = signature
+        label_widths = {}
+        for frame in self._param_sections.values():
+            columns = [0, 0, 0, 0]
+            for child in frame.grid_slaves():
+                info = child.grid_info()
+                col = int(info.get('column', 0))
+                if 0 < col < len(columns) and int(info.get('columnspan', 1)) == 1:
+                    columns[col] = max(columns[col], child.winfo_reqwidth() + 10)
+            label_widths[frame] = max(55, content_width - 28 - sum(columns[1:]))
+            frame._section_summary.configure(wraplength=max(1, content_width - 26))
+        for label in self.param_labels:
+            label_width = label_widths.get(label.master)
+            if label_width is not None and int(float(label.cget('wraplength'))) != label_width:
+                label.configure(wraplength=label_width)
+
     def _register_param_extra(self, frame, widgets, keys=(), text='', predicate=None):
         self._param_extras.append((frame, widgets, tuple(keys), text, predicate))
 
@@ -408,6 +441,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
                                  ('\n本工况含端点趋势外推，请结合规格书/实测校核。' if gate.get('extrapolations') or gate.get('charge_extrapolations') else ''))
 
     def _build_scheme_rows(self, frame, row, topology_labels, control_labels):
+        self._control_labels = control_labels
         for name, var, values, attr in (
                 ('拓扑', self.params['topology'], list(topology_labels.values()), 'topo_combo'),
                 ('控制模式', self.params['control_mode'], list(control_labels.values()), 'ctrl_combo')):
@@ -514,13 +548,18 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
                 self._custom_core_editors[key]=editor
                 visible_core=(lambda:is_custom(self.params['core_choice'].get())) if key=='custom_core' else (
                     lambda:self._topo_key()=='ACF-FORWARD' and not self._multiple_active() and is_custom(self.params['core_choice_L'].get()))
-                self._register_param_extra(frame,[editor.frame],text=key+' 自定义 非标准 磁芯 Ae Ve Wa MLT 尺寸 mm cm',
+                self._register_param_extra(frame,[editor.frame],text=key+' 自定义 非标准 磁芯 Ae Ve Wa 尺寸 mm cm',
                     predicate=lambda original=visible_core:not self._purchased_inductor() and original())
                 var.trace_add('write',self._custom_core_context_changed)
                 row+=1
         return row
 
     def _build_feedback_rows(self, frame, row):
+        cot_button=ttk.Button(frame,text='COT 控制、均流、保护与验收…',command=self._open_cot_settings)
+        cot_button.grid(row=row,column=0,columnspan=4,sticky='ew',pady=5)
+        self._register_param_extra(frame,[cot_button],text='COT 均流 限流 死区 动态 逐相 容差 验收',
+                                   predicate=self._cot_active)
+        row+=1
         label = ttk.Label(frame, text='补偿类型', style='Param.TLabel')
         label.grid(row=row, column=0, sticky='w', pady=3)
         self._param_controller_display = tk.StringVar(value=self.params['controller_type'].get())
@@ -528,7 +567,8 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         combo.bind('<<ComboboxSelected>>', lambda _e: self.params['controller_type'].set(self._param_controller_display.get()))
         self._param_controller_combo = combo
         combo.grid(row=row, column=1, columnspan=3, sticky='ew')
-        self._register_param_extra(frame, [label, combo], text='补偿类型 controller_type 二型 三型')
+        self._register_param_extra(frame, [label, combo], text='补偿类型 controller_type 二型 三型',
+                                  predicate=lambda: not self._cot_active())
         row += 1
         row = self._add_param_link(frame, row, '自动整定在环路页；SSR 保留五项零极点。MP6005 使用下方物理 COMP 参数。', '查看环路 / 自动整定', 'tab_loop')
         return row
@@ -539,6 +579,8 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         button = ttk.Button(frame, text=caption, command=lambda: self._open_parameter_tab(tab))
         button.grid(row=row+1, column=0, columnspan=4, sticky='ew', pady=(0, 3))
         predicate = (lambda: self._topo_key() in topologies) if topologies else None
+        if tab == 'tab_loop':
+            predicate = lambda: not self._cot_active() and (not topologies or self._topo_key() in topologies)
         self._register_param_extra(frame, [label, button], text=text+' '+caption, predicate=predicate)
         return row + 2
 
@@ -569,21 +611,30 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         for key in self._param_widgets:
             self._sync_param_field(key)
         topo, mode = self._presentation_context()
-        label = '励磁电感 Lm' if topo in ('FLYBACK', 'QR-FLYBACK') else '输出滤波电感 Lout' if topo == 'ACF-FORWARD' else '功率电感 L'
+        cot = self._cot_active()
+        phases = self._buck_phase_count() if topo == 'BUCK' else None
+        label = ('每相功率电感 Lφ' if cot else '励磁电感 Lm' if topo in ('FLYBACK', 'QR-FLYBACK')
+                 else '输出滤波电感 Lout' if topo == 'ACF-FORWARD' else '功率电感 L')
         if topo=='FLYBACK' and hasattr(self,'coupling_enabled') and self.coupling_enabled.get() and self._effective_feedback_mode()=='SSR':
             label = '原边自感 Lp（开路测量）'
         self._param_widgets['L'][0].configure(text=label+' *')
-        self._param_widgets['f_sw'][0].configure(text='频率上限 fmax *' if topo == 'QR-FLYBACK' else '开关频率 fsw *')
+        self._param_widgets['f_sw'][0].configure(text=('每相目标频率 fsw *' if cot else
+            '频率上限 fmax *' if topo == 'QR-FLYBACK' else '开关频率 fsw *'))
         self._param_widgets['N'][0].configure(text='原副边匝比 Np/Ns(OUT1) *' if self._multiple_active() else '原副边匝比 Np/Ns *')
         for _frame, header, keys in self._param_subgroups:
             if keys == ('Vf_diode', 'Rd_diode', 'Qrr'):
                 header.configure(text='D1 / D2 · 固定 Vf/Qrr 共用，曲线独立' if topo == 'ACF-FORWARD' else 'D1 · 输出整流器')
+            elif keys == ('Rds_aux', 'Qg_aux', 'Coss_aux'):
+                header.configure(text='Q2 · 每相同步低侧 MOS' if cot else 'Q2 · 钳位 MOS')
         self._param_widgets['A_sense'][1].configure(state='readonly' if self._psr_active() else 'normal')
         multiple = topo in ISOLATED and self.multi_enabled.get()
         for key in ('V_out', 'P_out'):
             self._param_widgets[key][1].configure(state='readonly' if multiple else 'normal')
         self._param_mode_display.set('Peak Current Mode (峰值电流模式)' if self._psr_active() else self.params['control_mode'].get())
-        self.ctrl_combo.configure(state='disabled' if self._psr_active() else 'readonly')
+        modes = (tuple(self._control_labels.values()) if topo == 'BUCK' else
+                 tuple(label for key, label in self._control_labels.items() if key != 'Constant On-Time'))
+        self.ctrl_combo.configure(values=modes,
+            state='disabled' if self._psr_active() or (phases is not None and phases > 1) else 'readonly')
         self._param_controller_display.set('type2 (MP6005)' if self._psr_active() else self.params['controller_type'].get())
         self._param_controller_combo.configure(state='disabled' if self._psr_active() else 'readonly')
         self.inductor_core_combo.configure(state='disabled' if multiple and topo == 'ACF-FORWARD' else 'readonly')
@@ -595,6 +646,7 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
     def _capacitor_bank_changed(self,side):
         self._cap_bank_active[side]=True
         if not self._building:
+            self._cap_model_picker.refresh()
             self._refresh_param_summaries()
             self.schedule_update()
 
@@ -620,35 +672,39 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
             except (ValueError, KeyError, tk.TclError):
                 return '待填写'
         topo, mode = self._presentation_context()
+        cot = self._cot_active()
         case = 'max' if self.params['input_voltage_case'].get() == 'max' else 'min'
         if hasattr(self, '_input_case_display'):
             self._input_case_display.set('Vin max · 输入上限' if case == 'max' else 'Vin min · 输入下限')
         range_text = val('V_in_min', 'V')+'–'+val('V_in_max', 'V')
-        state = '当前' if self._snapshot_valid else '待计算'
-        self.input_case_note.set(f"{state}：Vin {case} = {val('V_in', 'V')}  ·  输入范围 {range_text}")
+        state = '' if self._snapshot_valid else ' · 待计算'
+        input_span = '' if val('V_in_min') == val('V_in_max') else f' · {range_text}'
+        self.input_case_note.set(f"Vin {case} {val('V_in', 'V')}{input_span}{state}")
         multiple = topo in ISOLATED and self.multi_enabled.get()
         if multiple:
             demand = f'{range_text} · {len(self.output_config)} 路输出'
             self.single_output_note.set('多输出已启用：各路需求、整流器、电容和副边绕组在本侧栏对应分组编辑。')
         else:
             demand = range_text+' → '+val('V_out', 'V')+' · '+val('P_out', 'W')
-            self.single_output_note.set('单路输出；可在下方启用最多6路绕组输出。' if topo in ISOLATED else '非隔离单输出；已隐藏变压器、多绕组和钳位参数。')
+            self.single_output_note.set('各相并到同一输出。功率和电容组按整机填写，电感、频率和 MOS 参数按每相填写。' if cot else
+                '单路输出；可在下方启用最多6路绕组输出。' if topo in ISOLATED else '非隔离单输出。')
         try:
             eta = display_number(self.get_param('eta_guess') * 100)+'%'
         except (ValueError, tk.TclError):
             eta = '待填写'
         summaries = {
             'spec': demand+' · 预设效率 '+eta+(' · MP6005 PWM固定250kHz，轻载另核算' if self._psr_active() else ''),
-            'stage': ('励磁' if topo in ('FLYBACK', 'QR-FLYBACK') else '输出电感')+' · '+('有源钳位' if topo == 'ACF-FORWARD' else 'RCD' if topo in ('FLYBACK', 'QR-FLYBACK') else '非隔离功率级'),
+            'stage': val('buck_phases', ' 相')+' · 同步交错 / 每相电感' if cot else ('励磁' if topo in ('FLYBACK', 'QR-FLYBACK') else '输出电感')+' · '+('有源钳位' if topo == 'ACF-FORWARD' else 'RCD' if topo in ('FLYBACK', 'QR-FLYBACK') else '非隔离功率级'),
             'device': '预设 / 手工参数 · 栅极电荷法（*模型必需）',
             'capacitors': f"输入 {len(self._cap_editors['input'].values) if 'input' in self._cap_editors else 2} 颗 / "+('各路输出独立配置' if multiple else f"输出 {len(self._cap_editors['output'].values) if 'output' in self._cap_editors else 2} 颗电容")+' · 可增删',
             'drive': 'Vgs '+val('Vgs', 'V')+' · 开通/关断电阻分别配置',
-            'sense': ('MP6005：PCM，采样增益固定11' if self._psr_active() else '电压模式' if mode == 'Voltage Mode' else '峰值电流模式')+' · 采样电阻仍计损耗',
+            'sense': ('按每相采样电阻计算损耗' if cot else
+                ('MP6005：PCM，采样增益固定11' if self._psr_active() else '电压模式' if mode == 'Voltage Mode' else '峰值电流模式')+' · 采样电阻仍计损耗'),
             'mag': '外购成品电感 · 不设计磁芯 / 绕组 · L 仍参与计算' if self._purchased_inductor() else '材料 / 磁芯 → 绕组 → 温升；自动与手工分开',
-            'ctrl': (('PSR-MP6005' if self._psr_active() else 'SSR')+f' · OUT{self.feedback_output.get() if multiple else 1}' if topo in ISOLATED else '非隔离反馈')+' · '+('type2（MP6005）' if self._psr_active() else self._controller_key()),
+            'ctrl': 'COT 导通与交错时序' if cot else (('PSR-MP6005' if self._psr_active() else 'SSR')+f' · OUT{self.feedback_output.get() if multiple else 1}' if topo in ISOLATED else '非隔离反馈')+' · '+('type2（MP6005）' if self._psr_active() else self._controller_key()),
         }
         for section, text in summaries.items():
-            if section == 'ctrl' and 'fc_target' in self.params:
+            if section == 'ctrl' and 'fc_target' in self.params and not cot:
                 text += ' · 目标 fc '+val('fc_target', 'Hz')+' / PM '+val('pm_target', '°')
             missing = [key for key in self._param_group_keys.get(section, []) if META[key].required and self._scalar_parameter_active(key)
                        and not (key == 'Vgp_off' and self._mos_current_plateau_active()) and not self._mos_charge_parameter_hidden(key)
@@ -685,7 +741,6 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
             allowed = key not in DEPRECATED_RD and visible(key, topo, mode, True, flags)
             from capacitor_banks import FIELDS
             if key in FIELDS:allowed=False
-            if key=='MLT' and not self._standard_mlt_active():allowed=False
             if key == 'V_in':
                 allowed = False  # compatibility variable; range is the only editor
             if key == 'Vgp_off' and self._mos_current_plateau_active():
@@ -723,11 +778,18 @@ class ParameterPanelUI(DeviceCurveUI, CustomCoreUI):
         for section in SECTION_ORDER:
             frame = self._param_sections[section]
             has_content = bool(frame.grid_slaves())
-            frame.pack(fill='x') if has_content else frame.pack_forget()
-            frame._section_header.configure(text=('▼ ' if has_content else '▶ ')+frame._section_title)
+            if has_content:
+                frame.pack(fill='x')
+                frame._section_summary.pack(fill='x', before=frame)
+            else:
+                frame.pack_forget()
+                frame._section_summary.pack_forget()
+            frame._section_header.configure(text=('▼ ' if has_content else '▶ ')+frame._section_title,
+                                            padding=(9, 6 if has_content else 4))
             frame._section_container.pack_forget()
             if not search or has_content:
-                frame._section_container.pack(fill='x', pady=3)
+                frame._section_container.pack(fill='x', pady=(0, 9 if has_content else 4))
+        self._parameter_wrap_signature = None
         pending = getattr(self, '_param_layout_job', None)
         if pending is not None:
             self.root.after_cancel(pending)

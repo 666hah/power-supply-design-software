@@ -11,6 +11,16 @@ def _number(value, scale=1.):
     return f'{float(value)*scale:.5g}'
 
 
+def transformer_length_rows(transformer):
+    """Pair the electrical snapshot's winding lengths with the same DCRs."""
+    geometry = transformer.get('winding_lengths') or {}
+    resistances = {'P': transformer.get('R_dc_p'), 'OUT1': transformer.get('R_dc_s')}
+    resistances.update({f"OUT{wire['id']}": wire.get('R_dc') for wire in transformer.get('windings', ())})
+    if transformer.get('auxiliary'):
+        resistances['AUX'] = transformer['auxiliary'].get('R_dc')
+    return [(key, values, resistances.get(key)) for key, values in geometry.get('windings', {}).items()]
+
+
 def build_report(p, result):
     md = result.get('mag') or {}
     devices = []
@@ -93,10 +103,18 @@ def build_report(p, result):
                 row('几何 DCR', resistance, 'mΩ', 1e3), row('Rac / Rdc', ac),
             ])
 
+        length_rows = transformer_length_rows(d) if is_transformer else []
+        for winding, lengths, _ in length_rows:
+            section(title + ' / ' + winding + ' 线长', [
+                row('自动平均匝长 MLT', lengths['mlt_m'], 'mm', 1e3),
+                row('用于 DCR 的等效线长', lengths['length_m'], 'mm', 1e3),
+                row('已建模引线长度', lengths.get('lead_length_m'), 'mm', 1e3),
+            ], lengths.get('source', ''))
+
         section(title + ' / 损耗与温升', [
             row('峰值磁密 Bpk', d.get('B_pk'), 'mT', 1e3), row('磁通摆幅 ΔB', d.get('dB'), 'mT', 1e3),
             row('裸铜窗口占比', d.get('fill'), '%', 100),
-            row('每匝平均长度 MLT', d.get('MLT'), 'mm', 1e3),
+            *([] if length_rows else [row('平均匝长 MLT', d.get('MLT'), 'mm', 1e3)]),
             row('磁芯损耗', d.get('P_core'), 'W'), row('绕组铜损', d.get('P_cu'), 'W'),
             row('磁件总损耗', d.get('P_total'), 'W'),
             row('至环境热阻 Ri-a', d.get('Rth_transformer'), 'K/W') if is_transformer else
@@ -104,7 +122,8 @@ def build_report(p, result):
             row('估算温升 ΔT', d.get('dT'), 'K'), row('温升评审上限', p['temp_rise_limit'], 'K'),
         ], f"MLT 来源：{d.get('MLT_source', '未提供')}。"
            + ('温升 = 总损耗 × 用户 Ri-a。' if is_transformer else '温升使用表面积与对流估算。')
-           + '裸铜占比未含绝缘和骨架公差，可绕制性另见绕制评估页。')
+           + '裸铜占比未含绝缘和骨架公差，可绕制性另见绕制评估页。'
+           + ''.join((d.get('winding_lengths') or {}).get('notes', ())))
         b, bsat, dt, limit = d['B_pk'], p['Bsat'], d['dT'], p['temp_rise_limit']
         conclusion(title, '磁饱和检查', 'success' if b < bsat else 'danger',
                    f"Bpk {_number(b, 1e3)} mT / Bsat {_number(bsat, 1e3)} mT")

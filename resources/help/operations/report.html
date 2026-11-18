@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>导出设计与系统报告 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>14  导出设计与系统报告</h1>
+<p>单元设计报告说明硬件、计算结果与工程判断。整机报告包同时保留供电架构、各单元报告和输入配置，便于从整机预算追溯到具体器件。</p>
+<p class='entry'>电源单元 → 导出报告 → 设计报告 · Word / Excel / Markdown，或回画布选择“生成系统报告包”</p>
+<h2>操作步骤</h2><ol>
+<li><strong>确认本次工程与评审内容</strong> 保存当前单元或画布版本。检查拓扑、共同硬件、输入边界以及工程验收证据。查看单元参数时可切换端点，导出按报告的工况范围生成。</li>
+<li><strong>选择单元报告格式</strong> 在右上角选择“设计报告 · Word / Excel / Markdown”。等待两端点准备完成，在保存对话框选格式和文件路径。Word 适合完整评审，Excel 适合按模块交换数据，Markdown 适合快速浏览摘要。</li>
+<li><strong>导出整机交付包</strong> 回到画布，按需核对系统是否要运行交叉调整率计算，然后“生成系统报告包”，保存 ZIP。查看底栏进度和完成的单元数。</li>
+<li><strong>核查交付缺口</strong> 先读结论，再查应力、磁件、环路、补偿和验收。整机 ZIP 先读 00 总览和 manifest.json，再按单元号找 Word、Excel 与配置。仿真证据按对应工程另行归档。</li>
+</ol>
+<figure><a href="screens/report.jpg" target="_blank" aria-label="查看原图 电源单元报告导出入口"><img src="screens/report.jpg" alt="电源单元报告导出入口"></a><figcaption>图 14-1　电源单元报告导出入口</figcaption><p>在右上角“导出报告”中区分设计报告、LTspice 对比与联合报告。系统报告包从画布顶部单独生成。</p></figure>
+<h2>输入字段</h2><div class="table"><table><caption>表 14-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">Word 工程报告</th><td>.docx</td><td>先列工程判断，再附共同硬件、拓扑、工况对比、图表、假设与追溯。相同输入和结果可合并显示。</td></tr>
+<tr><th scope="row">Excel 模块对照报告</th><td>.xlsx</td><td>以功率级、损耗、磁件、环路和验收等工作表组织，双端点保持固定对照顺序。</td></tr>
+<tr><th scope="row">Markdown 摘要</th><td>.md</td><td>便于查看单元计算的文字摘要或在版本记录中引用。</td></tr>
+<tr><th scope="row">系统报告包</th><td>.zip</td><td>含总览、预算、架构图、保存的系统与单元配置、各单元报告和生成状态清单。</td></tr>
+<tr><th scope="row">电路对比与联合报告</th><td>Word、ZIP / 运行目录</td><td>两类入口分别组织 LTspice 对比，或这一硬件的场解、矩阵回填、计算和电路仿真。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>报告关注同一配置和测量节点下的结果。先读关键结论和待复核项，再按 Vinmin、Vinmax 匹配模块表及波形。</p>
+<p>ZIP 的 manifest.json 逐单元记录完成、部分工况未完成或失败。需要补齐时回到相应单元检查输入并重导。</p>
+<p>异机查阅时同时保留与报告匹配的设计 JSON、必要的仿真工程和日志。看到结果页并不能替代核对证据状态。</p>
+<div class="paging"><a href="review.html">上一章　工程评审与验收</a></div></main>
+</body>
+</html>

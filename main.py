@@ -65,6 +65,7 @@ import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
+from project_identity import AUTHOR, GITHUB_LABEL, GITHUB_URL, add_github_menu_item, open_github
 import numpy as np
 class _LazyControl:
     """Import the (heavy) control package on first attribute access instead
@@ -94,18 +95,18 @@ from winding_ui import WindingUI
 # ----------------------------------------------------------------------------
 # Visual theme: modern flat palette + Segoe UI / Microsoft YaHei typography
 # ----------------------------------------------------------------------------
-BG = '#eef1f5'          # window background
-PANEL = '#f5f7fa'       # section panels
+BG = '#f1f5f9'          # window background
+PANEL = '#f8fafc'       # section panels
 CARD = '#ffffff'        # cards / trees / entries
-FG = '#22303c'          # primary text
-MUTED = '#5b6b7a'       # secondary text
-ACCENT = '#1558b0'      # brand blue
-ACCENT_DK = '#0d47a1'
+FG = '#102238'          # primary text
+MUTED = '#475569'       # secondary text
+ACCENT = '#1469d8'      # brand blue
+ACCENT_DK = '#134b9b'
 ACCENT_LT = '#2d7dd2'
-BORDER = '#c9d2dc'
-BTN = '#e4e9f0'
-BTN_ACTIVE = '#d3dce6'
-SEL = '#dbe7f6'         # selection
+BORDER = '#d5dfeb'
+BTN = '#ffffff'
+BTN_ACTIVE = '#eff6ff'
+SEL = '#dbeafe'         # selection
 FAM = 'Microsoft YaHei UI'
 OK = '#1a7f37'
 WARN = '#b54708'
@@ -144,7 +145,8 @@ def _font_scale_for(w, h):
 def _setup_style(root, k=1.0):
     """Configure ttk 'clam' theme, fonts and colours (k = font scale)."""
     style = ttk.Style(root)
-    style.theme_use('clam')
+    if style.theme_use() != 'clam':
+        style.theme_use('clam')
     _apply_fonts(style, k)
 
 
@@ -170,6 +172,17 @@ def _apply_fonts(style, k):
     style.configure('Param.TLabel', background=BG, foreground=FG,
                     font=(FAM, F(12)))
     style.configure('Margin.TLabel', background=BG, foreground=FG,
+                    font=(FAM, F(11), 'bold'))
+    style.configure('WorkspaceCard.TFrame', background=CARD, bordercolor=BORDER,
+                    lightcolor=BORDER, darkcolor=BORDER, borderwidth=1, relief='solid')
+    style.configure('WorkspaceToolbar.TFrame', background=CARD)
+    style.configure('WorkspaceHeading.TLabel', background=CARD, foreground=FG,
+                    font=(FAM, F(13), 'bold'))
+    style.configure('WorkspaceHint.TLabel', background=CARD, foreground=MUTED,
+                    font=(FAM, F(11)))
+    style.configure('WorkspaceSection.TLabel', background='#e6eef8', foreground=ACCENT_DK,
+                    font=(FAM, F(12), 'bold'))
+    style.configure('WorkspaceGroup.TLabel', background='#edf2f8', foreground=MUTED,
                     font=(FAM, F(11), 'bold'))
     style.configure('CurveMode.TRadiobutton', font=(FAM, F(12), 'bold'),
                     background=BG, foreground=ACCENT)
@@ -220,6 +233,10 @@ def _apply_fonts(style, k):
     style.map('Accent.TButton',
               background=[('active', ACCENT_DK), ('pressed', ACCENT_DK)],
               foreground=[('disabled', '#9db6d6')])
+    style.configure('LoopView.Toolbutton', padding=(8, 4), font=(FAM, F(11), 'bold'))
+    style.map('LoopView.Toolbutton',
+              background=[('selected', ACCENT), ('active', BTN_ACTIVE)],
+              foreground=[('selected', 'white')])
 
     # notebook
     style.configure('TNotebook', background=BG, borderwidth=0)
@@ -229,6 +246,13 @@ def _apply_fonts(style, k):
               background=[('selected', CARD)],
               foreground=[('selected', ACCENT)],
               borderwidth=[('selected', 0)])
+    style.configure('Workspace.TNotebook', background=BG, borderwidth=0, tabmargins=0)
+    style.layout('Workspace.TNotebook.Tab', [])
+    style.configure('WorkspaceNav.TButton', padding=(8, 5), font=(FAM, F(11), 'bold'))
+    style.map('WorkspaceNav.TButton',
+              background=[('selected', '#e1edff'), ('active', '#f0f6ff')],
+              bordercolor=[('selected', '#a8c9f6'), ('focus', ACCENT)],
+              foreground=[('disabled', MUTED), ('selected', ACCENT_DK)])
 
     # treeviews
     style.configure('Treeview', background=CARD, fieldbackground=CARD,
@@ -302,7 +326,7 @@ from plants import (BuckConverter, BoostConverter, BuckBoostConverter,
                     make_compensator, uses_dcm_peak_energy,
                     normalize_controller_type, resolve_controller_type)
 
-APP_VERSION = 'V0.0.0 · 20261108 QR多路交叉调整率'
+APP_VERSION = 'V0.0.0 · 20261118 单窗口工作台'
 
 
 def _subplots(nrows=1, ncols=1, figsize=(6.4, 4.8)):
@@ -335,49 +359,61 @@ def _loss_bars(ax, labels, values, title, colors=ACCENT):
 def build_markdown_report(p, op, wf, res):
     """Build a portable, human-readable snapshot of the current design."""
     stress = device_stress(op)
-    c_total = __import__('capacitor_banks').total(op)
     from design_checks import check_catalog, STATE_LABELS
-    checks = [(c['name'],fmt_eng(c['value'],c['unit']) if c['value'] is not None else '未定义',
-               STATE_LABELS[c['state']]) for c in check_catalog(p,res,res.get('loop'))]
+    from component_management import evaluate_components, stress_groups, STATUS as STRESS_STATUS
+    checks = check_catalog(p,res,res.get('loop'))
+    groups = stress_groups(evaluate_components(p,res))
+    cot = op.get('cot')
+    controller = ('恒定导通时间（COT）' if cot else
+                  CONTROLLER_NAMES[resolve_controller_type(p.get('controller_type','auto'), p['control_mode'])])
+    switch_label, current_label = ('每相开关频率', '每相电感') if cot else ('开关频率', '电感')
+    stress_checks = [row for group in groups for row in group['checks']]
+    pending = [c['name'] for c in checks if c['state'] == 'review']
+    pending += [c['ref']+' '+c['name'] for c in stress_checks if c['state'] == 'review']
+    missing = sum(c['state'] == 'undefined' for c in checks+stress_checks)
     lines = [
-        '# 开关电源设计报告', '',
-        f"> 由 Switching Power Supply Design & Loop Analyzer {APP_VERSION} 导出。", '',
-        '## 设计规格', '',
+        '### 关键结论', '',
+        f"**工作模式 {op['mode']}，计算效率 {res['eta']*100:.2f}%，输出纹波 {fmt_eng(wf['ripple_pp'],'V')}。**",
+        f"需复核 {len(pending)} 项，待补数据 {missing} 项。", '',
+        *['- '+name for name in pending], '',
+        '### 设计规格', '',
         '| 项目 | 数值 |', '|---|---:|',
         f"| 拓扑 | {op['topology']} |",
         f"| 控制模式 | {p['control_mode']} |",
-        f"| 控制器 | {CONTROLLER_NAMES[resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])]} |",
+        f"| 控制器 | {controller} |",
         f"| 输入电压 | {fmt_eng(op['V_in'], 'V')} |",
         f"| 输出电压 | {fmt_eng(op['V_out'], 'V')} |",
         f"| 输出功率 | {fmt_eng(p['P_out'], 'W')} |",
-        f"| 开关频率 | {fmt_eng(op['f_sw'], 'Hz')} |", '',
-        '## 关键结果', '',
+        f"| {switch_label} | {fmt_eng(op['f_sw'], 'Hz')} |", '',
+        '### 工作点', '',
         '| 项目 | 数值 |', '|---|---:|',
         f"| 占空比 D | {op['D']:.4f} |",
-        f"| 电感纹波 ΔI | {fmt_eng(op['dI_L'], 'A')} |",
-        f"| 峰值电流 | {fmt_eng(op['I_L_pk'], 'A')} |",
+        f"| {current_label}纹波 ΔI | {fmt_eng(op['dI_L'], 'A')} |",
+        f"| {current_label}峰值电流 | {fmt_eng(op['I_L_pk'], 'A')} |",
         f"| 输出纹波 | {fmt_eng(wf['ripple_pp'], 'V')} |",
         f"| 电容纹波电流 RMS | {fmt_eng(wf['i_c_rms'], 'A')} |",
         f"| 预设效率 | {op['eta_guess'] * 100:.2f}% |",
         f"| 最终计算效率 | {res['eta'] * 100:.2f}% |",
         f"| 预估 / 损耗反算输入功率 | {op['P_in_est']:.3f} / {res['P_in']:.3f} W |",
         f"| 总损耗 | {res['P_total']:.3f} W |", '',
-        '## 设计检查', '',
-        '| 检查项 | 当前值 | 结论 |', '|---|---:|---|',
+        '### 设计检查', '',
+        '| 检查项 | 当前值 | 限值或参考值 | 结论 |', '|---|---:|---:|---|',
     ]
-    lines.extend(f'| {name} | {value} | {state} |'
-                 for name, value, state in checks)
+    def fmt_check(value, unit):
+        return fmt_eng(value,unit) if value is not None else '—'
+    lines.extend(f"| {c['name']} | {fmt_check(c['value'],c['unit'])} | {fmt_check(c['limit'],c['unit'])} | {STATE_LABELS[c['state']]} |"
+                 for c in checks)
+    for group in groups:
+        lines += ['', '### '+group['title'], '',
+                  '| 位号 | 指标 | 应力 | 额定值 | 降额限值 | 结论 |',
+                  '|---|---|---:|---:|---:|---|']
+        for row in group['checks']:
+            values = [fmt_check(row[key],row['unit']) for key in ('value','rating','limit')]
+            lines.append('| '+' | '.join([row['ref'],row['name'],*values,STRESS_STATUS[row['state']]])+' |')
+        if group['kind']=='diode':
+            lines += ['', '寄生尖峰反压与外部反接反压待实测。']
     lines += [
-        '', '## 器件应力', '',
-        '| 器件 | 电压最大值 | 电流 RMS | 电流峰值 |',
-        '|---|---:|---:|---:|',
-        (f"| MOSFET | {fmt_eng(stress['switch']['V_max'], 'V')} | "
-         f"{fmt_eng(stress['switch']['I_rms'], 'A')} | "
-         f"{fmt_eng(stress['switch']['I_pk'], 'A')} |"),
-        (f"| 整流器件 | {fmt_eng(stress['diode']['V_max'], 'V')} | "
-         f"{fmt_eng(stress['diode']['I_rms'], 'A')} | "
-         f"{fmt_eng(stress['diode']['I_pk'], 'A')} |"),
-        '', '## 损耗分解', '',
+        '', '### 损耗分解', '',
         '| 类别 | 损耗 |', '|---|---:|',
         f"| 半导体 | {res['P_semi']:.3f} W |",
         f"| 磁件 | {res['P_mag']:.3f} W |",
@@ -386,14 +422,16 @@ def build_markdown_report(p, op, wf, res):
         f"| 采样电阻 | {res['P_sense']:.3f} W |",
         f"| RCD 钳位 | {res.get('P_rcd', 0.0):.3f} W |",
         f"| 有源钳位电容 ESR | {res.get('P_clamp', 0.0):.3f} W |",
-        '', '## 使用提示', '',
-        ('- 计算效率是模型估算值，不是实测上限保证；热态参数、辅助供电、PCB/连接器、EMI '
-         '滤波等附加损耗仍需通过样机验证。'),
-        '- 器件耐压、额定电流和电容纹波电流应保留足够降额裕量。',
-        '- 环路结果应结合实测 Bode 图与负载瞬态再次确认。', '',
+        '',
     ]
+    if cot:
+        lines.extend(['### 同步交错 Buck', '',
+                      f"{cot['phases']} 相共用一路输出，相邻相差 {cot['phase_shift_deg']:.4g}°。",
+                      f"每相 ton = {fmt_eng(cot['ton_s'], 's')}，toff = {fmt_eng(cot['toff_s'], 's')}。",
+                      f"电感汇流纹波 {fmt_eng(cot['total_output_current_ripple_A'], 'A')}pp，"
+                      f"交错重复频率 {fmt_eng(cot['ripple_frequency_Hz'], 'Hz')}。", '', cot['scope']])
     if op['topology'] == 'ACF-FORWARD':
-        lines += ['## 有源钳位正激', '', '| 项目 | 数值 |', '|---|---:|',
+        lines += ['### 有源钳位正激', '', '| 项目 | 数值 |', '|---|---:|',
                   f"| 输出滤波电感 L | {fmt_eng(op['L'],'H')} |",
                   f"| 变压器励磁电感 Lm | {fmt_eng(op['Lm_forward'],'H')} |",
                   f"| 低侧钳位电容 | {fmt_eng(op['C_clamp'],'F')} |",
@@ -442,6 +480,11 @@ PARAM_SPECS = [
     ('P_out', 'Output power P_out, W (输出功率)',       ['', 'm'], 'spec'),
     ('eta_guess', 'Preset efficiency η (预设效率, 0~1)', [], 'spec'),
     ('f_sw',  'Switching freq f_sw, Hz (开关频率)',     ['', 'k', 'M'], 'spec'),
+    ('buck_phases', 'Buck 并联相数（1–16；多相使用 COT）', [], 'spec'),
+    ('cot_ton_s', '每相导通时间。0 采用输入前馈，按目标每相频率设定。', ['n', 'u'], 'spec'),
+    ('cot_min_off_s', '每相最小关断时间（0 表示未指定限制）', ['n', 'u'], 'spec'),
+    ('cot_kp_hz', 'COT PI 比例增益 Kp', ['', 'k', 'M'], 'spec'),
+    ('cot_ki_hz_per_s', 'COT PI 积分增益 Ki', ['', 'k', 'M'], 'spec'),
     # power stage
     ('L',     'L, H (反激励磁 / 正激输出滤波电感)',     ['p', 'n', 'u', 'm'], 'stage'),
     ('Rs',    'Sense resistor Rs, Ohm (采样电阻)',      ['m', ''], 'stage'),
@@ -452,9 +495,9 @@ PARAM_SPECS = [
     ('C_clamp', '低侧钳位电容 C_clamp, F', ['n', 'u'], 'forward'),
     ('forward_d_max', '正激最大占空比 (0~1)', [], 'forward'),
     ('forward_dead_time', '正激驱动死区时间, s', ['n', 'u'], 'forward'),
-    ('Rds_aux', '钳位 MOSFET Rds(on), Ω', ['m', ''], 'forward'),
-    ('Qg_aux', '钳位 MOSFET Qg, C', ['n'], 'forward'),
-    ('Coss_aux', '钳位 MOSFET Coss, F', ['p', 'n'], 'forward'),
+    ('Rds_aux', '辅助 MOSFET Rds(on), Ω（同步 Buck 低侧或正激钳位）', ['m', ''], 'forward'),
+    ('Qg_aux', '辅助 MOSFET Qg, C（同步 Buck 低侧或正激钳位）', ['n'], 'forward'),
+    ('Coss_aux', '辅助 MOSFET Coss, F（同步 Buck 低侧或正激钳位）', ['p', 'n'], 'forward'),
     ('ESR_clamp', '钳位电容 ESR, Ω', ['m', ''], 'forward'),
     ('Vf',    'Vf, V (旧版兼容;效率模型不叠加)', ['', 'm'], 'stage'),
     ('ripple_target', 'Output ripple target, rel. (纹波目标)', [], 'stage'),
@@ -515,7 +558,7 @@ PARAM_SPECS = [
     ('k_core', 'Steinmetz k (磁损系数 k)',               [], 'mag'),
     ('a_core', 'Steinmetz alpha (磁损系数 α)',           [], 'mag'),
     ('b_core', 'Steinmetz beta (磁损系数 β)',            [], 'mag'),
-    ('MLT', 'Mean length per turn MLT, cm (每圈平均长度, 0=auto)', ['c', 'm'], 'mag'),
+    ('MLT', '旧版平均匝长（兼容保存）', ['c', 'm'], 'mag'),
     ('Np', 'Transformer primary turns Np (原边匝数, 0=auto)', [], 'mag'),
     ('Ns', 'Transformer secondary turns Ns (副边匝数, 0=auto)', [], 'mag'),
     ('d_wire_p', 'Primary wire dia, mm (原边线径, 0=auto)', ['m'], 'mag'),
@@ -541,7 +584,8 @@ TOPO_LABEL = {'BUCK': 'BUCK (降压)', 'BOOST': 'BOOST (升压)',
               'ACF-FORWARD': 'ACF-FORWARD (有源钳位正激)'}
 TOPO_KEY = {v: k for k, v in TOPO_LABEL.items()}
 CTRL_LABEL = {'Voltage Mode': 'Voltage Mode (电压模式)',
-              'Peak Current Mode': 'Peak Current Mode (峰值电流模式)'}
+              'Peak Current Mode': 'Peak Current Mode (峰值电流模式)',
+              'Constant On-Time': 'COT (恒定导通时间)'}
 CTRL_KEY = {v: k for k, v in CTRL_LABEL.items()}
 CONTROLLER_CHOICES = ('auto', 'type2', 'type3')
 CONTROLLER_NAMES = {'type2': '二型', 'type3': '三型'}
@@ -604,17 +648,17 @@ from isolated_ui import IsolatedUI
 
 
 class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputResultsUI, EngineeringUI):
-    def __init__(self, root, *, initial_config=None, on_return=None):
+    def __init__(self, root, *, initial_config=None, on_return=None, container=None):
         self.root = root
+        self.container = root if container is None else container
+        self._embedded = container is not None
         self._workspace_return = on_return
-        self.root.title("Switching Power Supply Design & Loop Analyzer  " + APP_VERSION)
-        # adaptive window size: fit small laptop screens, keep 1600x950 max
-        _sw = self.root.winfo_screenwidth()
-        _sh = self.root.winfo_screenheight()
-        _w0 = min(1600, max(1000, _sw - 40))
-        _h0 = min(950, max(600, _sh - 90))
-        self.root.geometry(f'{_w0}x{_h0}')
-        self.root.minsize(1000, 600)
+        if not self._embedded:
+            self.root.title("Switching Power Supply Design & Loop Analyzer  " + APP_VERSION)
+            width = min(1600, max(1000, root.winfo_screenwidth() - 40))
+            height = min(950, max(600, root.winfo_screenheight() - 90))
+            root.geometry(f'{width}x{height}')
+            root.minsize(1000, 600)
 
         from ui_preferences import font_size
         self._font_k = font_size()/13
@@ -660,6 +704,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._last = None            # latest design dict shared by the tabs
         self._component_management = {}
         self._spice_config = {}
+        self._cot_config = {}
         self._parasitic_config = {}
         self._engineering_acceptance = {}
         self._acceptance_range_result = None
@@ -706,10 +751,12 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.params['topology'].trace('w', lambda *a: self.on_topology_change())
         self.params['controller_type'].trace('w', lambda *a: self._on_controller_change())
         self.params['control_mode'].trace('w', lambda *a: self._on_controller_change())
+        self.params['buck_phases'].trace('w', self._on_buck_phase_change)
         self._collect_wrap_widgets()
-        self.root.bind('<Configure>', self._on_root_resize, add='+')
-        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
-        self.root.bind('<Destroy>', self._calculation_window_destroyed, add='+')
+        self.container.bind('<Configure>', self._on_root_resize, add='+')
+        self.container.bind('<Destroy>', self._calculation_window_destroyed, add='+')
+        if not self._embedded:
+            self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
         # Let Tk show the shell before calculating/redrawing the first tab.
         # Loop analysis is loaded on demand, not as idle background work.
@@ -745,7 +792,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 return
             if self._control_ready:
                 self._refresh_loop_margins()
-                self._rendered_tabs.discard(4)
+                self._rendered_tabs.discard(self.nb.index(self.tab_loop))
                 self._refresh_visible_tab()
             elif self._control_error is not None:
                 self.loop_esr_note.set('环路依赖加载失败：'+self._control_error)
@@ -758,7 +805,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         if self._closing or not self._control_ready or self._last is None or not self._snapshot_valid:
             return
         try:
-            if self.nb.index(self.nb.select()) in (4,9):
+            if self.nb.select() in (str(self.tab_loop), str(self.tab_review)):
                 self._update_loop(self._last['p'], draw=False)
         except Exception:
             pass
@@ -781,10 +828,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             for c in w.winfo_children():
                 walk(c)
 
-        walk(self.root)
+        walk(self.container)
 
     def _on_root_resize(self, event):
-        if event.widget is not self.root or self._building:
+        if event.widget is not self.container or self._building:
             return
         # Resizing changes layout, never the user's chosen font size.
         self._resize_left()
@@ -793,7 +840,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         from ui_preferences import save_font_size
         value=save_font_size(value)
         self._font_choice.set(str(value))
-        self._apply_scale(value/13)
+        self.set_font_size(value)
+
+    def set_font_size(self, value):
+        self._apply_scale(value / 13)
 
     def _apply_scale(self, k):
         """Re-apply fonts / wraplengths / chart text sizes at scale k."""
@@ -812,9 +862,25 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._refresh_visible_tab()
 
     def on_close(self):
-        """Cancel pending update timers, destroy the window, and make sure the
-        process (incl. the packaged one-file bootloader child) is really gone."""
+        if self._embedded:
+            return self._workspace_return(self) if self._workspace_return else None
+        center = getattr(self, '_simulation_center', None)
+        if center is not None and not center.closed and center.running():
+            center.close()
+            self.status_var.set('当前仿真正在停止，日志会保留。')
+            return
         if self._workspace_return and not self._workspace_return(self):
+            return
+        self.dispose()
+        try:
+            self.root.destroy()
+        finally:
+            if self._workspace_return is None:
+                os._exit(0)
+
+    def dispose(self):
+        """Release work owned by this editor before its container is removed."""
+        if self._closing:
             return
         self._closing = True
         if getattr(self, '_mousewheel_binding', None):
@@ -822,6 +888,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._calculation_worker.close()
         Tooltip.hide_all(self.root)
         self._work_cancel.set()
+        center = getattr(self, '_simulation_center', None)
+        if center is not None and not center.closed:
+            center.close()
         for job in (self.update_timer, self._font_timer,
                     self._initial_update_job, self._control_warmup_job, self._control_poll_job, self._work_poll,
                     self._param_layout_job, self._calculation_poll_job,
@@ -831,11 +900,6 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     self.root.after_cancel(job)
                 except Exception:
                     pass
-        try:
-            self.root.destroy()
-        finally:
-            if self._workspace_return is None:
-                os._exit(0)
 
     # ------------------------------------------------------------------ params
     def _build_params(self):
@@ -922,25 +986,47 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                             self.params['topology'].get())
 
     def _ctrl_key(self):
-        return CTRL_KEY.get(self.params['control_mode'].get(),
-                            self.params['control_mode'].get())
+        raw = self.params['control_mode'].get()
+        return CTRL_KEY.get(raw, raw)
+
+    def _cot_active(self):
+        return self._topo_key() == 'BUCK' and self._ctrl_key() == 'Constant On-Time'
+
+    def _buck_phase_count(self):
+        try:
+            return self.get_param('buck_phases')
+        except (ValueError, tk.TclError):
+            return None
+
+    def _sync_buck_control_mode(self):
+        if self._topo_key() == 'BUCK':
+            phases = self._buck_phase_count()
+            if phases is not None and phases > 1 and not self._cot_active():
+                self.params['control_mode'].set(CTRL_LABEL['Constant On-Time'])
+        elif self._ctrl_key() == 'Constant On-Time':
+            self.params['control_mode'].set(CTRL_LABEL['Voltage Mode'])
+
+    def _on_buck_phase_change(self, *_):
+        if not self._building:
+            self._sync_buck_control_mode()
+            self._filter_params()
 
     def _controller_key(self):
         return resolve_controller_type(self.params['controller_type'].get(), self._ctrl_key())
 
     def _on_controller_change(self):
-        """Restore the original five controller entries and II/III loop orders."""
+        """Refresh controller-dependent controls and available analysis pages."""
         if self._building:
             return
+        self._sync_buck_control_mode()
         kind = self._controller_key()
-        for key in ('KP','fz1','fz2','fp1','fp2'):
-            for widget in self._param_widgets.get(key, ()):
-                widget.grid()
         self.controller_note.set(
+            'COT 电压外环：PI 根据归一化电压误差调节发脉冲频率。Kp、Ki 均为 0 时按工况自动取基准值。' if self._cot_active() else
             '二型: 原点极点 + fz1 零点 + fp1 高频极点；fz2/fp2 未启用，阻容计算忽略。' if kind == 'type2' else
             '三型: 原点极点 + fz1/fz2 零点 + fp1/fp2 高频极点。')
         if hasattr(self,'tune_result'):
             self.tune_result.set('')
+        self._sync_topology_pages()
         self._filter_params()
         self.schedule_update()
 
@@ -963,6 +1049,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         p['device_curve_settings']=__import__('copy').deepcopy(self._device_curve_settings)
         p['component_management']=__import__('copy').deepcopy(self._component_management)
         p['spice_config']=__import__('copy').deepcopy(self._spice_config)
+        p['cot_config']=copy.deepcopy(getattr(self,'_cot_config',{}))
         p['parasitic_config']=__import__('copy').deepcopy(self._parasitic_config)
         p['engineering_acceptance']=copy.deepcopy(self._engineering_acceptance)
         p.update(self._capacitor_parameters())
@@ -995,6 +1082,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                                           tk.StringVar(value='auto')).get()
         p['core_material'] = self.params['core_material'].get()
         p.update(self._custom_core_parameters())
+        from isolated_outputs import ISOLATED
+        if p['topology'] in ISOLATED:
+            p.update(self._winding_config())
         p.update(target_eta=self.params['target_eta'].get(),
                  fc_target=self.get_param('fc_target'),
                  pm_target=self.params['pm_target'].get())
@@ -1003,71 +1093,68 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
     # ------------------------------------------------------------------ gui
     def create_widgets(self):
-        main = ttk.Frame(self.root, padding='10 8 10 8')
+        main = ttk.Frame(self.container, padding='12 10 12 8')
         main.grid(row=0, column=0, sticky='nsew')
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        self.container.columnconfigure(0, weight=1)
+        self.container.rowconfigure(0, weight=1)
 
-        # top banner
-        banner = ttk.Frame(main, style='Banner.TFrame', padding='14 8')
-        banner.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        self._calculator_banner=banner
-        titlebar=ttk.Frame(banner,style='Banner.TFrame')
-        titlebar.grid(row=0,column=0,sticky='w')
-        self._calculator_banner_title=titlebar
-        ttk.Label(titlebar, text='开关电源设计与环路分析',
-                  style='Banner.TLabel').pack(side='left')
-        if self._workspace_return:
-            ttk.Button(titlebar, text='← 返回系统架构', style='Banner.TButton',
-                       command=self.on_close).pack(side='left', padx=14)
-        actions=ttk.Frame(banner,style='Banner.TFrame');actions.grid(row=0,column=1,sticky='e')
-        self._calculator_banner_actions=actions;self._calculator_banner_rows=None
-        banner.columnconfigure(0,weight=1)
-        export_button=ttk.Menubutton(actions,text='导出报告 ▾',style='Banner.TButton')
-        export_menu=tk.Menu(export_button,tearoff=False)
-        export_menu.add_command(label='电磁仿真，电路仿真，设计计算联合报告…',command=self._export_joint_ui)
-        export_menu.add_separator()
-        export_menu.add_command(label='设计报告 · Word / Excel / Markdown',command=self._export_report_ui)
-        export_menu.add_command(label='仿真与设计计算对比报告 · Word + 工程 ZIP',command=lambda:self._export_spice_ui(comparison=True))
-        export_menu.add_separator()
-        export_menu.add_command(label='仿真与报告中心 · 设置 / 单项导出',command=self._export_joint_ui)
-        export_button.configure(menu=export_menu);export_button.pack(side='right',padx=(8,0))
-        ttk.Button(actions, text='重新计算', style='Banner.TButton',
-                   command=self.request_update).pack(side='right', padx=(8, 0))
-        from ui_preferences import font_control
-        self._font_choice=font_control(actions,self._choose_font_size)
-        banner.bind('<Configure>',self._layout_calculator_banner)
+        if not self._embedded:
+            self._build_calculator_banner(main)
 
-        # ---- left parameter panel (width adapts to the window) -------------
-        left = ttk.Frame(main, style='TFrame')
-        left.grid(row=1, column=0, sticky='ns')
-        left.grid_propagate(False)
+        # The splitter lets the parameter editor and plots each take the width they need.
+        split = self._design_split = ttk.Panedwindow(main, orient='horizontal')
+        split.grid(row=1, column=0, columnspan=2, sticky='nsew')
+        left = ttk.Frame(split, style='WorkspaceCard.TFrame', padding=(8, 6))
         self.left = left
-        canvas = tk.Canvas(left, width=330, highlightthickness=0,
-                           background=PANEL, borderwidth=0)
+        self._parameter_pane_width = None
+        self._parameter_pane_dragging = False
+        self._parameter_pane_visible = True
+        split.add(left, weight=0)
+        split.bind('<ButtonPress-1>', self._start_parameter_pane_drag, add='+')
+        split.bind('<ButtonRelease-1>', self._finish_parameter_pane_drag, add='+')
+        split.bind('<Configure>', self._resize_left, add='+')
+        self._param_filter_host = ttk.Frame(left, style='WorkspaceToolbar.TFrame')
+        self._param_filter_host.pack(fill='x', pady=(0, 8))
+        canvas = tk.Canvas(left, width=390, highlightthickness=0,
+                           background=BG, borderwidth=0)
+        hsb = ttk.Scrollbar(left, orient='horizontal', command=canvas.xview)
+        self._parameter_hscroll = hsb
         vsb = ttk.Scrollbar(left, orient='vertical', command=self._scroll_params)
-        canvas.configure(yscrollcommand=vsb.set)
+        canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         vsb.pack(side='right', fill='y')
         canvas.pack(side='left', fill='both', expand=True)
         self.left_canvas = canvas
-        self.left_inner = ttk.Frame(canvas, style='TFrame')
+        self.left_inner = ttk.Frame(canvas)
         self._param_canvas_window = canvas.create_window((0, 0), window=self.left_inner, anchor='nw')
-        def resize_params(event):
-            canvas.itemconfigure(self._param_canvas_window,width=max(1,event.width))
-            self._schedule_parameter_scrollregion()
-        canvas.bind('<Configure>',resize_params)
+        canvas.bind('<Configure>', self._schedule_parameter_scrollregion)
         self.left_inner.bind('<Configure>',self._schedule_parameter_scrollregion)
         self.left_inner.columnconfigure(0, weight=1)
 
         self._build_param_panel(self.left_inner)
         self._mousewheel_binding = self.root.bind_all('<MouseWheel>', self._on_mousewheel, add='+')
 
-        # ---- notebook --------------------------------------------------------
-        results = ttk.Frame(main)
-        results.grid(row=1, column=1, sticky='nsew', padx=(8, 0))
-        ttk.Label(results, textvariable=self.input_case_note, style='Margin.TLabel',
-                  padding=(8, 4), wraplength=1000).pack(fill='x')
-        nb = ttk.Notebook(results)
+        # Responsive result navigation keeps all pages reachable on narrow screens.
+        results = ttk.Frame(split)
+        split.add(results, weight=1)
+        result_bar = ttk.Frame(results, padding=(4, 1, 0, 6))
+        result_bar.pack(fill='x')
+        result_bar.columnconfigure(0, weight=1)
+        self._result_bar_stacked = False
+        self._parameter_toggle = ttk.Button(result_bar, text='隐藏参数栏',
+            command=lambda: self._set_parameter_pane_visible(not self._parameter_pane_visible))
+        self._parameter_toggle.grid(row=0, column=1, sticky='e', padx=(10, 0))
+        self._result_case_label = ttk.Label(result_bar, textvariable=self.input_case_note,
+            style='Margin.TLabel', wraplength=400)
+        self._result_case_label.grid(row=0, column=0, sticky='ew')
+        result_bar.bind('<Configure>', self._resize_result_case_label)
+        self._result_navigation = ttk.Frame(results)
+        self._result_navigation.pack(fill='x', pady=(0, 6))
+        self._result_buttons = {}
+        self._result_nav_layout = None
+        self._result_nav_combo = ttk.Combobox(self._result_navigation, state='readonly', width=1)
+        self._result_nav_combo.bind('<<ComboboxSelected>>', self._choose_result_page)
+        self._result_navigation.bind('<Configure>', self._layout_result_navigation)
+        nb = ttk.Notebook(results, style='Workspace.TNotebook')
         nb.pack(fill='both', expand=True)
         main.columnconfigure(1, weight=1)
         main.rowconfigure(1, weight=1)
@@ -1077,6 +1164,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.tab_stress = ttk.Frame(nb)
         self.tab_mag = ttk.Frame(nb)
         self.tab_loop = ttk.Frame(nb)
+        self.tab_cross = ttk.Frame(nb)
         self.tab_eff = ttk.Frame(nb)
         self.tab_cap = ttk.Frame(nb)
         self.tab_rcd = ttk.Frame(nb)
@@ -1087,12 +1175,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         nb.add(self.tab_stress, text=' ③ 器件 ')
         nb.add(self.tab_mag, text=' ④ 磁件 ')
         nb.add(self.tab_loop, text=' ⑤ 环路 ')
+        nb.add(self.tab_cross, text=' 交叉调整率 ', state='hidden')
         nb.add(self.tab_eff, text=' ⑥ 效率 ')
         nb.add(self.tab_cap, text=' ⑦ 电容纹波 ')
         nb.add(self.tab_rcd, text=' ⑧ RCD钳位 ')
         nb.add(self.tab_comp, text=' ⑨ 补偿参数 ')
         nb.add(self.tab_review, text=' ⑩ 工程评审 ')
         self.nb = nb
+        self._result_pages = {
+            'topology': self.tab_topology, 'power': self.tab_power,
+            'stress': self.tab_stress, 'mag': self.tab_mag, 'loop': self.tab_loop,
+            'cross': self.tab_cross, 'eff': self.tab_eff, 'cap': self.tab_cap,
+            'rcd': self.tab_rcd, 'comp': self.tab_comp, 'review': self.tab_review,
+        }
         nb.bind('<<NotebookTabChanged>>', lambda _e: self._refresh_visible_tab())
 
         self._build_topology_tab()
@@ -1100,24 +1195,24 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._build_stress_tab()
         self._build_mag_tab()
         self._build_loop_tab()
+        self._build_cross_regulation(self.tab_cross)
         self._build_eff_tab()
         self._build_cap_tab()
         self._build_rcd_tab()
         self._build_comp_tab()
         self._build_review_tab()
 
-        # menu bar: manual + about
+        from software_architecture_ui import add_architecture_menu
+
         menubar = tk.Menu(self.root)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label='保存配置 (Save Config)', command=self.save_config)
         filemenu.add_command(label='打开配置 (Open Config)', command=self.load_config)
         filemenu.add_command(label='导出设计报告 (Word / Excel)',
                              command=self._export_report_ui)
-        filemenu.add_command(label='电磁仿真，电路仿真，设计计算联合报告…', command=self._export_joint_ui)
-        filemenu.add_command(label='LTspice 电源闭环 · 配置与导出', command=self._export_spice_ui)
-        filemenu.add_command(label='仿真与设计计算对比报告 (Word)',command=lambda:self._export_spice_ui(comparison=True))
+        filemenu.add_command(label='仿真配置中心…',command=self._open_simulation_center)
         filemenu.add_separator()
-        filemenu.add_command(label='Exit (退出)', command=self.on_close)
+        filemenu.add_command(label='返回系统架构' if self._embedded else '退出', command=self.on_close)
         menubar.add_cascade(label='File (文件)', menu=filemenu)
         examples = tk.Menu(menubar, tearoff=0)
         from example_catalog import EXAMPLES
@@ -1128,56 +1223,172 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         automatic.add_command(label='按规格生成初版（Buck / Boost / 反激）…', command=self.open_initial_design)
         automatic.add_command(label='自动计算参数依据', command=self.open_auto_design_basis)
         menubar.add_cascade(label='自动设计', menu=automatic)
+        add_architecture_menu(menubar, self.root)
         helpmenu = tk.Menu(menubar, tearoff=0)
         helpmenu.add_command(label='计算方法与公式说明',
                              command=self.open_calculation_reference)
         helpmenu.add_command(label='多路反激电源设计入门教程',
                              command=self.open_design_tutorial)
         helpmenu.add_command(label='自动计算参数依据', command=self.open_auto_design_basis)
+        helpmenu.add_separator()
+        add_github_menu_item(helpmenu, self.root)
+        helpmenu.add_command(label='关于', command=self.show_about)
         menubar.add_cascade(label='Help (帮助)', menu=helpmenu)
-        self.root.config(menu=menubar)
-        self.root.bind('<Control-s>', lambda _e: self.save_config())
-        self.root.bind('<Control-o>', lambda _e: self.load_config())
-        self.root.bind('<Control-e>', lambda _e: self.export_report())
+        self.workspace_menu = menubar
+        if not self._embedded:
+            self.root.config(menu=menubar)
+            self.root.bind('<Control-s>', lambda _e: self.save_config())
+            self.root.bind('<Control-o>', lambda _e: self.load_config())
+            self.root.bind('<Control-e>', lambda _e: self.export_report())
 
         # status bar
-        bar = ttk.Label(self.root, textvariable=self.status_var,
+        bar = ttk.Label(self.container, textvariable=self.status_var,
                         style='Muted.TLabel', relief='flat',
                         background='#ffffff', padding=(10, 5))
         bar.grid(row=1, column=0, sticky='ew')
         bar.configure(borderwidth=1, relief='solid')
         self.root.option_add('*TCombobox*Listbox.font', (FAM, 10))
 
+        self.nb.bind('<<NotebookTabChanged>>', self._layout_result_navigation, add='+')
         self._resize_left()
-        main.bind('<Configure>', lambda _e: self._resize_left())
+
+    def _build_calculator_banner(self, parent):
+        from ui_preferences import font_control
+
+        banner = self._calculator_banner = ttk.Frame(parent, style='Banner.TFrame', padding=(14, 8))
+        banner.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
+        banner.columnconfigure(0, weight=1)
+        titlebar = self._calculator_banner_title = ttk.Frame(banner, style='Banner.TFrame')
+        titlebar.grid(row=0, column=0, sticky='w')
+        ttk.Label(titlebar, text='开关电源设计与环路分析', style='Banner.TLabel').pack(side='left')
+        if self._workspace_return:
+            ttk.Button(titlebar, text='← 返回系统架构', style='Banner.TButton',
+                       command=self.on_close).pack(side='left', padx=14)
+        actions = self._calculator_banner_actions = ttk.Frame(banner, style='Banner.TFrame')
+        actions.grid(row=0, column=1, sticky='e')
+        self._calculator_banner_rows = None
+        export_button = ttk.Menubutton(actions, text='导出报告 ▾', style='Banner.TButton')
+        export_menu = tk.Menu(export_button, tearoff=False)
+        export_menu.add_command(label='设计报告 · Word / Excel / Markdown', command=self._export_report_ui)
+        export_button.configure(menu=export_menu)
+        export_button.pack(side='right', padx=(8, 0))
+        ttk.Button(actions, text='仿真配置中心', style='Banner.TButton',
+                   command=self._open_simulation_center).pack(side='right', padx=(8, 0))
+        ttk.Button(actions, text='重新计算', style='Banner.TButton',
+                   command=self.request_update).pack(side='right', padx=(8, 0))
+        self._font_choice = font_control(actions, self._choose_font_size)
+        ttk.Button(actions, text=GITHUB_LABEL, style='Banner.TButton',
+                   command=lambda: open_github(self.root)).pack(side='right', padx=(0, 8))
+        banner.bind('<Configure>', self._layout_calculator_banner)
+
+    def _resize_result_case_label(self, event):
+        button_width = self._parameter_toggle.winfo_reqwidth()
+        stacked = event.width - button_width < max(145, round(110 * self._font_k))
+        if stacked != self._result_bar_stacked:
+            self._result_bar_stacked = stacked
+            self._result_case_label.grid_configure(row=1 if stacked else 0,
+                columnspan=2 if stacked else 1, pady=(5, 0) if stacked else 0)
+        width = event.width - (8 if stacked else button_width + 18)
+        wrap = max(90, width)
+        if int(float(self._result_case_label.cget('wraplength'))) != wrap:
+            self._result_case_label.configure(wraplength=wrap)
+
+    def _choose_result_page(self, _event=None):
+        combo = self._result_nav_combo
+        pages = self._result_nav_layout[0]
+        if 0 <= combo.current() < len(pages):
+            page = pages[combo.current()]
+            if self.nb.tab(page, 'state') == 'normal':
+                self.nb.select(page)
+            else:
+                combo.current(pages.index(self.nb.select()))
+
+    def _layout_result_navigation(self, _event=None):
+        if not hasattr(self, 'nb'):
+            return
+        nav, nb = self._result_navigation, self.nb
+        current = nb.select()
+        visible = []
+        for tab in nb.tabs():
+            state = nb.tab(tab, 'state')
+            if state == 'hidden':
+                if tab in self._result_buttons:
+                    self._result_buttons[tab].state(['!selected'])
+                continue
+            caption = nb.tab(tab, 'text').strip()
+            if tab not in self._result_buttons:
+                self._result_buttons[tab] = ttk.Button(nav, text=caption, style='WorkspaceNav.TButton',
+                    command=lambda page=tab: nb.select(page))
+            button = self._result_buttons[tab]
+            if button.cget('text') != caption:
+                button.configure(text=caption)
+            button.state(['selected' if tab == current else '!selected',
+                          'disabled' if state == 'disabled' else '!disabled'])
+            visible.append(tab)
+        if not visible or nav.winfo_width() < 5:
+            return
+        cell_width = max(self._result_buttons[tab].winfo_reqwidth() for tab in visible) + 6
+        capacity = max(1, nav.winfo_width() // cell_width)
+        rows = (len(visible) + capacity - 1) // capacity
+        columns = (len(visible) + rows - 1) // rows if rows <= 3 else 0
+        layout = (tuple(visible), columns)
+        combo = self._result_nav_combo
+        if columns == 0:
+            combo.configure(values=[self._result_buttons[p].cget('text') for p in visible])
+            if current in visible:
+                combo.current(visible.index(current))
+        if layout == self._result_nav_layout:
+            return
+        previous_columns = self._result_nav_layout[1] if self._result_nav_layout else 0
+        self._result_nav_layout = layout
+        for button in self._result_buttons.values():
+            button.grid_remove()
+        combo.grid_remove()
+        for col in range(max(1, columns, previous_columns)):
+            active = col < max(1, columns)
+            nav.columnconfigure(col, weight=int(active), uniform='result-pages' if active else '')
+        if columns == 0:
+            combo.grid(row=0, column=0, sticky='ew', pady=(0, 4))
+            return
+        for i, tab in enumerate(visible):
+            row, col = divmod(i, columns)
+            self._result_buttons[tab].grid(row=row, column=col, sticky='ew', padx=(0, 6), pady=(0, 4))
+
+    def _start_parameter_pane_drag(self, event):
+        self._parameter_pane_dragging = str(self._design_split.identify(event.x, event.y)) == '0'
+
+    def _finish_parameter_pane_drag(self, _event):
+        if self._parameter_pane_dragging:
+            self._parameter_pane_dragging = False
+            self._parameter_pane_width = self._design_split.sashpos(0)
+            self._resize_left()
+
+    def _set_parameter_pane_visible(self, visible):
+        if self._parameter_pane_visible == visible:
+            return
+        self._parameter_pane_visible = visible
+        if visible:
+            self._design_split.insert(0, self.left, weight=0)
+            self._resize_left()
+            self._schedule_parameter_scrollregion()
+        else:
+            self._design_split.forget(self.left)
+        self._parameter_toggle.configure(text='隐藏参数栏' if visible else '显示参数栏')
 
     def _resize_left(self, _evt=None):
-        """Left panel width follows the main window (≈23.5%, clamped)."""
-        w = self.left.master.winfo_width()
-        if w < 200:
+        """Fit the sidebar to the viewport while respecting a user-set width."""
+        if not self._parameter_pane_visible or self._parameter_pane_dragging:
             return
-        limit=.64 if self._font_k*13>24 else .48
-        target = min(int(w*limit),max(round(390*self._font_k), min(740,int(w*.30))))
-        self.left.configure(width=target)
-        self.left_canvas.configure(width=target - 18)
-        widths={}
-        for lab in self.param_labels:
-            try:
-                parent=lab.master
-                if parent not in widths:
-                    occupied={}
-                    for child in parent.grid_slaves():
-                        col=int(child.grid_info().get('column',0))
-                        if col:occupied[col]=max(occupied.get(col,0),child.winfo_reqwidth()+10)
-                    pw=parent.winfo_width()
-                    widths[parent]=max(65,min(target-36,pw if pw>100 else target-36)-sum(occupied.values())-18)
-                if abs(float(lab.cget('wraplength'))-widths[parent])>1:lab.configure(wraplength=widths[parent])
-            except Exception:
-                pass
-        for frame in self._param_sections.values():
-            if hasattr(frame, '_section_summary'):
-                frame._section_summary.configure(wraplength=max(260, target-36))
-        self._layout_calculator_banner()
+        split = self._design_split
+        width = split.winfo_width()
+        if width < 420:
+            return
+        upper = min(int(width * .65), width - 310)
+        preferred = min(round(width * (.53 if self._font_k > 1.8 else .48)),
+                        max(round(380 * self._font_k), int(width * .28)))
+        target = min(upper, max(240, self._parameter_pane_width or preferred))
+        if abs(split.sashpos(0) - target) > 1:
+            split.sashpos(0, target)
 
     def _layout_calculator_banner(self,_event=None):
         if not hasattr(self,'_calculator_banner_actions'):return
@@ -1217,6 +1428,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     wrapper[key] = dict(wrapper[key],
                         engineering_acceptance=copy.deepcopy(self._engineering_acceptance))
             self._last = wrapper
+        if hasattr(self, '_tolerance_panel'):
+            self._invalidate_workflows()
         self._export_after_calculation = False
         self.status_var.set('验收设置与记录已应用；保存工程可保留，电气结果无需重算。')
 
@@ -1321,13 +1534,18 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     value = float(var.get())
                     if not np.isfinite(value):
                         raise ValueError(f'{key} 必须为有限数值')
-                except (ValueError, tk.TclError):
+                except (ValueError, tk.TclError) as exc:
                     inactive_scalar = key in self._param_widgets and not self._scalar_parameter_active(key)
                     inactive_rcd = key in ('rcd_K', 'rcd_Kc', 'rcd_dC') and self._topo_key() not in ('FLYBACK', 'QR-FLYBACK')
                     inactive_rcd = inactive_rcd or (key=='rcd_K' and hasattr(self,'coupling_enabled')
                                                    and self.coupling_enabled.get() and self._coupling_supported())
                     if not (inactive_scalar or inactive_rcd):
-                        raise
+                        widgets = self._param_widgets.get(key)
+                        label = widgets[0].cget('text').strip(' *') if widgets else key
+                        error = ValueError(f'{label}需要有效数值。')
+                        if widgets:
+                            error.input_widget = widgets[1]
+                        raise error from exc
                     fallback = {'rcd_K': .95, 'rcd_Kc': 1.5, 'rcd_dC': .10}.get(key, DEFAULT_PARAMS.get(key))
                     value = fallback / self.units[prefix]
                 cfg[key] = dict(v=value, u=prefix)
@@ -1351,6 +1569,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         cfg['device_curve_settings']=__import__('copy').deepcopy(self._device_curve_settings)
         cfg['component_management']=__import__('copy').deepcopy(self._component_management)
         cfg['spice_config']=__import__('copy').deepcopy(self._spice_config)
+        cfg['cot_config']=copy.deepcopy(getattr(self,'_cot_config',{}))
         cfg['parasitic_config']=__import__('copy').deepcopy(self._parasitic_config)
         cfg['engineering_acceptance']=copy.deepcopy(self._engineering_acceptance)
         cfg.update(self._capacitor_parameters())
@@ -1452,9 +1671,6 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
     def _report_input_parameters(self, parameters):
         """Freeze review targets/layout before preparing numerical report data."""
         report_params = dict(parameters)
-        winding_config = self._winding_config()['winding_config']
-        if winding_config['window_width'] > 0 and winding_config['window_height'] > 0:
-            report_params['winding_config'] = winding_config
         report_params.update(target_eta=self.params['target_eta'].get(),
                              fc_target=self.get_param('fc_target'),
                              pm_target=self.params['pm_target'].get())
@@ -1506,9 +1722,12 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     if changed:
                         raise ValueError('报告准备后评审目标或绕制设置已变化，请重新导出：'+', '.join(changed))
             if os.path.splitext(path)[1].lower() == '.md':
-                sections = ['# 输入范围设计报告\n\n同一套器件，分别检查 Vin min 与 Vin max；补偿参数不自动重新整定。']
-                for case in range_result['cases']:
-                    sections.append(f"\n## {case['id']} — {case['voltage']:.6g} V\n")
+                from report_architecture import report_cases
+                cases = report_cases(range_result)
+                sections = ['# 开关电源设计报告']
+                for case in cases:
+                    label = '固定输入' if len(cases) == 1 else case['id']
+                    sections.append(f"\n## {label} {case['voltage']:.6g} V\n")
                     if case.get('error'):
                         sections.append('计算未成功：'+str(case['error']))
                     else:
@@ -1532,18 +1751,22 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 comparison = self._comparison
                 if comparison and comparison['context_spec'] != L['p']:
                     comparison = None
+                tolerance_panel = getattr(self, '_tolerance_panel', None)
+                tolerance = tolerance_panel.current_result(report_params) if tolerance_panel is not None else None
+                tolerance_options = {'tolerance_result': tolerance} if tolerance is not None else {}
                 result = export_design_report(path, range_result, corners=corners, comparison=comparison,
-                    compensation_state=self._comp_state(), mos_real_time=self.mos_real_time.get())
+                    compensation_state=self._comp_state(), mos_real_time=self.mos_real_time.get(),
+                    **tolerance_options)
                 failures = result['failed_cases']
                 failure_count = len(failures) if isinstance(failures, (list, tuple)) else failures
-                extra = (f"{result['sheet_count']} 个模块 Sheet，左侧 Vinmin，右侧 Vinmax。\n" if excel else '')
+                displayed = result.get('displayed_case_count', len(range_result['cases']))
+                extra = (f"{result['sheet_count']} 个工作表。\n" if excel else '')
                 cross = range_result.get('cross_regulation')
                 if cross:
                     extra += (f"交叉调整率：{cross.get('successful_cases',0)} / {cross.get('total_cases',0)} 个负载角点有效。\n"
                               if cross.get('supported') else '交叉调整率：当前模型不支持，报告已列出原因。\n')
                 messagebox.showinfo('Excel 设计报告' if excel else 'Word 设计报告',
-                    f"已导出 Vin min / Vin max 两端报告：{result['successful_cases']} 个工况成功，"
-                    f"{failure_count} 个工况失败。\n"
+                    f"报告展示 {displayed} 个输入工况，{failure_count} 个工况失败。\n"
                     + extra +
                     f"共 {result['figure_count']} 张图表、{result['check_count']} 项核查；"
                     f"{'报告不完整，请查看失败工况。' if result['incomplete'] else '请查看总览对比与各工况详情。'}\n\n{path}")
@@ -1566,14 +1789,35 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         acceptance_data = normalize_acceptance(cfg.get('engineering_acceptance'))
         from acceptance_evidence_io import normalize_reference
         acceptance_reference = normalize_reference(cfg.get('__acceptance_evidence'))
-        from spice_export import normalize_settings
-        spice_data = normalize_settings(cfg.get('spice_config'))
+        from config_io import decode_config
+        from cot_settings import active as cot_active, validate as validate_cot
+        spice_context = decode_config({key: cfg.get(key, DEFAULT_PARAMS[key])
+                                      for key in ('topology', 'control_mode', 'buck_phases', 'f_sw')})
+        if spice_context['topology'] == 'BUCK':
+            spice_context['buck_phases'] = validate_cot(spice_context)
+        if cot_active(spice_context):
+            from cot_settings import configuration as cot_configuration
+            cot_data = cot_configuration(dict(spice_context,cot_config=cfg.get('cot_config') or {}))
+            if 'phase_parameters' not in (cfg.get('cot_config') or {}):
+                cot_data.pop('phase_parameters',None)
+            from cot_buck_spice import normalize_cot_settings
+            spice_data = normalize_cot_settings(cfg.get('spice_config'), spice_context['f_sw'])
+        else:
+            cot_data = copy.deepcopy(cfg.get('cot_config') or {})
+            from spice_export import normalize_settings
+            spice_data = normalize_settings(cfg.get('spice_config'))
+        if 'control_mode' not in cfg:
+            from nonisolated import PROFILES
+            reference = PROFILES.get(spice_data.get('niso_profile'), {})
+            cfg['control_mode'] = reference.get('mode', DEFAULT_PARAMS['control_mode'])
         from parasitics import normalize as normalize_parasitics
         parasitic_data = normalize_parasitics(cfg['parasitic_config']) if cfg.get('parasitic_config') else {}
         # A missing transfer parameter means legacy fixed plateaus, never
         # the gfs left over from the previously opened device/configuration.
         cfg.setdefault('gfs', dict(v=0., u=''))
-        from config_io import decode_config
+        for key, default in (('buck_phases', 1), ('cot_ton_s', 0.), ('cot_min_off_s', 0.),
+                             ('cot_kp_hz', 0.), ('cot_ki_hz_per_s', 0.)):
+            cfg.setdefault(key, DEFAULT_PARAMS.get(key, default))
         from device_curve_sources import validate_settings
         source_settings=validate_settings(cfg.get('device_curve_settings',{}))
         cfg.setdefault('mos_miller_mode',dict(v='auto',u=''))
@@ -1603,6 +1847,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._acceptance_evidence_reference=acceptance_reference
         self._acceptance_evidence_cache=None
         self._spice_config=spice_data
+        self._cot_config=cot_data
         self._parasitic_config=parasitic_data
         self._auto_design_basis=copy.deepcopy(cfg.get('__auto_design_basis'))
         self._transformer_simulation = copy.deepcopy(cfg.get('__transformer_simulation'))
@@ -1658,6 +1903,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         # legacy configs saved with the removed LLC topology fall back to Buck
         if self._topo_key() not in TOPOLOGIES:
             self.params['topology'].set(TOPO_LABEL['BUCK'])
+        self._sync_buck_control_mode()
         # Loading may trigger view traces before all new values are assigned.
         # Rebuild hand-input caches solely from this configuration's final data.
         self._param_auto_saved.clear()
@@ -1665,6 +1911,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._building = False
         self.on_topology_change(reset_target=False)
         self._on_controller_change()
+        self._design_load_revision = getattr(self, '_design_load_revision', 0) + 1
         self.schedule_update()
 
     def load_config(self):
@@ -1715,7 +1962,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             '⑥ 效率 & 优化  (ch.3)\n'
             '   损耗分解、效率-负载曲线、参数扫描/优化\n'
             '⑦ 电容纹波  ⑧ RCD / 有源钳位  ⑨ 补偿参数  ⑩ 工程评审\n'
-            '\n完整说明书: Help → 中文说明书')
+            '\n公式说明和入门教程见“帮助”菜单。')
         tk.messagebox.showinfo('设计流程 (Design Flow)', flow)
 
     def open_calculation_reference(self):
@@ -1774,12 +2021,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             'About (关于)',
             'Switching Power Supply Design & Loop Analyzer\n'
             '开关电源设计与环路分析工具\n\n'
+            f'维护者 {AUTHOR}\n{GITHUB_URL}\n\n'
             f'Version: {APP_VERSION} (参考书: Fundamentals of Power Electronics, '
             f'Erickson & Maksimović)\n'
             'Topologies: Buck / Boost / Buck-Boost / Flyback / QR-Flyback / ACF-Forward\n'
             '拓扑: 降压 / 升压 / 升降压 / 反激 / 准谐振反激 / 有源钳位正激\n\n'
             '设计检查: 电容纹波电流 / 器件应力 / 磁件饱和与温升 / 环路稳定\n'
-            'Help (帮助) → 设计流程说明 (Design Flow)')
+            '帮助 → 计算方法与公式说明 / 多路反激电源设计入门教程 / 自动计算参数依据')
 
     # ------------------------------------------------------------ param panel
     def _add_section(self, parent, title):
@@ -1787,9 +2035,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         match = re.search(r'\(([^()]+)\)', title)
         title = match[1] if match else title
         container = ttk.Frame(parent)
-        container.pack(fill='x', pady=3)
-        header = ttk.Label(container, text='▼ '+title, style='TLabelframe.Label',
-                           padding=(6, 4), takefocus=True, cursor='hand2')
+        container.pack(fill='x', pady=(0, 9))
+        header = ttk.Label(container, text='▼ '+title, style='WorkspaceSection.TLabel',
+                           padding=(9, 6), takefocus=True, cursor='hand2')
         header.pack(fill='x')
         f = ttk.Frame(container, padding=6, relief='solid', borderwidth=1)
         f.pack(fill='x')
@@ -1838,6 +2086,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         if self._building:
             return
         topo = self._topo_key()
+        self._sync_buck_control_mode()
         # default tuning target: fsw/10
         try:
             fs = self.get_param('f_sw')
@@ -1886,14 +2135,16 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                             state='normal' if winding_supported else 'hidden')
             if winding_supported:
                 self.mag_simulation_button.pack(side='right', padx=5)
+                self.mag_preview_button.pack(side='right', padx=5)
             else:
                 self.mag_simulation_button.pack_forget()
+                self.mag_preview_button.pack_forget()
         pfm = bool(self._psr_active() and self._snapshot_valid and self._last
                    and self._last['p'].get('feedback_mode') == 'PSR-MP6005'
                    and self._last['op'].get('regulation_region') == 'PFM-estimate')
         states = {
             self.tab_rcd: topo in ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD'),
-            self.tab_comp: not self._psr_active(),
+            self.tab_comp: not (self._psr_active() or self._cot_active()),
             self.tab_loop: not pfm,
         }
         selected = self.nb.select()
@@ -1904,6 +2155,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             if self.nb.tab(tab, 'state') != state:
                 self.nb.tab(tab, state=state)
         self.nb.tab(self.tab_rcd, text=' ⑧ 有源钳位 ' if topo == 'ACF-FORWARD' else ' ⑧ RCD钳位 ')
+        if hasattr(self, 'loop_tune_frame'):
+            cot = self._cot_active()
+            self.guide_loop.configure(text=('COT 电压外环：按当前工况计算对象、PI 与回路增益。'
+                                            if cot else STEP_GUIDE[3]))
+            self.loop_tune_frame.configure(text='COT PI 自动整定' if cot else 'Venable K 因子自动整定')
+            self.tune_type_label.configure(text='模型' if cot else '类型')
+            self.tune_type_combo.configure(textvariable=self.cot_tune_type if cot else self.tune_type,
+                                           state='disabled' if cot else 'readonly')
         self._sync_inline_output_context()
 
     def _rcd_parameters(self):
@@ -1962,7 +2221,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                                             self.request_update)
 
     def _calculation_window_destroyed(self, event):
-        if event.widget is self.root:
+        if event.widget is self.container:
             self._calculation_worker.close()
 
     def _ensure_calculation_poll(self):
@@ -2101,12 +2360,22 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             lambda: self._update_stress(L['op'], L['res']),
             lambda: self._update_mag(L['op'], engine_p, L['res'], L['wf']),
             lambda: self._update_loop(L['p']),
+            self._refresh_cross_inputs,
             lambda: self._update_eff(L['op'], engine_p, L['res']),
             lambda: self._update_cap(L['op'], engine_p, L['res']),
             lambda: self._update_rcd(L['op'], engine_p),
             lambda: self._update_comp(L['op'], engine_p),
             self._update_review,
         )
+
+    def selected_result_page(self):
+        selected = self.nb.select()
+        return next((key for key, tab in self._result_pages.items() if str(tab) == selected), None)
+
+    def restore_result_page(self, key):
+        tab = self._result_pages.get(key)
+        if tab is not None and self.nb.tab(tab, 'state') == 'normal':
+            self.nb.select(tab)
 
     def _refresh_visible_tab(self):
         """Redraw only the visible notebook tab.  update_all() clears
@@ -2118,12 +2387,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             idx = self.nb.index(self.nb.select())
         except Exception:
             return
-        if idx in (4,9) and not self._control_ready:
+        loop_index = self.nb.index(self.tab_loop)
+        review_index = self.nb.index(self.tab_review)
+        if idx in (loop_index, review_index) and not self._control_ready:
             if 'control' in sys.modules:
                 self._control_ready=True
             else:
                 self._start_control_warmup()
-                if idx==4:
+                if idx == loop_index:
                     self.loop_esr_note.set('正在按需加载环路分析库… 可切换页面继续操作。')
                     return
         if idx in self._rendered_tabs:
@@ -2132,7 +2403,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             # Review must complete current loop checks even when the library
             # was loaded on an earlier design but hidden during this solve.
-            if (idx==9 and self._control_ready and
+            if (idx == review_index and self._control_ready and
                     parameter_signature(self._last['p'])!=self._loop_signature):
                 self._update_loop(self._last['p'],draw=False)
             self._tab_updaters()[idx]()
@@ -2228,12 +2499,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self._update_transformer_electrical_readouts(calculation_params,res)
             self._update_mos_gate_readout(res)
             self._snapshot_valid = True
+            from transformer_preview_ui import refresh_from_result
+            refresh_from_result(self, res)
             self._update_diode_result_readout(res)
             self._refresh_param_summaries()
             self._sync_topology_pages()
             from design_checks import check_catalog
             self._last['checks'] = check_catalog(calculation_params, res)
-            if self._control_ready and self.nb.index(self.nb.select()) in (4,9):
+            if self._control_ready and self.nb.select() in (str(self.tab_loop), str(self.tab_review)):
                 self._update_loop(p, draw=False)
             self._last_design = res
             self._update_review()
@@ -2261,13 +2534,15 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             axis.text(.5, .5, '参数无效，环路结果已清空', ha='center', va='center',
                       transform=axis.transAxes)
         _draw_canvas(self.canvas_loop)
+        if self.loop_view.get() == '反馈路负载阶跃':
+            self._draw_loop_load_step(dict(available=False, reason='参数无效，反馈路波形已清空。'))
         self._invalidate_workflows()
         self._clear_review(str(error))
 
     # ============================================================ ① topology
     def _build_topology_tab(self):
         f = self._build_isolated_controls(self.tab_topology)
-        ttk.Button(f, text='仿真与报告中心 · 变压器 / 控制器 / 联合导出…', command=self._export_joint_ui).pack(anchor='e',padx=8,pady=4)
+        ttk.Button(f, text='仿真配置中心…', command=self._open_simulation_center).pack(anchor='e',padx=8,pady=4)
         from component_ui import ComponentManager
         component_page = ttk.Frame(self._isolated_result_book)
         self._component_page = component_page
@@ -2303,9 +2578,11 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
     def _update_topology(self, op, p):
         from topology_diagram import draw_topology
         rows = draw_topology(self.ax_topology, p,op)
+        cot = op.get('cot')
+        controller = f"{cot['phases']} 相 COT  ·  每相 " if cot else ''
         self.topology_stats.set(f"{TOPO_LABEL.get(op['topology'], op['topology'])}  ·  "
                                 f"Vin={fmt_eng(op['V_in'], 'V')} → |Vout|={fmt_eng(op['V_out'], 'V')}  ·  "
-                                f"{fmt_eng(op['P_out'], 'W')}  /  {fmt_eng(op['f_sw'], 'Hz')}")
+                                f"{fmt_eng(op['P_out'], 'W')}  ·  {controller}{fmt_eng(op['f_sw'], 'Hz')}")
         self.topology_tree.delete(*self.topology_tree.get_children())
         for row in rows:
             self.topology_tree.insert('', 'end', iid=row['ref'], values=(row['ref'], row['role'], row['values']))
@@ -2325,30 +2602,36 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         res = self._last['res'] if self._snapshot_valid and self._last else None
         return p, res
 
-    def _export_joint_ui(self):
-        """One entry for transformer extraction, circuit setup and joint export."""
+    def _open_simulation_center(self, tab='circuit', *, comparison=False):
         try:
-            if self._topo_key() not in ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD'):
-                return self._export_spice_ui()
-            from joint_simulation_ui import show
-            return show(self)
+            from simulation_center import show
+            return show(self, tab, comparison=comparison)
         except Exception as exc:
-            messagebox.showerror('仿真与报告中心',str(exc),parent=self.root)
+            messagebox.showerror('仿真配置中心',str(exc),parent=self.root)
+
+    def _export_joint_ui(self):
+        return self._open_simulation_center('joint')
 
     def _export_spice_ui(self,comparison=False):
+        return self._open_simulation_center('circuit',comparison=comparison)
+
+    def _open_cot_settings(self):
         try:
+            from cot_ui import show
             p=self.get_params(check_curve_sources=False)
-            p.update(self._rcd_parameters())
-            from spice_ui import open_export_dialog
+            if p['topology']!='BUCK':return
             def apply(data):
-                self._spice_config=__import__('copy').deepcopy(data)
+                from cot_settings import active, configuration
+                current=self.get_params(check_curve_sources=False)
+                if not active(current):
+                    raise ValueError('当前设计已切换，请返回 COT Buck 后再应用。')
+                configuration(dict(current,cot_config=data))
+                self._cot_config=copy.deepcopy(data)
                 self.schedule_update()
-                self.status_var.set('SPICE 设置已应用；保存设计 JSON 可保留设置。')
-            def latest():
-                current=self.get_params(check_curve_sources=False);current.update(self._rcd_parameters());return current
-            open_export_dialog(self.root,p,apply,get_parameters=latest,initial_tab='测试与对比报告' if comparison else None)
+                self.status_var.set('COT 工程配置已应用；保存工程可保留控制、逐相和保护参数。')
+            return show(self.root,p,apply)
         except Exception as exc:
-            messagebox.showerror('LTspice 导出',str(exc),parent=self.root)
+            messagebox.showerror('COT 工程配置',str(exc),parent=self.root)
 
     def _refresh_components(self):
         if hasattr(self, 'component_manager'):
@@ -2371,7 +2654,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     self._last[key] = dict(self._last[key], component_management=copy.deepcopy(data))
             from design_checks import check_catalog
             self._last['res']['checks'] = check_catalog(self._last['p'], self._last['res'], self._last['res'].get('loop'))
-            self._rendered_tabs.discard(9)
+            self._rendered_tabs.discard(self.nb.index(self.tab_review))
         self.status_var.set('关键器件资料/降额规则已应用；请保存设计 JSON。未重复求解功率级。')
 
     def _open_component_manager(self, _event=None):
@@ -2434,7 +2717,18 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             topo = op['topology']
             self._prepare_result_overview('power')
 
-            if topo == 'QR-FLYBACK':
+            cot = op.get('cot')
+            self.guide_power.configure(text=('功率级：各相电感电流、汇流电流、合计输入电流及输出纹波。后两图为代表相高侧 MOS 换流估算。'
+                                             if cot else STEP_GUIDE[0]))
+            if cot:
+                stats = (f"{cot['phases']} 相 COT · {'自适应导通时间' if cot['adaptive'] else '固定导通时间'}  |  "
+                         f"每相 fsw={fmt_eng(op['f_sw'], 'Hz')}  ·  相差 {cot['phase_shift_deg']:.4g}°  |  "
+                         f"ton={fmt_eng(cot['ton_s'], 's')}  toff={fmt_eng(cot['toff_s'], 's')}  |  "
+                         f"每相 ΔiL={fmt_eng(op['dI_L'], 'A')}  ·  汇流 ΔiL={fmt_eng(cot['total_output_current_ripple_A'], 'A')}  |  "
+                         f"η={res['eta']*100:.1f}%")
+                if cot['reverse_current']:
+                    stats += '  ·  强制同步，电感谷值为负'
+            elif topo == 'QR-FLYBACK':
                 stats = (f"fsw(计算)={fmt_eng(op['f_sw'], 'Hz')}  变频·BCM  "
                          f"D={op['D']:.3f}  I_pk={fmt_eng(op['I_L_pk'], 'A')}  "
                          f"V_r={fmt_eng(op['V_r'], 'V')}  "
@@ -2443,13 +2737,16 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             else:
                 stats = (f"D={op['D']:.3f}  mode={op['mode']}  "
                          f"ΔiL={fmt_eng(op['dI_L'], 'A')}  I_L_pk={fmt_eng(op['I_L_pk'], 'A')}  "
-                         f"V_out ripple={fmt_eng(wf['ripple_pp'], 'V')}  "
                          f"η={res['eta'] * 100:.1f}% (模型估算, 未计附加损耗)")
                 if op['mode'] == 'DCM':
                     stats += '  ⚠ DCM (轻载或 L 偏小)'
-            self.power_stats.set(f"预设η={op['eta_guess']*100:.1f}%  " + stats)
+            has_curve = wf.get('ripple_impedance_model') == 'curve'
+            ripple = wf['ripple_pp_total'] if has_curve else wf['ripple_pp']
+            output = f"OUT{op['feedback_output']}" if res.get('outputs') else '输出'
+            stats += f" · {output}纹波 {fmt_eng(ripple, 'V')}pp" + ('（按导入阻抗）' if has_curve else '')
             if res.get('outputs'):
-                self.power_stats.set(self.power_stats.get()+f" · 总输出 {op['P_out']:g} W / {len(res['outputs'])} 路；上述纹波为 OUT{op['feedback_output']}，下方为全部各路详情。")
+                stats += f" · 总输出 {op['P_out']:g} W / {len(res['outputs'])} 路"
+            self.power_stats.set(f"预设η={op['eta_guess']*100:.1f}%  " + stats)
 
             from power_charts import draw_power_signals, draw_power_switching
             if res.get('outputs'):
@@ -2460,7 +2757,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self._mos_voltage_data = draw_power_switching(
                 self.ax_power.ravel()[-2:], op, p, res,
                 real_time=self.mos_real_time.get(), drain_axes=self.ax_power_drain)
-            self.mos_notes.set('  '.join(self._mos_voltage_data['notes']))
+            notes = list(self._mos_voltage_data['notes'])
+            if cot:
+                notes.append(cot['scope'])
+            self.mos_notes.set('  '.join(notes))
             data=op.get('parasitics') or {}
             if data.get('edges'):
                 if self.fig_parasitic is None:
@@ -2493,13 +2793,21 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         p=selected_params(p)
         out = []
         topo = op['topology']
-        if op['mode'] == 'BCM':                    # QR flyback (variable f)
+        cot = op.get('cot')
+        if cot:
+            ripple_limit = p['ripple_target'] * op['V_out']
+            overlap = '有相位重叠' if cot['overlap'] else '相位未重叠'
+            out.append(f"每相电感谷值 {fmt_eng(op['I_L_min'], 'A')} · {overlap} · "
+                       f"交错重复频率 {fmt_eng(cot['ripple_frequency_Hz'], 'Hz')}")
+            out.append(f"公共输出低频纹波 {fmt_eng(wf['ripple_pp'], 'V')}，目标 {fmt_eng(ripple_limit, 'V')} "
+                       f"{'✓' if wf['ripple_pp'] <= ripple_limit else '⚠'}")
+        elif op['mode'] == 'BCM':                    # QR flyback (variable f)
             f_ok = op['f_sw'] <= op['f_max']
             C_ok = __import__('capacitor_banks').total(op) >= op['C_min']
             out.append(
                 f"准谐振 BCM: 工作频率 f_sw(计算) = {fmt_eng(op['f_sw'], 'Hz')}  "
                 f"(f_max 限制 = {fmt_eng(op['f_max'], 'Hz')}) "
-                f"{'✓' if f_ok else '⚠ 超频: 减小 Lm/增大 N/限制负载范围'}  |  "
+                f"{'✓' if f_ok else '⚠ 超频，复核励磁电感、匝比及负载'}  |  "
                 f"C={fmt_eng(op['C_out'], 'F')} {'≥' if C_ok else '<'} "
                 f"C_min={fmt_eng(op['C_min'], 'F')} {'✓' if C_ok else '⚠'}")
             out.append(
@@ -2516,16 +2824,21 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         else:
             ok_mode = op['mode'] == 'CCM'
             L_check = catalog['L_min']
-            L_ok = L_check['state'] in ('pass','na')
-            L_result = '不适用' if L_check['state']=='na' else ('✓' if L_ok else '⚠ 初选建议')
-            L_meaning = '纹波初选' if topo=='FLYBACK' else 'CCM 初选'
+            if topo == 'FLYBACK':
+                mode_text = f"{op['mode']}，原边谷值 {fmt_eng(op['I_L_min'], 'A')}"
+                L_text = f"Lm={fmt_eng(op['L'], 'H')}"
+                if L_check['state'] == 'reference':
+                    L_text += f"，纹波初选参考 {fmt_eng(L_check['limit'], 'H')}"
+                else:
+                    L_text += '，CCM 初选不适用'
+            else:
+                mode_text = op['mode'] + (' ✓' if ok_mode else ' ⚠ DCM')
+                L_result = {'na': '不适用', 'pass': '✓'}.get(L_check['state'], '⚠ 初选建议')
+                L_text = f"L={fmt_eng(op['L'], 'H')}，CCM 初选 {fmt_eng(op['L_min'], 'H')} {L_result}"
             C_ok = __import__('capacitor_banks').total(op) >= op['C_min']
             r_ok = wf['ripple_pp'] <= p['ripple_target'] * op['V_out']
             out.append(
-                f"模式 mode={op['mode']} "
-                f"{'✓' if ok_mode else '⚠ DCM'}  |  "
-                f"L={fmt_eng(op['L'], 'H')}; L_min({L_meaning})={fmt_eng(op['L_min'], 'H')} "
-                f"{L_result}  |  "
+                f"模式 {mode_text}  |  {L_text}  |  "
                 f"C(总)={fmt_eng(__import__('capacitor_banks').total(op), 'F')} {'≥' if C_ok else '<'} C_min={fmt_eng(op['C_min'], 'F')} "
                 f"{'✓' if C_ok else '⚠'}  |  "
                 f"纹波={fmt_eng(wf['ripple_pp'], 'V')} vs 目标 {p['ripple_target'] * op['V_out']:.3g} V "
@@ -2610,6 +2923,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             self._prepare_result_overview('stress')
             stress = device_stress(op)
+            if op.get('cot'):
+                self._update_cot_stress(op, res, stress)
+                return
+            self.guide_stress.configure(text=STEP_GUIDE[1])
+            for tree, caption in zip((self.sw_tree, self.di_tree, self.swl_tree, self.dil_tree),
+                                     ('MOSFET switch (开关管)', 'Rectifier diode (整流二极管)',
+                                      'Switch loss (开关管损耗)', 'Diode/SR loss (整流损耗)')):
+                tree.master.configure(text=caption)
             note_sw = stress['switch'].get('note', '')
             if op['topology'] in ('FLYBACK', 'QR-FLYBACK'):
                 Kc_t = float(self.rcd_Kc.get())
@@ -2716,6 +3037,35 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             traceback.print_exc()
             self.status_var.set(f'Stress: {e}')
 
+    def _update_cot_stress(self, op, res, stress):
+        cot = op['cot']
+        count = cot['phases']
+        self.guide_stress.configure(text='同步 Buck：应力为每相单管值。两张损耗图分别按全部高侧和全部低侧器件合计。')
+        labels = [('Vds 模型包络', 'V_max', 'V'), ('Vds 阻断', 'V_block', 'V'),
+                  ('电流有效值', 'I_rms', 'A'), ('电流绝对峰值', 'I_pk', 'A'),
+                  ('电流平均值', 'I_avg', 'A')]
+        for tree, loss_tree, ax, key, title, color in (
+                (self.sw_tree, self.swl_tree, self.ax_stress[0], 'switch', '高侧 Q1', '#c0392b'),
+                (self.di_tree, self.dil_tree, self.ax_stress[1], 'auxiliary', '同步低侧 Q2', '#2980b9')):
+            tree.master.configure(text='每相 '+title+' 应力')
+            loss_tree.master.configure(text='每相 '+title+' 损耗')
+            item = stress[key]
+            self._fill_tree(tree, [(name, fmt_eng(item[field], unit)) for name, field, unit in labels]
+                                  + [('说明', item.get('note', ''))])
+            losses = res['semi'][key]
+            parts = [(name, losses[field]) for name, field in (
+                ('导通', 'P_cond'), ('开通', 'P_sw_on'), ('关断', 'P_sw_off'),
+                ('Coss', 'P_coss'), ('栅极驱动', 'P_gate')) if field in losses]
+            self._fill_tree(loss_tree, [(name, fmt_eng(value, 'W')) for name, value in parts]
+                                       + [('总计', fmt_eng(losses['P_total'], 'W'))])
+            _loss_bars(ax, [name for name, _ in parts], [count*value for _, value in parts],
+                       f"全部{title} · {fmt_eng(count*losses['P_total'], 'W')}", color)
+        self.stress_note.set(f"{count} 相共 {2*count} 个 MOS，半导体损耗合计 {fmt_eng(res['semi']['P_total'], 'W')}。"
+                             '低侧损耗按导通、Coss 和栅驱动估算，死区和体二极管换流留作复核。')
+        self._scale_result_text('stress')
+        _draw_canvas(self.canvas_stress)
+        self._update_output_result_cards('stress', op, res)
+
     @staticmethod
     def _fill_tree(tree, items):
         tree.delete(*tree.get_children())
@@ -2737,9 +3087,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         f = self.tab_mag_design
         top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
-        self.mag_simulation_button = ttk.Button(top, text='仿真与报告中心…',
-                                              command=self._export_joint_ui)
+        self.mag_simulation_button = ttk.Button(top, text='仿真配置中心…',
+                                              command=lambda: self._open_simulation_center('field'))
         self.mag_simulation_button.pack(side='right', padx=5)
+        from transformer_preview_ui import open_preview
+        self.mag_preview_button = ttk.Button(top, text='3D 结构预览…',
+                                            command=lambda: open_preview(self))
+        self.mag_preview_button.pack(side='right', padx=5)
         self.guide_mag = ttk.Label(top, text=STEP_GUIDE[2],
                                    style='Guide.TLabel')
         self.guide_mag.pack(side='left')
@@ -2866,13 +3220,31 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
     # ============================================================ ④ loop tab
     def _build_loop_tab(self):
         f = self.tab_loop
-        top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
+        self.loop_view_row = ttk.Frame(f)
+        self.loop_view_row.pack(fill='x', pady=(4, 3))
+        self.loop_view = tk.StringVar(value='主反馈 Bode')
+        self.loop_step_button = ttk.Radiobutton(
+            self.loop_view_row, text='负载阶跃', style='LoopView.Toolbutton',
+            variable=self.loop_view, value='反馈路负载阶跃', command=self._redraw_loop_view)
+        self.loop_step_button.pack(side='left', padx=(4, 2))
+        self.loop_bode_button = ttk.Radiobutton(
+            self.loop_view_row, text='Bode', style='LoopView.Toolbutton',
+            variable=self.loop_view, value='主反馈 Bode', command=self._redraw_loop_view)
+        self.loop_bode_button.pack(side='left', padx=2)
+        self.loop_multi_button = ttk.Radiobutton(
+            self.loop_view_row, text='各路响应', style='LoopView.Toolbutton',
+            variable=self.loop_view, value='各路响应', command=self._redraw_loop_view)
+
+        self.loop_bode_controls = ttk.Frame(f)
+        self.loop_bode_controls.pack(fill='x')
+        controls = self.loop_bode_controls
+        top = ttk.Frame(controls, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
         self.guide_loop = ttk.Label(top, text=STEP_GUIDE[3],
                                     style='Guide.TLabel')
         self.guide_loop.pack(side='left')
 
-        margin_row = ttk.Frame(f)
+        margin_row = ttk.Frame(controls)
         margin_row.pack(fill='x', pady=3)
         ttk.Label(margin_row, text='稳定裕度',
                   style='Muted.TLabel').pack(side='left')
@@ -2881,16 +3253,17 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                       style='Margin.TLabel').pack(side='left', padx=8)
 
         # Reminder about the output-cap ESR zero (not modelled).
-        self.esr_note_label = ttk.Label(f, textvariable=self.loop_esr_note,
+        self.esr_note_label = ttk.Label(controls, textvariable=self.loop_esr_note,
                                         wraplength=900, anchor='w',
                                         style='Muted.TLabel')
         self.esr_note_label.pack(fill='x', pady=(0, 3))
 
-        tune = ttk.LabelFrame(f, text='Venable K 因子自动整定',
+        tune = ttk.LabelFrame(controls, text='Venable K 因子自动整定',
                               padding=4)
+        self.loop_tune_frame = tune
         tune.pack(fill='x', pady=2)
         ttk.Label(tune, text='目标 fc / Hz').pack(side='left')
-        self.params['fc_target'] = tk.DoubleVar(value=10e3)
+        self.params['fc_target'] = tk.DoubleVar(value=10.)
         self.params['fc_target_unit'] = tk.StringVar(value='k')
         self.unit_opts['fc_target'] = ['', 'k', 'M']
         ttk.Entry(tune, textvariable=self.params['fc_target'], width=7).pack(side='left')
@@ -2899,38 +3272,38 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         ttk.Label(tune, text='PM / °').pack(side='left', padx=(12, 2))
         self.params['pm_target'] = tk.DoubleVar(value=60.0)
         ttk.Entry(tune, textvariable=self.params['pm_target'], width=5).pack(side='left')
-        ttk.Label(tune, text='类型').pack(side='left', padx=(12, 2))
+        self.tune_type_label = ttk.Label(tune, text='类型')
+        self.tune_type_label.pack(side='left', padx=(12, 2))
         self.tune_type = self.params['controller_type']
-        ttk.Combobox(tune, textvariable=self.tune_type,
-                     values=CONTROLLER_CHOICES, width=7,
-                     state='readonly').pack(side='left')
+        self.cot_tune_type = tk.StringVar(value='PI')
+        self.tune_type_combo = ttk.Combobox(tune, textvariable=self.tune_type,
+                                           values=CONTROLLER_CHOICES, width=7, state='readonly')
+        self.tune_type_combo.pack(side='left')
         ttk.Button(tune, text='自动整定', style='Accent.TButton',
                    command=self.run_auto_tune).pack(side='left', padx=10)
         self.tune_result = tk.StringVar(value='')
-        ttk.Label(f, textvariable=self.tune_result, wraplength=1000,
+        ttk.Label(controls, textvariable=self.tune_result, wraplength=1000,
                   justify='left', style='Result.TLabel').pack(fill='x',pady=(0,2))
-        ttk.Label(f,textvariable=self.controller_note,style='Muted.TLabel',
+        ttk.Label(controls,textvariable=self.controller_note,style='Muted.TLabel',
                   wraplength=1000).pack(fill='x',pady=(0,3))
 
-        self.loop_view_row = ttk.Frame(f)
-        self.loop_view_row.pack(fill='x', pady=(0, 3))
-        self.loop_view = tk.StringVar(value='主反馈 Bode')
-        view = ttk.Combobox(self.loop_view_row, textvariable=self.loop_view,
-            values=['主反馈 Bode', '各路响应'], state='readonly', width=16)
-        view.pack(side='left', padx=4)
-        view.bind('<<ComboboxSelected>>', lambda _e: self._redraw_loop_view())
-        ttk.Label(self.loop_view_row, text='负载扰动注入').pack(side='left', padx=(8, 2))
+        self.loop_load_row = ttk.Frame(controls)
+        ttk.Label(self.loop_load_row, text='负载扰动注入').pack(side='left', padx=(4, 2))
         self.loop_load_output = tk.StringVar(value='OUT1')
-        self.loop_load_combo = ttk.Combobox(self.loop_view_row, textvariable=self.loop_load_output,
+        self.loop_load_combo = ttk.Combobox(self.loop_load_row, textvariable=self.loop_load_output,
             values=['OUT1'], state='readonly', width=7)
         self.loop_load_combo.pack(side='left')
         self.loop_load_combo.bind('<<ComboboxSelected>>', lambda _e: self._redraw_loop_view())
         self.loop_response_note = tk.StringVar()
-        response_note = ttk.Label(self.loop_view_row, textvariable=self.loop_response_note,
+        response_note = ttk.Label(self.loop_load_row, textvariable=self.loop_response_note,
                   style='Muted.TLabel', wraplength=220, justify='left')
         response_note.pack(side='left', padx=8, fill='x', expand=True)
         response_note.bind('<Configure>', lambda e: response_note.configure(wraplength=max(100,e.width-10)))
-        self.loop_view_row.pack_forget()
+        self.loop_step_caption = tk.StringVar()
+        self.loop_step_note = ttk.Label(f, textvariable=self.loop_step_caption,
+            style='Muted.TLabel', anchor='w')
+        self._loop_step_tooltip = Tooltip(self.loop_step_note, '')
+        self.canvas_loop_step = None
 
         self.fig_loop, self.ax_loop = _subplots(2, 2, figsize=(11.5, 6.6))
         self.canvas_loop = FigureCanvasTkAgg(self.fig_loop, master=f)
@@ -2944,6 +3317,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             p = self.get_params()
             p.update(self._rcd_parameters())
+            if self._cot_active():
+                self._cot_auto_tune(p)
+                return
             if p.get('feedback_mode')=='PSR-MP6005':
                 self._psr_auto_tune(p)
                 return
@@ -3044,9 +3420,68 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         except Exception as e:
             self.tune_result.set(f'auto-tune error: {e}')
 
+    def _cot_auto_tune(self, p):
+        from cot_loop import tune
+        from input_voltage_range import calculate_input_operating_point
+
+        current = self._last if self._snapshot_valid and self._last and self._last['p'] == p else None
+        snapshot = current or calculate_input_operating_point(p)
+        model_params = snapshot.get('calculation_params', snapshot['p'])
+        try:
+            candidate = tune(model_params, snapshot['op'], p['fc_target'], p['pm_target'])
+        except ValueError as exc:
+            self.tune_result.set(f'COT PI 整定未写回。{exc}')
+            return
+        for key in ('cot_kp_hz', 'cot_ki_hz_per_s'):
+            self.set_param(key, candidate[key])
+        self.tune_result.set(
+            f"COT PI  fc={candidate['fc']:.0f} Hz / PM={candidate['pm']:.1f}°"
+            f"   Kp={candidate['cot_kp_hz']:.4g} Hz"
+            f"   Ki={candidate['cot_ki_hz_per_s']:.4g} Hz/s")
+        self.schedule_update()
+
     def _redraw_loop_view(self):
         if self._snapshot_valid and self._last:
             self._update_loop(self._last['p'])
+        elif self.loop_view.get() == '反馈路负载阶跃':
+            self._draw_loop_load_step(dict(available=False, reason='请先完成当前工况的设计计算。'))
+        else:
+            self._show_loop_canvas(self.canvas_loop)
+
+    def _show_loop_canvas(self, canvas):
+        if canvas is self.canvas_loop_step:
+            self.loop_bode_controls.pack_forget()
+            if not self.loop_step_note.winfo_manager():
+                self.loop_step_note.pack(side='bottom', fill='x', padx=4)
+        else:
+            self.loop_step_note.pack_forget()
+            if not self.loop_bode_controls.winfo_manager():
+                self.loop_bode_controls.pack(fill='x', after=self.loop_view_row)
+        for existing in (self.canvas_loop, self.canvas_loop_step):
+            if existing is not None and existing is not canvas:
+                existing.get_tk_widget().pack_forget()
+        widget = canvas.get_tk_widget()
+        if not widget.winfo_manager():
+            widget.pack(fill='both', expand=True)
+
+    def _draw_loop_load_step(self, data):
+        from loop_charts import draw_feedback_load_step
+
+        if self.canvas_loop_step is None:
+            self.fig_loop_step, self.ax_loop_step = _subplots(1, 2, figsize=(11.5, 4.4))
+            self.canvas_loop_step = FigureCanvasTkAgg(self.fig_loop_step, master=self.loop_view_row.master)
+        self.loop_step_caption.set(
+            (data.get('warning') or '平均小信号估算 · 计算说明')
+            if data.get('available') else '')
+        self.loop_esr_note.set((
+            '平均小信号估算 · 只扰动并显示所选反馈路。'
+            '恢复容差为额定点端口电压的 0.1% 与本次峰值偏移的 2% 取较大值。'
+            + data.get('notes', '')) if data.get('available') else data['reason'])
+        self._loop_step_tooltip.text = self.loop_esr_note.get()
+        draw_feedback_load_step(self.ax_loop_step, data)
+        self.fig_loop_step.tight_layout()
+        self._show_loop_canvas(self.canvas_loop_step)
+        _draw_canvas(self.canvas_loop_step)
 
     def _queue_coupled_loop(self, p, op):
         signature = parameter_signature(p)
@@ -3086,8 +3521,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 return
             self.tune_result.set('auto-tune error: '+str(job.error))
         self._update_loop(job.parameters, draw=False)
-        self._rendered_tabs.discard(4)
-        self._rendered_tabs.discard(9)
+        self._rendered_tabs.discard(self.nb.index(self.tab_loop))
+        self._rendered_tabs.discard(self.nb.index(self.tab_review))
         self._refresh_visible_tab()
 
     def _update_loop(self, p, draw=True):
@@ -3101,6 +3536,11 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 if signature != self._loop_signature:
                     self._queue_coupled_loop(p, op)
                     if draw:
+                        if self.loop_view.get() == '反馈路负载阶跃':
+                            self._draw_loop_load_step(dict(available=False, reason='正在后台建立多路低频环路…'))
+                            return
+                        self._show_loop_canvas(self.canvas_loop)
+                        self.loop_response_note.set('')
                         for axis in self.ax_loop.flat:
                             axis.clear(); axis.text(.5, .5, '正在后台建立多路低频环路…',
                                 ha='center', va='center', transform=axis.transAxes, fontsize=10)
@@ -3142,7 +3582,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 note = self._last_plant.model_note
             if p['topology'] == 'ACF-FORWARD':
                 note = f"正激采用低频 Buck 派生模型，不含钳位完整动态。建议 fc ≤ {fmt_eng(op['fc_recommended_max'], 'Hz')}。"
-            if op['mode'] != 'CCM' and not op.get('coupled_solution') and not uses_dcm_peak_energy(p,op):
+            if op['mode'] != 'CCM' and not self._cot_active() and not op.get('coupled_solution') and not uses_dcm_peak_energy(p,op):
                 note += ' 当前采用低频单极点 DCM 近似。'
             if fc is None:
                 note += ' 扫描范围内无下降穿越，不能用扫描末端作为 fc。'
@@ -3151,17 +3591,29 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self.loop_esr_note.set(note)
             multi = loop.get('multi_output')
             if multi:
-                if not self.loop_view_row.winfo_manager():
-                    self.loop_view_row.pack(fill='x', pady=(0, 3), before=self.canvas_loop.get_tk_widget())
+                if not self.loop_multi_button.winfo_manager():
+                    self.loop_multi_button.pack(side='left', padx=2)
+            else:
+                self.loop_multi_button.pack_forget()
+                if self.loop_view.get() == '各路响应':
+                    self.loop_view.set('主反馈 Bode')
+            if multi and self.loop_view.get() == '各路响应':
+                if not self.loop_load_row.winfo_manager():
+                    self.loop_load_row.pack(fill='x', pady=(0, 3))
                 values = [f'OUT{r["id"]}' for r in multi['outputs']]
                 self.loop_load_combo.configure(values=values, state='readonly' if multi['load'] is not None else 'disabled')
                 if self.loop_load_output.get() not in values:
                     self.loop_load_output.set(values[0])
                 self.loop_response_note.set('负载增大为正；只作局部小信号' if multi['load'] is not None else '理想匝比参考响应；无负载矩阵')
             else:
-                self.loop_view_row.pack_forget()
+                self.loop_load_row.pack_forget()
+                self.loop_response_note.set('')
             if not draw:
                 return
+            if self.loop_view.get() == '反馈路负载阶跃':
+                self._draw_loop_load_step(loop['load_step'])
+                return
+            self._show_loop_canvas(self.canvas_loop)
             if multi and self.loop_view.get() == '各路响应':
                 from loop_charts import draw_multi_output_response
                 draw_multi_output_response(self.ax_loop, loop, int(self.loop_load_output.get()[3:]))
@@ -3173,7 +3625,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             ax = self.ax_loop
             for a in ax.flat:
                 a.clear(); a.set_axis_on()
-            for i, label in enumerate(('Gvc 对象', 'Gc 补偿器')):
+            labels = ('发脉冲频率 → 反馈电容端', 'COT PI') if self._cot_active() else ('Gvc 对象', 'Gc 补偿器')
+            for i, label in enumerate(labels):
                 ax[0, 0].semilogx(f, 20*np.log10(np.maximum(np.abs(gains[i]), 1e-300)), label=label)
                 ax[0, 1].semilogx(f, phases[i], label=label)
             ax[0, 0].set(title='对象与补偿器幅频', ylabel='dB')
@@ -3203,9 +3656,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             for var in self.margin_info.values(): var.set('环路: 未计算')
             self.loop_esr_note.set(str(e))
             if draw:
-                for axis in self.ax_loop.flat:
-                    axis.clear(); axis.text(.5,.5,str(e),ha='center',va='center',wrap=True,transform=axis.transAxes,fontsize=9)
-                _draw_canvas(self.canvas_loop)
+                if self.loop_view.get() == '反馈路负载阶跃':
+                    self._draw_loop_load_step(dict(available=False, reason=str(e)))
+                else:
+                    self._show_loop_canvas(self.canvas_loop)
+                    for axis in self.ax_loop.flat:
+                        axis.clear(); axis.text(.5,.5,str(e),ha='center',va='center',wrap=True,transform=axis.transAxes,fontsize=9)
+                    _draw_canvas(self.canvas_loop)
             if self._last:
                 self._last['loop'] = None
                 self._last['res']['loop'] = None
@@ -3230,42 +3687,39 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
     # ============================================================ cap-ripple 6
     def _build_cap_tab(self):
+        from capacitor_ui import CapacitorResultsTable
+
         f = self._build_results_scroll(self.tab_cap, 'cap')
         guide = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         guide.pack(fill='x', pady=(2, 4))
         self._result_label(guide,
                   text='电容纹波：整周期 DFT，全频点复阻抗分流；RMS 与损耗、评审及报告共用一份结果。',
                   style='Guide.TLabel').pack(fill='x')
+        self.cap_summary = tk.StringVar(value='')
+        self._result_label(f, textvariable=self.cap_summary, foreground='#1a5fb4').pack(fill='x', pady=3)
+        self.cap_results_table = CapacitorResultsTable(f)
+        self.cap_results_table.pack(fill='x', padx=6, pady=(3, 6))
         self.fig_cap, (self.ax_cap_tot, self.ax_cap_band) = _subplots(
             2, 1, figsize=(11.5, 7.0))
         self.canvas_cap = FigureCanvasTkAgg(self.fig_cap, master=f)
         self.canvas_cap.get_tk_widget().pack(fill='both', expand=True)
         self._bind_result_overview('cap', self.canvas_cap)
-        self.cap_summary = tk.StringVar(value='')
-        self._result_label(f, textvariable=self.cap_summary, foreground='#1a5fb4').pack(fill='x', pady=3)
         self._build_output_result_host(f, 'cap')
 
     def _update_cap(self, op, p, res):
         try:
             ra = res['capacitors']
             multiple = bool(res.get('outputs'))
-            self._draw_cap(ra, shared_only=multiple)
-            parts = [f"共享输入电容银行 {ra['total_in']:.3f} A rms，ESR损耗 {res['P_cap_in']:.4g} W"] if multiple else [
-                f"input cap bank {ra['total_in']:.3f} A | output cap bank {ra['total_out']:.3f} A"]
-            banks = [('IN', ra['input'])]
+            self.cap_results_table.refresh(res)
+            lead = '共享输入' if multiple else '输入'
+            parts = [f"{lead} {ra['total_in']:.4g} A rms / {res['P_cap_in']:.4g} W"]
             if multiple:
                 parts.extend(f"OUT{row['id']}{' ★' if row['id']==op['feedback_output'] else ''}：{row['capacitors']['total_out']:.4g} A rms / {row['P_cap']:.4g} W"
                              for row in res['outputs'])
             else:
-                banks.append(('OUT', ra['output']))
-            for tag, rail in banks:
-                for i, c in enumerate(rail['caps']):
-                    dom = [(l, round(c['bands'][k], 3)) for k, l in
-                           enumerate(rail['labels']) if c['bands'][k] > 0.02 * c['total']]
-                    dom_s = ', '.join(f'{l}={v:.3f}A' for l, v in dom[:4])
-                    parts.append(f"{tag} C{i + 1}: C={c['C'] * 1e6:.0f}uF ESR={c['ESR'] * 1e3:.0f}mR "
-                                 f"ESL={c['ESL'] * 1e9:.0f}nH -> {c['total']:.3f} A rms ({dom_s})")
+                parts.append(f"输出 {ra['total_out']:.4g} A rms / {ra['output']['loss_W']:.4g} W")
             self.cap_summary.set('   |   '.join(parts))
+            self._draw_cap(ra, shared_only=multiple)
             self._update_output_result_cards('cap', op, res)
         except Exception as e:
             import traceback
@@ -3283,7 +3737,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         for prefix, rail in banks:
             for i, c in enumerate(rail['caps']):
                 name = f'{prefix} C{i+1}'
-                labels.append(f"{name} · {fmt_eng(c['C'],'F')} / {fmt_eng(c['ESR'],'Ω')}")
+                labels.append(f"{name} · {fmt_eng(c['C'],'F')}")
                 vals.append(c['total'])
                 caps.append((name, c, rail['labels']))
         columns = 1 if compact else 2

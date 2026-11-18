@@ -71,7 +71,7 @@ for (const row of oracle) {
     assert.equal(allCaps.length, allBanks.reduce((n: number, b: Spec[]) => n + b.length, 0));
     for (const r of run.outputs)
       assert.equal(r.capacitors.output.caps.length, bank(r.spec).length, "every output capacitor participates in losses");
-    const bomRows = reportModules().find((m) => m.name === "BOM与降额")!.rows({ summary: { component_management: bom } });
+    const bomRows = reportModules().find((m) => m.name === "器件清单")!.rows({ summary: { component_management: bom } });
     assert.ok(bomRows.some((r) => r[0].startsWith("U_CTRL ") && String(r[1]).includes(items.U_CTRL.model)), "controller reference enters report");
     assert.ok(bomRows.some((r) => r[0].startsWith("Q1 ") && String(r[3]).includes(items.Q1.conditions)), "part conditions enter report");
     if (p.inductor_design_enabled === false) {

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>变压器电磁仿真 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>10  变压器电磁仿真</h1>
+<p>由当前磁芯和绕线几何建立线性零偏置磁静态模型。求解每个绕组的自感及其与其他绕组的互感，并得到带端口顺序的耦合系数矩阵和短路漏感。</p>
+<p class='entry'>电源单元 → 仿真配置中心 → 变压器电磁</p>
+<h2>操作步骤</h2><ol>
+<li><strong>完成当前绕制输入</strong> 在磁件页核对型号、窗口、总气隙、匝数、完整线并绕根数、层序、绝缘及接线。确认求解端口标识与原边 P、功率输出 OUT1 等相对应。</li>
+<li><strong>读取输入检查</strong> 软件复用当前绕组、材料、气隙和 3D 预览定位。支持的圆中柱磁芯可从三视图轮廓生成名义实体。缺少实体或定位的项目会单独列出。</li>
+<li><strong>补充求解软件或磁芯</strong> 在“设备与模型”核对 Elmer 安装目录。只做电磁仿真时可仅配置 Elmer。需要自带磁芯实体时，展开自定义项或导入同型号模型配置包。</li>
+<li><strong>执行求解并检查结果</strong> 在“变压器电磁”直接运行。程序自动生成提取设置，在场解报告中追溯几何、坐标和接线来源。</li>
+</ol>
+<h2>输入字段</h2><div class="table"><table><caption>表 10-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">Elmer 安装目录、LTspice 可执行程序</th><td>本机路径</td><td>前者用于网格导入与场求解，后者用于联合流程的电路验证。换电脑后在本机重新定位。</td></tr>
+<tr><th scope="row">磁芯实体、BREP 文件单位</th><td>STEP / STP / BREP、mm / m</td><td>STEP 使用文件内单位，BREP 使用所选单位。登记型号与 CAD 来源便于复核。</td></tr>
+<tr><th scope="row">磁芯装配方式、磨隙参数</th><td>装配选项，半径和中心 Z 用 mm</td><td>完整装配按实际气隙核对。单半芯按模型镜像方式装配，选择中柱磨隙时用半径和中心 Z 定义加工位置。</td></tr>
+<tr><th scope="row">r0、z0</th><td>mm</td><td>r0 为绕组内侧基准半径，z0 为绕组轴向起点，两者须与当前骨架和求解坐标一致。</td></tr>
+<tr><th scope="row">CAD 平移、CAD 转角</th><td>X / Y / Z，mm、°</td><td>把实体定位到求解坐标。检查绕组与磁芯、气隙及端部的相对位置。</td></tr>
+<tr><th scope="row">网格、空气域、单次超时</th><td>粗 / 标准 / 细、mm、s</td><td>分别控制网格档位、外部计算域大小及单工况等待时间。需要收敛证据时保留不同档位或域尺寸的对照结果。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>先核对场解的端口顺序、匝数、同名端和绕向。电感矩阵对角线是绕组自感，非对角线是相应绕组互感。耦合系数无量纲，短路漏感随短接条件变化。</p>
+<p>几何检查失败时检查实体尺度、装配方向和净窗口。反向互感或端口缺失时，先修正接线或绕向，再执行参数回填。</p>
+<p>线性磁静态采用等效闭合匝，适合查看自感和互感。涡流、偏磁、寄生电容及真实跨层引线需要相应的模型或实测证据。</p>
+<div class="paging"><a href="sequence.html">上一章　系统联合启停仿真</a> <a href="spice.html">下一章　LTspice 电路仿真与计算对比</a></div></main>
+</body>
+</html>

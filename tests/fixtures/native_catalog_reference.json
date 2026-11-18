@@ -13279,11 +13279,11 @@
         {
           "ref": "Q1",
           "metric": "peak",
-          "value": null,
+          "value": 50.05247413691339,
           "rating": 200.0,
-          "factor": 1.0,
-          "limit": 200.0,
-          "state": "undefined"
+          "factor": 0.9,
+          "limit": 180.0,
+          "state": "pass"
         },
         {
           "ref": "R_S1",
@@ -13306,16 +13306,16 @@
         {
           "ref": "Q2",
           "metric": "peak",
-          "value": null,
+          "value": 50.05247413691339,
           "rating": null,
-          "factor": 1.0,
+          "factor": 0.9,
           "limit": null,
           "state": "undefined"
         },
         {
           "ref": "C_CL1",
           "metric": "voltage",
-          "value": 43.59627356808561,
+          "value": 50.03927618830644,
           "rating": null,
           "factor": null,
           "limit": null,

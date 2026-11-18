@@ -60,6 +60,43 @@ class ExcelReportCheck(unittest.TestCase):
         self.assertEqual(numeric_text('1 / 2'),('1 / 2',None))
         self.assertEqual(numeric_text('未定义'),('未定义',None))
 
+    def test_tolerance_evidence_is_shared_by_word_and_excel(self):
+        from docx import Document
+        from input_range_report import export_input_range_docx
+        from openpyxl import load_workbook
+
+        case = dict(id='B013', voltage=33., load_profile='满载', parameters={'Rds_on': .06})
+        inputs = [dict(path='Rds_on', label='主 MOS 导通电阻', unit='Ω', nominal=.05,
+                       low=.04, high=.06, distribution='uniform', source='演示用范围')]
+        statistics = dict(count=96, missing_count=4, mean=77., std=1., moment_4sigma_low=73.,
+                          moment_4sigma_high=81., quantile_4sigma_low=None, quantile_4sigma_high=None,
+                          expected_tail_count=.003, reason='尾部样本不足')
+        rows = [dict(name='主开关电压', unit='V', direction='max', limit=80., worst=82.,
+                     margin=-2., status='review', case=case, statistics=statistics,
+                     evaluated_cases=20, expected_cases=20)]
+        evidence = dict(rows=rows, variables=inputs, samples=100, seed=42, evaluations=120,
+                        failure_count=4, failures=[dict(case, error='样例未收敛')],
+                        scope='已声明的稳态工况', input_fingerprint='0'*64)
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            word = Path(folder)/'容差.docx'
+            excel = Path(folder)/'容差.xlsx'
+            export_input_range_docx(word, self.snapshot, tolerance_result=evidence)
+            export_input_range_xlsx(excel, self.snapshot, tolerance_result=evidence)
+            doc = Document(word)
+            self.assertEqual(1, sum(p.style.name == 'Heading 1' and '最坏工况与容差' in p.text
+                                    for p in doc.paragraphs))
+            doc_rows = [tuple(c.text for c in r.cells) for t in doc.tables for r in t.rows]
+            self.assertIn(('主开关电压', '≤ 80 V', '82 V', '-2 V', 'B013 · 33 V · 满载', '20 / 20', '需复核'), doc_rows)
+            self.assertIn(('主开关电压', '—', '—', '0.003', '待补尾部样本\n尾部样本不足'), doc_rows)
+            with excel.open('rb') as stream:
+                workbook = load_workbook(stream, read_only=True)
+                values = [tuple(v for v in row if v is not None and v != '')
+                          for row in workbook['最坏工况与容差'].values]
+                workbook.close()
+            self.assertIn(('主开关电压', '≤ 80 V', 82, -2, 'B013 · 33 V · 满载', '20 / 20', '需复核'), values)
+            self.assertIn(('主开关电压', '—', '—', .003, '待补尾部样本\n尾部样本不足'), values)
+            self.assertIn(('B013 · 33 V · 满载', '样例未收敛'), values)
+
     def test_equation_descriptions_preserve_grouping_and_sum(self):
         from word_math import element, Parser
         self.assertEqual(_math_text(element('oMath', *Parser('T(s)=Gc(s)·Gb(s)').expr())),
@@ -80,7 +117,6 @@ class ExcelReportCheck(unittest.TestCase):
             self.assertEqual(result['sheet_count'],13)
             self.assertEqual(names[0],'00 工程验收')
             self.assertIn('14 关键器件BOM与降额',names)
-            self.assertGreater(result['figure_count'],20)
             self.assertFalse(result['incomplete'])
             self.assertIn('06 磁件与绕制',names)
             self.assertIn('07 环路与补偿电路',names)
@@ -98,6 +134,10 @@ class ExcelReportCheck(unittest.TestCase):
                 self.assertAlmostEqual(float(cells[addr].find('{'+S+'}v').text),case['result']['eta'],places=12)
             drawing_count=sum(len(e.findall('{'+D+'}oneCellAnchor')) for n,e in xml.items() if n.startswith('xl/drawings/drawing'))
             self.assertEqual(drawing_count,result['figure_count'])
+            topology=names.index('02 拓扑与多路输出')+1
+            self.assertEqual(len(xml[f'xl/drawings/drawing{topology}.xml'].findall('{'+D+'}oneCellAnchor')),1)
+            power=names.index('03 功率级与开关波形')+1
+            self.assertGreaterEqual(len(xml[f'xl/drawings/drawing{power}.xml'].findall('{'+D+'}oneCellAnchor')),4)
             self.assertTrue(any(n.startswith('xl/media/') for n in parts))
 
     def test_failure_is_visible_not_cloned(self):
@@ -124,8 +164,10 @@ class ExcelReportCheck(unittest.TestCase):
             _,names,xml=read_workbook(path)
             self.assertIn('10 MP6005 PSR',names)
             self.assertEqual(result['successful_cases'],2)
+            self.assertEqual(result['displayed_case_count'],1)
             text=''.join(ET.tostring(e,encoding='unicode') for n,e in xml.items() if n.startswith('xl/worksheets/sheet'))
-            self.assertIn('上下限相同',text)
+            self.assertIn('固定输入',text)
+            self.assertNotIn('r="J4"',text)
             self.assertIn('Rcomp',text)
 
     def test_nonisolated_does_not_get_clamp_or_psr_sheet(self):

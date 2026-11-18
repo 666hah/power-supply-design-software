@@ -11,7 +11,7 @@ import numpy as np
 from matplotlib import rc_context
 from matplotlib.ticker import MaxNLocator
 
-from power_charts import POWER_CHART_STYLE
+from power_charts import POWER_CHART_STYLE, display_power_waveform
 from power_stage import fmt_eng
 from stress_notes import DIODE_STRESS_NOTE
 
@@ -203,11 +203,14 @@ def draw_shared_power_signals(axes, op, wf):
 def draw_output_power(fig, branch, *, feedback=False):
     """Four flyback or six ACF charts; related currents share one axis."""
     topology = _check(branch, waveform=True)
-    index, wf = branch['id'], branch['wf']
+    index = branch['id']
+    wf, has_curve = display_power_waveform(branch['wf'])
+    ripple_label, voltage_label = ('输出纹波（按导入阻抗）', '输出电压（按导入阻抗）') if has_curve else (
+        '输出低频纹波（不含 ESL 尖峰）', '输出电压（低频重构）')
     signals = [('currents', '', 'A'),
                ('v_d', f'整流二极管反压 D_O{index}（未计寄生尖峰）', 'V'),
-               ('vout_ripple', '输出低频纹波（不含 ESL 尖峰）', 'mV'),
-               ('vout', '输出电压（低频重构）', 'V')]
+               ('vout_ripple', ripple_label, 'mV'),
+               ('vout', voltage_label, 'V')]
     if topology == 'ACF-FORWARD':
         signals = [('iL', f'独立输出电感电流 L_O{index}', 'A'),
                    ('i_free', f'续流二极管电流 D_F{index}', 'A')] + signals
@@ -262,12 +265,14 @@ def draw_output_capacitors(fig, branch, *, feedback=False):
             ax_bands = fig.add_subplot(grid[1, :])
 
         low = np.asarray(wf['vout_ripple'], dtype=float)
-        total = low + np.asarray(wf['v_esl'], dtype=float)
+        has_curve = wf.get('ripple_impedance_model') == 'curve'
+        total = np.asarray(wf['vout_ripple_impedance'], dtype=float) if has_curve else low + np.asarray(wf['v_esl'], dtype=float)
+        total_label = '按导入阻抗' if has_curve else '含 ESL'
         time = np.asarray(wf['t']) * 1e6
-        ax_wave.plot(time, total * 1e3, lw=1., color=_BLUE, label='含 ESL 总纹波')
-        ax_wave.plot(time, low * 1e3, lw=1.25, color=_RED, linestyle='--', label='低频纹波')
-        ax_wave.set_title(f"电压纹波：低频 {fmt_eng(wf['ripple_pp'], 'V')}pp\n"
-                          f"含 ESL {fmt_eng(wf['ripple_pp_total'], 'V')}pp", fontsize=10)
+        ax_wave.plot(time, total * 1e3, lw=1., color=_BLUE, label=total_label)
+        ax_wave.plot(time, low * 1e3, lw=1.25, color=_RED, linestyle='--', label='标称不含 ESL')
+        ax_wave.set_title(f"电压纹波 · 标称不含 ESL {fmt_eng(wf['ripple_pp'], 'V')}pp\n"
+                          f"{total_label} {fmt_eng(wf['ripple_pp_total'], 'V')}pp", fontsize=10)
         _style_axis(ax_wave, 'mV')
         ax_wave.legend(fontsize=8, loc='upper right')
 
@@ -308,7 +313,7 @@ def draw_output_capacitors(fig, branch, *, feedback=False):
         ax_bands.set_xlim(-.7, max(len(x)-.3, .7))
 
         _finish_figure(fig, output_title(branch, feedback=feedback) + ' · 输出电容纹波',
-                       f"输出电容 ESR 损耗 = {fmt_eng(branch['P_cap'], 'W')}；"
+                       f"输出电容耗散 {fmt_eng(branch['P_cap'], 'W')}。"
                        '并联分流含相位差，每颗 RMS 不能直接相加。共享输入电容仅在顶部显示。',
                        h_pad=2.)
     return dict(waveform=ax_wave, rms=ax_rms, bands=ax_bands)

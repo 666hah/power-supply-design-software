@@ -104,6 +104,7 @@ class Sheet:
     merges: list = field(default_factory=list)
     images: list = field(default_factory=list)
     breaks: list = field(default_factory=list)
+    column_count: int = len(WIDTHS)
 
     def cell(self, row, col, value, style=0, fmt=None):
         self.cells[row, col] = (value, style, fmt)
@@ -129,19 +130,21 @@ def _styles(formats):
     custom = node(root, 'numFmts', count=len(formats))
     for index, fmt in enumerate(formats, 164):
         node(custom, 'numFmt', numFmtId=index, formatCode=fmt)
-    fonts = node(root, 'fonts', count=5)
+    fonts = node(root, 'fonts', count=7)
     for size, bold, color in [(10, False, '172B4D'), (16, True, '172B4D'),
                               (11, True, 'FFFFFF'), (11, True, '172B4D'),
-                              (9, False, '596579')]:
+                              (9, False, '596579'), (11, True, 'A12D24'),
+                              (11, True, '29633B')]:
         f = node(fonts, 'font'); node(f, 'sz', val=size)
         node(f, 'name', val='Microsoft YaHei'); node(f, 'color', rgb='FF'+color)
         if bold: node(f, 'b')
-    fills = node(root, 'fills', count=7)
+    fills = node(root, 'fills', count=9)
     from design_theme import is_pcs
     pcs = is_pcs()
     for pattern, color in [('none', None), ('gray125', None), ('solid', '2068A0'),
                            ('solid', 'B76B1E'), ('solid', 'EAF1F8'),
-                           ('solid', 'F6F8FB'), ('solid', 'FFF0D6')]:
+                           ('solid', 'F6F8FB'), ('solid', 'FFF0D6'),
+                           ('solid', 'FCEDEB'), ('solid', 'E9F4ED')]:
         f = node(fills, 'fill'); pat = node(f, 'patternFill', patternType=pattern)
         if color:
             if pcs: color={'2068A0':'2376E5','B76B1E':'0D1726','EAF1F8':'EAF3FF','F6F8FB':'F3F6FA','FFF0D6':'FFF5DF'}.get(color,color)
@@ -152,10 +155,11 @@ def _styles(formats):
     edge = node(b, 'bottom', style='hair'); node(edge, 'color', rgb='FFD9E0EA')
     masters = node(root, 'cellStyleXfs', count=1)
     node(masters, 'xf', numFmtId=0, fontId=0, fillId=0, borderId=0)
-    xfs = node(root, 'cellXfs', count=10+2*len(formats))
+    xfs = node(root, 'cellXfs', count=12+2*len(formats))
     base = [(0,0,1,'left'), (1,0,0,'left'), (2,2,0,'left'),
             (2,3,0,'left'), (3,4,0,'left'), (2,2,0,'center'),
-            (0,5,1,'left'), (4,0,0,'left'), (3,6,0,'left'), (0,0,0,'left')]
+            (0,5,1,'left'), (4,0,0,'left'), (3,6,0,'left'), (0,0,0,'left'),
+            (5,7,0,'left'), (6,8,0,'left')]
     for font, fill, border, align in base:
         xf = node(xfs, 'xf', numFmtId=0, fontId=font, fillId=fill,
                   borderId=border, xfId=0, applyAlignment=1)
@@ -187,7 +191,8 @@ def save_workbook(path, sheets):
     for index, sheet in enumerate(sheets):
         quoted = "'"+sheet.name.replace("'", "''")+"'!"
         end = max(sheet.heights.keys() | {r for r, _ in sheet.cells}, default=4)
-        node(definitions, 'definedName', name='_xlnm.Print_Area', localSheetId=index).text = quoted+f'$A$1:$Q${end}'
+        last_col = col_name(sheet.column_count-1)
+        node(definitions, 'definedName', name='_xlnm.Print_Area', localSheetId=index).text = quoted+f'$A$1:${last_col}${end}'
         node(definitions, 'definedName', name='_xlnm.Print_Titles', localSheetId=index).text = quoted+'$1:$4'
     node(root, 'calcPr', calcId=191029, fullCalcOnLoad=1)
     relationships = Element('Relationships', xmlns=P)
@@ -216,20 +221,21 @@ def save_workbook(path, sheets):
                 props = node(ws, 'sheetPr'); node(props, 'tabColor', rgb='FF2376E5' if is_pcs() else 'FF2068A0')
                 node(props, 'pageSetUpPr', fitToPage=1)
                 end = max(sheet.heights.keys() | {r for r, _ in sheet.cells}, default=4)
-                node(ws, 'dimension', ref=f'A1:Q{end}')
+                node(ws, 'dimension', ref=f'A1:{col_name(sheet.column_count-1)}{end}')
                 sv = node(node(ws, 'sheetViews'), 'sheetView', workbookViewId=0, showGridLines=0, zoomScale=75)
                 node(sv, 'pane', ySplit=4, topLeftCell='A5', activePane='bottomLeft', state='frozen')
                 node(sv, 'selection', pane='bottomLeft', activeCell='A5', sqref='A5')
                 node(ws, 'sheetFormatPr', defaultRowHeight=24)
                 cols = node(ws, 'cols')
-                for c, width in enumerate(WIDTHS, 1): node(cols, 'col', min=c, max=c, width=width, customWidth=1)
+                for c, width in enumerate(WIDTHS[:sheet.column_count], 1):
+                    node(cols, 'col', min=c, max=c, width=width, customWidth=1)
                 data = node(ws, 'sheetData')
                 by_row = {}
                 for (r,c), cell in sheet.cells.items(): by_row.setdefault(r, []).append((c, cell))
                 for r in range(1, end+1):
                     row = node(data, 'row', r=r, ht=sheet.heights.get(r,24), customHeight=1)
                     for c, (value, style, fmt) in sorted(by_row.get(r, [])):
-                        if fmt: style = 10+formats.index(fmt)*2+(style == 6)
+                        if fmt: style = 12+formats.index(fmt)*2+(style == 6)
                         numeric = isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
                         cell = node(row, 'c', r=address(r,c), s=style, t='n' if numeric else 'inlineStr')
                         if numeric:
@@ -242,11 +248,14 @@ def save_workbook(path, sheets):
                     for ref in sheet.merges: node(merges, 'mergeCell', ref=ref)
                 node(ws, 'printOptions', horizontalCentered=1)
                 node(ws, 'pageMargins', left=.25, right=.25, top=.4, bottom=.4, header=.15, footer=.15)
-                node(ws, 'pageSetup', paperSize=8, orientation='landscape', fitToWidth=1, fitToHeight=0)
+                single = sheet.column_count < len(WIDTHS)
+                node(ws, 'pageSetup', paperSize=1 if single else 8,
+                     orientation='portrait' if single else 'landscape', fitToWidth=1, fitToHeight=0)
                 hf = node(ws,'headerFooter'); node(hf,'oddFooter').text = '&L'+sheet.name+'&R&P / &N'
                 if sheet.breaks:
                     breaks = node(ws,'rowBreaks', count=len(sheet.breaks), manualBreakCount=len(sheet.breaks))
-                    for row in sheet.breaks: node(breaks, 'brk', id=row-1, min=0, max=16, man=1)
+                    for row in sheet.breaks:
+                        node(breaks, 'brk', id=row-1, min=0, max=sheet.column_count-1, man=1)
                 if sheet.images:
                     node(ws, 'drawing', **{'{'+R+'}id':'drawing'})
                     rel = Element('Relationships', xmlns=P)

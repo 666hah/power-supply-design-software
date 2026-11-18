@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>由规格生成电源初版 · 开关电源设计软件操作教程</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
+  <main><h1>05  由规格生成电源初版</h1>
+<p>自动设计按所选控制器参考、需求和锁定项生成一套初步元件值，并在已覆盖工况复算这套设计。采用前先看结果和待复核项。</p>
+<p class='entry'>开关电源单元 → 自动设计 → 按规格生成初版（Buck / Boost / 反激）…</p>
+<h2>操作步骤</h2><ol>
+<li><strong>选拓扑与控制器参考</strong> Buck 可选 TPS40200 电压模式或 LTC3864 峰值电流模式。Boost 使用 LM5022 峰值电流模式。定频反激使用 MP6005 峰值电流 SSR，按情况选择满载 CCM 或 DCM。</li>
+<li><strong>填入规格和约束</strong> 提供电压、额定电流、纹波限制和最低相位裕度。定频反激显示 MP6005 的 250 kHz 标称参考频率。已配置多路反激时，自动设计表中的电压和电流指反馈路，其他路沿用现有绕组及负载。</li>
+<li><strong>保留已确定的元件</strong> 打开与当前单元相同的拓扑时，可勾选表中提供的锁定项。例如已采购电感时锁定 L，已确定电容组时锁定对应电容组。勾选前确认当前设计的数值和单位。</li>
+<li><strong>生成并检查</strong> 点“生成并校核”，阅读候选元件值、工作点、纹波、稳定裕度及超限项。可从“查看选值依据”了解限值和取值来源。改了规格后需重新生成。</li>
+<li><strong>采用并复核</strong> 确认后点“采用此初版”。回到计算器核对器件身份、额定值和温升等实际条件，并逐端点检查。需要保留旧方案时，先独立保存原配置。</li>
+</ol>
+<figure><a href="screens/initial.jpg" target="_blank" aria-label="查看原图 自动设计的规格 锁定项和候选结果"><img src="screens/initial.jpg" alt="自动设计的规格 锁定项和候选结果"></a><figcaption>图 5-1　自动设计的规格 锁定项和候选结果</figcaption><p>从上到下填写规格、决定保留哪些已选件，再点“生成并校核”。结果区出现问题时先读对应工况。</p></figure>
+<h2>输入字段</h2><div class="table"><table><caption>表 5-1　主要字段与使用位置</caption><thead><tr>
+<th scope="col">字段或选项</th>
+<th scope="col">单位或取值</th>
+<th scope="col">输入的含义及用途</th>
+</tr></thead><tbody>
+<tr><th scope="row">最低 / 最高输入电压，输出端口电压</th><td>V</td><td>用于选值与角点复算。多路反激的输出电压指主反馈路的防反后端口。</td></tr>
+<tr><th scope="row">额定 / 最小负载电流</th><td>A</td><td>定义满载与轻载。最小电流栏允许留空。多路反激输入的是反馈路电流。</td></tr>
+<tr><th scope="row">开关频率，允许输出纹波</th><td>kHz、%</td><td>分别决定每周期充放电时间和允许的输出峰峰纹波。</td></tr>
+<tr><th scope="row">满载电感纹波目标</th><td>%</td><td>Buck 以额定输出电流为基准，Boost 以低线满载输入电流为基准。反激 CCM 用原边导通平均电流，选择 DCM 时隐藏此项。</td></tr>
+<tr><th scope="row">最低相位裕度</th><td>°</td><td>初版补偿筛选和角点检查采用的裕度门槛。</td></tr>
+<tr><th scope="row">预设效率</th><td>%</td><td>在显示此项的 Boost、反激方案中，作为输入电流和功率的初估条件。</td></tr>
+<tr><th scope="row">低线占空比目标，钳位比 Kc，变压器至环境热阻</th><td>%、无量纲、K/W</td><td>反激的变比、RCD 选值及温升初估输入。Kc 定义为钳位电压相对反射电压的比值。</td></tr>
+<tr><th scope="row">锁定 L、DCR 或各电容组</th><td>选择</td><td>复算沿用所选已有元件值。出现不满足时，先定位锁定项是否限制了候选方案。</td></tr>
+</tbody></table></div><h2>结果核对</h2>
+<p>自动生成入口当前覆盖 Buck、Boost 和定频 SSR 反激。其他拓扑可从现有示例或手动配置继续设计。</p>
+<p>工程采用前确认参数来源和拟用器件。自动计算依据包含原厂资料、项目余量和可复算示例。</p>
+<div class="paging"><a href="needs.html">上一章　填写开关电源的需求与工况</a> <a href="power.html">下一章　配置功率级 器件与电容</a></div></main>
+</body>
+</html>

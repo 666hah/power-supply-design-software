@@ -2,6 +2,183 @@
 import numpy as np
 
 
+def excitation_ramps(switching, controller):
+    """Select original I(LP) points for the flyback energy-storage interval.
+
+    The shared flyback switch model reaches full enhancement at Vgs >= 0.7 VG.
+    Use complete Vgs pulses, leave a display guard at turn-on, and omit the
+    leading ringing before the current starts its sustained rise. The original
+    waveform and its independent full-band stress measurements are unchanged.
+    """
+    result = dict(available=False, blank_s=None, segments=[], peak_A=None)
+    try:
+        time, gate, sense, current = (np.asarray(switching[key], dtype=float) for key in
+            ('time', 'v(gate)', 'v(sense)', 'i(lp)'))
+        drive = float(controller['VG'])
+        blanking = float(controller.get('TLEB', controller.get('TBLANK', 0)))
+    except (KeyError, TypeError, ValueError):
+        return dict(result, reason='缺少原边电流、门极或前沿消隐设置')
+    if (time.ndim != 1 or len(time) < 4 or any(v.shape != time.shape for v in (gate, sense, current))
+            or not all(np.isfinite(v).all() for v in (time, gate, sense, current, drive, blanking))
+            or (np.diff(time) < 0).any() or drive <= 0 or blanking < 0):
+        return dict(result, reason='原边与门极波形的采样点、时间轴或驱动电压无效')
+
+    blank = max(100e-9, blanking)
+    result['blank_s'] = blank
+    vgs = gate - sense
+    threshold = .5 * drive
+    on = vgs >= threshold
+    rises = np.flatnonzero(~on[:-1] & on[1:]) + 1
+    falls = np.flatnonzero(on[:-1] & ~on[1:]) + 1
+    def crossing(index):
+        ratio = (threshold - vgs[index-1]) / (vgs[index]-vgs[index-1])
+        return time[index-1] + ratio * (time[index]-time[index-1])
+
+    for rise, position in zip(rises, np.searchsorted(falls, rises)):
+        if position == len(falls):
+            break
+        fall = falls[position]
+        start_edge, end_edge = crossing(rise), crossing(fall)
+        first = max(rise, int(np.searchsorted(time, start_edge+blank)))
+        if fall-first < 3:
+            continue
+        enhanced = np.flatnonzero(vgs[first:fall] >= .7*drive) + first
+        if len(enhanced) < 3:
+            continue
+        # Keep one contiguous fully enhanced interval. Exclude a pulse if a
+        # later voltage interruption erases most of its normal rise.
+        interruptions = np.flatnonzero(np.diff(enhanced) > 1)
+        if interruptions.size:
+            enhanced = enhanced[interruptions[-1]+1:]
+        values = current[enhanced]
+        if len(values) < 3:
+            continue
+
+        # A leading positive excursion followed by a valley is still turn-on
+        # ringing. Trim its prefix only. A late major decline is not a ramp.
+        tolerance = max(.001, .01*abs(values[-1]))
+        later_min = np.minimum.accumulate(values[::-1])[::-1]
+        ringing = np.flatnonzero(values-later_min > tolerance)
+        if ringing.size:
+            enhanced = enhanced[ringing[-1]+1:]
+        if len(enhanced) < 3 or time[enhanced[0]] > (start_edge+end_edge)/2:
+            continue
+        points, values = time[enhanced], current[enhanced]
+        if points[-1] <= points[0] or values[-1] <= values[0]:
+            continue
+        result['segments'].append(dict(time_s=points.tolist(),current_A=values.tolist(),
+            turn_on_s=float(start_edge),turn_off_s=float(end_edge),peak_A=float(np.max(values)),
+            start_A=float(values[0]),end_A=float(values[-1])))
+
+    if not result['segments']:
+        return dict(result,reason='记录窗口没有完整、可分辨的原边励磁上升段')
+    return dict(result,available=True,peak_A=max(seg['peak_A'] for seg in result['segments']))
+
+
+def cycle_current_statistics(raw, quality, output_count, *, current_observation=None):
+    """Unfiltered current evidence on complete observed gate periods.
+
+    Adaptive RAW samples describe piecewise-linear waveforms. Integrate their
+    square analytically per segment; do not average sample counts or discard
+    displacement-current peaks. Optional internal probes are never invented.
+    """
+    cycles=quality.get('cycles') or []
+    if len(cycles)<8:
+        return dict(available=False,reason='不足八个完整门极周期')
+    if any(abs(a['end_s']-b['start_s'])>1e-12 for a,b in zip(cycles[:-1],cycles[1:])):
+        return dict(available=False,reason='门极周期记录不连续，不能宣称整周期电流积分')
+    start,end=float(cycles[0]['start_s']),float(cycles[-1]['end_s'])
+    first,last=np.searchsorted(raw.time,[start,end])
+    times=np.asarray(raw.time[max(0,first-1):min(len(raw.time),last+1)],float)
+    axis=np.r_[start,times[(times>start)&(times<end)],end]
+    dt=np.diff(axis); span=end-start
+    def trace(name):
+        try:
+            y=np.asarray(raw.trace(name)[max(0,first-1):min(len(raw.time),last+1)],float)
+        except KeyError:return None
+        if not np.all(np.isfinite(y)):return None
+        return np.interp(axis,times,y)
+    def integral_product(a,b):
+        return float(np.sum(dt*(2*a[:-1]*b[:-1]+a[:-1]*b[1:]+a[1:]*b[:-1]+2*a[1:]*b[1:])/6)/span)
+    signals=[];measurements={}
+    def add(name,label,role,voltage=None,keys=None,*,direction_scale=1.,direction_note=None):
+        y=trace(name)
+        row=dict(signal=name,label=label,role=role,raw_probe_present=y is not None,
+                 available=y is not None and direction_scale in (-1.,1.))
+        if direction_note:row['direction_note']=direction_note
+        if y is not None and direction_scale not in (-1.,1.):
+            row['reason']='缺少已验证的探针参考方向；不作为正向电流统计'
+            y=None
+        elif y is not None:
+            row['direction_scale']=float(direction_scale)
+            y=y*direction_scale
+        if y is not None:
+            mean=float(np.sum(dt*(y[:-1]+y[1:])/2)/span)
+            rms=float(np.sqrt(max(0.,integral_product(y,y))))
+            row.update(mean_A=mean,rms_A=rms,peak_A=float(np.max(y)),valley_A=float(np.min(y)),
+                       charge_C=mean*span)
+            if voltage is not None:
+                va,vb=trace(voltage[0]),trace(voltage[1])
+                if va is not None and vb is not None:
+                    row['mean_power_W']=integral_product(va-vb,y)
+            if keys:
+                for key,value in zip(keys,(mean,rms,row['peak_A'])):measurements[key]=value
+        signals.append(row)
+        return y
+    primary=add('i(lp)','原边绕组 LP','winding',('v(vin_bus)','v(drain)'),keys=('primary_avg','primary_rms','primary_peak'))
+    observation=current_observation or {}
+    add('i(xq1:smain)','Q1 沟道 D→S','conduction',('v(drain)','v(sense)'),
+        ('switch_avg','switch_rms','switch_peak'),
+        direction_scale=observation.get('mos_channel_direction_scale'),
+        direction_note=observation.get('mos_channel_direction_note'))
+    add('i(xq1:coss)','Q1 Coss 位移电流','displacement',('v(drain)','v(sense)'))
+    add('i(xq1:xbody:dmain)','Q1 体二极管导通','conduction',('v(sense)','v(drain)'))
+    add('i(xq1:cgate)','Q1 栅电容电流','gate')
+    add('i(rs1)','采样电阻总电流','sense_total')
+    add('i(xd_sn1:dmain)','RCD 钳位二极管导通','clamp')
+    add('i(xd_sn1:cj)','RCD 二极管 Cj 位移电流','displacement')
+    add('i(c_par_p)','原边绕组电容位移电流','displacement')
+    add('i(r_par_q1)','Q1 外接 RC 支路','snubber')
+    outputs=[]
+    for n in range(1,output_count+1):
+        add(f'i(ls{n})',f'OUT{n} 绕组 LS{n}','winding',('v(sgnd)',f'v(rect{n})'),keys=(f'out{n}_winding_avg',f'out{n}_winding_rms',f'out{n}_winding_peak'))
+        add(f'i(xd_o{n}:dmain)',f'OUT{n} 整流管导通','conduction',(f'v(rect{n})',f'v(cap{n})'),
+            (f'out{n}_rectifier_avg',f'out{n}_rectifier_rms',f'out{n}_rectifier_peak'))
+        add(f'i(xd_o{n}:cj)',f'OUT{n} 整流管 Cj 位移电流','displacement',(f'v(rect{n})',f'v(cap{n})'))
+        add(f'i(c_par_s{n})',f'OUT{n} 绕组电容位移电流','displacement')
+        add(f'i(r_par_d{n})',f'OUT{n} 整流 RC 支路','snubber')
+        vo,sg=trace(f'v(out{n})'),trace('v(sgnd)')
+        outputs.append(dict(id=n,mean_voltage_V=(float(np.sum(dt*((vo-sg)[:-1]+(vo-sg)[1:])/2)/span)
+            if vo is not None and sg is not None else None)))
+    return dict(available=primary is not None,start_s=start,end_s=end,periods=len(cycles),
+        frequency_hz=len(cycles)/span,measurements=measurements,signals=signals,outputs=outputs,
+        scope='完整实际门极周期；原始自适应采样分段线性积分，保留全部峰值和负电流。绕组、沟道导通和电容位移电流分别统计；电容支路有功可正可负。')
+
+
+def charge_balance(audit, case, relative_limit=.01, absolute_limit_A=1e-6):
+    """Steady current comparison requires zero mean capacitor charging.
+
+    The exported nominal fixture is resistive. Compare winding charge with
+    actual port voltage / the frozen resistance, not its nominal power/V.
+    Parallel parasitic capacitors carry zero mean current in periodic state.
+    """
+    result=case['result'];ops=[o['op'] for o in result.get('outputs') or []] or [result['op']]
+    rows=[]
+    for voltage,op in zip(audit.get('outputs') or [],ops):
+        n=voltage['id'];v=voltage['mean_voltage_V'];r=op.get('R')
+        current=audit['measurements'].get(f'out{n}_winding_avg')
+        valid=v is not None and r and r>0 and current is not None
+        load=v/r if valid else None
+        residual=current-load if valid else None
+        limit=max(absolute_limit_A,abs(load)*relative_limit) if valid else None
+        rows.append(dict(id=n,winding_mean_A=current,load_mean_A=load,charging_mean_A=residual,
+            limit_A=limit,relative_percent=100*abs(residual)/max(abs(load),absolute_limit_A) if valid else None,
+            passed=bool(valid and abs(residual)<=limit)))
+    passed=len(rows)==len(ops) and all(r['passed'] for r in rows)
+    return dict(passed=passed,rows=rows,relative_limit_percent=relative_limit*100,absolute_limit_A=absolute_limit_A,
+                reason='逐路周期电荷平衡通过' if passed else '输出电容仍有净充放电或缺少电荷证据，电流稳态对比待完成')
+
+
 def startup_gate_current(raw, step_s, gate_voltage, *, output_count=1, feedback_output=1):
     """Maximum observed winding current 50 ns before a resolved startup turn-on.
 

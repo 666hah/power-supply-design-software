@@ -28,6 +28,7 @@ class AnalysisChecks(unittest.TestCase):
         time=np.r_[np.linspace(0,.1,1000),.5,1.];values=time
         result=statistics(time,values,0,1)
         self.assertAlmostEqual(result['mean'],.5,12)
+        self.assertAlmostEqual(result['rms'],1/math.sqrt(3),12)
         self.assertGreater(abs(np.mean(values)-.5),.4)
 
     def test_fra_margins_and_missing_phase_crossing(self):

@@ -98,6 +98,7 @@ onBeforeUnmount(() => {
       class="chart-image"
       @click="expanded = true"
     />
+    <slot />
     <p v-if="note" class="chart-note">{{ note }}</p>
   </section>
   <Teleport :to="modalTarget"

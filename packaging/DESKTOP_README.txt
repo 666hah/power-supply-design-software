@@ -52,3 +52,9 @@ Existing calculation/model limitations and hardware verification apply.
 完整复制本程序目录及_internal；只读安装位置请用模型配置包带走用户目录中的CAD。
 详见 _internal/docs/PORTABLE_SIMULATION.md；环境检查不代表场解收敛或方案合格。
 
+变压器三维预览：
+在“磁件”页或绕制编辑器点击“3D 结构预览”。独立窗口可旋转、缩放、逐层查看及导出PNG。
+预览资源和67个磁芯的完整三维网格随包离线提供，无需另外配置磁芯模型路径；使用本机Microsoft Edge WebView2 Runtime。
+PQ等磁芯按对应型号原厂三视图建模，可查看上下半芯以及正交投影；每个型号保留厂家、尺寸和来源说明。
+无需Blender，不启动电磁求解。逐项规格来源、参考版本及简化说明保留在预览右栏。
+

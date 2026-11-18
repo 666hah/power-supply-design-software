@@ -3,7 +3,7 @@ import { windingRows, assess, windingChart } from "./winding";
 import { calculate, design, VERSION } from "./engine";
 import { chart } from "./charts";
 import { advancedAction } from "./actions";
-import { excel, word, overview, networkExcel, jsonFile } from "./reports";
+import { excel, word, overview, networkExcel, jsonFile, reportCases } from "./reports";
 import { analyzeNetwork } from "./network";
 import { exportSpice } from "./spice_export";
 import { type Spec, clone, normalize } from "./spec";
@@ -53,7 +53,11 @@ self.onmessage = async (event: MessageEvent) => {
       case "pictures": {
         const r = context(args.job);
         result = [];
-        for (const [i, c] of r.snapshot.cases.entries())
+        const selected = reportCases(r.snapshot);
+        const topologyCase = selected.find(c => !c.error);
+        for (const c of selected) {
+          if (c.error) continue;
+          const i = r.snapshot.cases.indexOf(c);
           for (const kind of [
             "topology",
             "power",
@@ -75,6 +79,7 @@ self.onmessage = async (event: MessageEvent) => {
             "multi_reference",
             "multi_load",
           ]) {
+            if (kind === "topology" && c !== topologyCase) continue;
             progress("计算报告图表 " + c.id + " / " + kind);
             const outputs = ["outputs", "output_caps", "multi_load"].includes(
               kind,
@@ -140,6 +145,7 @@ self.onmessage = async (event: MessageEvent) => {
                 });
               }
           }
+        }
         break;
       }
       case "export": {

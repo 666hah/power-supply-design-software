@@ -35,9 +35,10 @@ def save_font_size(value):
 def font_control(parent,command,*,style='',side='right'):
     from tkinter import ttk
     import tkinter as tk
-    frame=ttk.Frame(parent)
+    frame=ttk.Frame(parent,style=f'{style}.TFrame' if style else 'TFrame')
     frame.pack(side=side,padx=8)
-    ttk.Label(frame,text='界面字号',font=('Microsoft YaHei UI',-12)).pack(side='left',padx=(0,5))
+    ttk.Label(frame,text='字号' if style else '界面字号',font=('Microsoft YaHei UI',-12),
+              style=f'{style}Meta.TLabel' if style else 'TLabel').pack(side='left',padx=(0,5))
     choice=tk.StringVar(value=str(font_size()))
     box=ttk.Combobox(frame,textvariable=choice,values=FONT_SIZES,width=3,state='readonly',font=('Microsoft YaHei UI',-13))
     box.pack(side='left')

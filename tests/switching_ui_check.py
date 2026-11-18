@@ -139,14 +139,16 @@ class GUIPageChecks(unittest.TestCase):
     def test_tab_order_and_all_lazy_updaters(self):
         a = self.app
         expected = [a.tab_topology, a.tab_power, a.tab_stress, a.tab_mag,
-                    a.tab_loop, a.tab_eff, a.tab_cap, a.tab_rcd, a.tab_comp, a.tab_review]
+                    a.tab_loop, a.tab_cross, a.tab_eff, a.tab_cap, a.tab_rcd, a.tab_comp, a.tab_review]
         self.assertEqual(list(a.nb.tabs()), [str(w) for w in expected])
-        self.assertEqual(len(a._tab_updaters()), 10)
+        self.assertEqual(len(a._tab_updaters()), len(expected))
+        self.assertEqual(a.nb.tab(a.tab_cross, 'state'), 'hidden')
         a._rendered_tabs.clear()
-        for tab in expected:
+        normal_analysis_tabs = [tab for tab in expected if tab is not a.tab_cross]
+        for tab in normal_analysis_tabs:
             a.nb.select(tab); a._refresh_visible_tab()
             self.assertNotIn('Refresh:', a.status_var.get())
-        self.assertEqual(a._rendered_tabs, set(range(10)))
+        self.assertEqual(a._rendered_tabs, {a.nb.index(tab) for tab in normal_analysis_tabs})
         a.nb.select(a.tab_topology)
 
     def test_power_chart_order_and_repeated_redraw(self):
@@ -166,24 +168,42 @@ class GUIPageChecks(unittest.TestCase):
         a._update_topology(L['op'], L['p'])
         self.assertIn('Q1', a.topology_tree.get_children())
 
-    def test_minimum_window_keeps_all_ten_tabs_accessible(self):
+    def test_minimum_window_keeps_every_visible_page_accessible(self):
         a = self.app
+        initial_page = a.nb.select()
         try:
-            # Map only our test window, fully transparent and off-screen, so
-            # Tk computes real tab hit-boxes without exposing a user window.
+            # Let Tk measure the actual controls in an invisible test window.
             self.root.attributes('-alpha', 0.)
             self.root.geometry('1000x600-10000-10000')
             self.root.deiconify()
-            a._apply_scale(self.main._font_scale_for(1000, 600))
+            a._apply_scale(14 / 13)
             self.root.update()
             self.assertGreater(a.nb.winfo_width(), 300, self.root.geometry())
-            visible = set()
-            for y in (8, 15, 22, 29):
-                for x in range(0, a.nb.winfo_width(), 3):
-                    try: visible.add(a.nb.index(f'@{x},{y}'))
-                    except tk.TclError: pass
-            self.assertEqual(visible, set(range(10)), f'Notebook width={a.nb.winfo_width()}')
+            pages = [page for page in a.nb.tabs() if a.nb.tab(page, 'state') == 'normal']
+            nav = a._result_navigation
+            buttons = a._result_buttons
+            self.assertGreater(nav.grid_size()[1], 1)
+            self.assertEqual({page for page, button in buttons.items() if button.winfo_ismapped()},
+                             set(pages))
+            for page in pages:
+                button = buttons[page]
+                self.assertLessEqual(button.winfo_x() + button.winfo_width(), nav.winfo_width())
+                button.invoke()
+                self.assertEqual(a.nb.select(), page)
+
+            a._apply_scale(40 / 13)
+            self.root.update()
+            combo = a._result_nav_combo
+            self.assertTrue(combo.winfo_ismapped())
+            self.assertFalse(any(button.winfo_ismapped() for button in buttons.values()))
+            self.assertEqual(tuple(combo['values']),
+                             tuple(a.nb.tab(page, 'text').strip() for page in pages))
+            for index, page in enumerate(pages):
+                combo.current(index)
+                combo.event_generate('<<ComboboxSelected>>')
+                self.assertEqual(a.nb.select(), page)
         finally:
+            a.nb.select(initial_page)
             self.root.withdraw()
             self.root.geometry('1600x950')
             self.root.attributes('-alpha', 1.)

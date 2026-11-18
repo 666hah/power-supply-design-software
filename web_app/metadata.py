@@ -68,7 +68,7 @@ def preview(spec):
 
 def bootstrap():
     from spice_export import SETTINGS,CHOICES,setting_group,ordered_setting_keys,normalize_settings,mp6005_preset
-    from controller_logic import definition as controller_definition
+    from controller_logic import acf_definition, cot_definition, definition, nonisolated_definition, qr_definition
     from power_stage import TOPOLOGIES
     from parameter_layout import SECTION_TITLES, GROUPS
     from design_engine.catalog import parameter_catalog
@@ -124,17 +124,22 @@ def bootstrap():
     for flag,key in options.items():
         order[flag] = order[key]-.1
     parameters.sort(key=lambda row:(order.get(row['name'],1000),row['name']))
+    from cot_buck_spice import FRA_KEYS, normalize_cot_settings
+    cot_defaults = normalize_cot_settings(None, 400_000.)
     return json_value(dict(version='0.2.0-local', spec=spec, parameters=parameters,
         sections=dict(SECTION_TITLES,psr='MP6005 原边反馈参数'), topologies=TOPOLOGIES, examples=EXAMPLES,
         materials=STEINMETZ_MATERIALS,
         permeability_materials=__import__('transformer_gap').MATERIAL_PERMEABILITY,
-        spice_presets=dict(generic=normalize_settings(),mp6005=mp6005_preset(),mp6005_acf=__import__('acf_spice').preset(),l6565=__import__('qr_spice_settings').l6565_preset(),tps40200=__import__('nonisolated').preset(1),ltc3864=__import__('nonisolated').preset(2),lm5022=__import__('nonisolated').preset(3)),
-        spice_niso_logic=__import__('controller_logic').nonisolated_definition(),
+        spice_presets=dict(generic=normalize_settings(),mp6005=mp6005_preset(),mp6005_acf=__import__('acf_spice').preset(),l6565=__import__('qr_spice_settings').l6565_preset(),tps40200=__import__('nonisolated').preset(1),ltc3864=__import__('nonisolated').preset(2),lm5022=__import__('nonisolated').preset(3),
+                           cot={key: cot_defaults[key] for key in FRA_KEYS}),
+        spice_niso_logic=nonisolated_definition(),
         spice_niso_reference_keys=list(__import__('nonisolated').REFERENCE_KEYS),
-        spice_acf_logic=__import__('controller_logic').acf_definition(),
-        spice_qr_logic=__import__('controller_logic').qr_definition(),
-        spice_logic=controller_definition(),
+        spice_acf_logic=acf_definition(),
+        spice_qr_logic=qr_definition(),
+        spice_cot_logic=cot_definition(),
+        spice_logic=definition(),
         parasitics=__import__('parasitics').schema(),
+        cot_engineering=__import__('cot_ui_schema').schema(),
         spice_options=[dict(key=k,default=d,minimum=lo,maximum=hi,label=label,unit=unit,group=setting_group(k),topologies=[t for t in ('FLYBACK','QR-FLYBACK','ACF-FORWARD','BUCK','BOOST') if k in __import__('qr_spice_settings').applicable_keys(t)],choices={str(v):text for v,text in CHOICES[k].items()} if k in CHOICES else None)
                        for k in ordered_setting_keys() for d,lo,hi,label,unit in (SETTINGS[k],)],
         core_shapes={name:list(cores) for name,cores in CORE_SHAPES.items()},

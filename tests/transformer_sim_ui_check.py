@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from main import PowerSupplyAnalyzer
 import system_workspace as model
 from system_workspace_ui import SystemWorkspace
-from transformer_sim_ui import _matching_template, show
+from transformer_sim_ui import _SimulationDialog, _matching_template, show
 
 
 def find(parent, kind, caption=None):
@@ -31,6 +31,61 @@ def find(parent, kind, caption=None):
 
 
 class FieldReportDesktop(unittest.TestCase):
+    def test_center_field_page_reuses_tools_and_runs_without_legacy_template(self):
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            with tempfile.TemporaryDirectory() as temp, ExitStack() as mocks:
+                folder = Path(temp)
+                settings = folder/'settings.json'
+                config = {'core_choice':'PQ32-30'}
+                options = {'elmer_home':temp, 'core_path':''}
+                (folder/'bin').mkdir()
+                (folder/'share'/'elmersolver'/'lib').mkdir(parents=True)
+                for filename in ('ElmerSolver.exe','ElmerGrid.exe'):
+                    (folder/'bin'/filename).touch()
+                seen = []
+                opened = []
+
+                def automatic(settings_config, environment):
+                    self.assertEqual(settings_config, config)
+                    self.assertEqual(environment, options)
+                    return {'environment':dict(options), 'missing':[], 'summary':'复用 3D 绕组结构'}
+
+                def run(settings_config, **kwargs):
+                    self.assertEqual(settings_config, config)
+                    self.assertEqual(kwargs['environment'], options)
+                    self.assertNotIn('project_file', kwargs)
+                    self.assertIsNot(threading.current_thread(), threading.main_thread())
+                    seen.append(settings_config)
+                    return {'directory':temp, 'notes':['自动仿真完成']}
+
+                mocks.enter_context(patch('transformer_sim_ui._settings_file', return_value=settings))
+                mocks.enter_context(patch('portable_transformer_project.automatic_field_inputs', side_effect=automatic))
+                mocks.enter_context(patch('transformer_simulation.run_transformer_simulation', side_effect=run))
+                tools = SimpleNamespace(set_config=lambda _:None, snapshot=lambda **_:dict(options))
+                app = SimpleNamespace(root=root, _config_dict=lambda:dict(config))
+                container = ttk.Frame(root)
+                dialog = _SimulationDialog(app, config, container=container, settings_context=tools,
+                                           navigate=opened.append)
+                self.assertIsNone(find(root,tk.Toplevel))
+                self.assertIsNone(find(container,ttk.Label,'提取设置 JSON'))
+                self.assertEqual(dialog.readiness.cget('text'), '复用 3D 绕组结构')
+                find(container,ttk.Button,'本机工具与磁芯模型…').invoke()
+                self.assertEqual(opened, ['tools'])
+                dialog.output.set(temp)
+                dialog.run.invoke()
+                end = time.monotonic() + 5
+                while dialog.job is not None and time.monotonic() < end:
+                    root.update()
+                    time.sleep(.01)
+                self.assertEqual(seen, [config])
+                self.assertIn('自动仿真完成', dialog.log.get('1.0','end'))
+                self.assertEqual(json.loads(settings.read_text('utf-8')), {'output_directory':temp})
+                container.destroy()
+        finally:
+            root.destroy()
+
     def test_reference_preparation_is_off_thread_and_needs_confirmation(self):
         root = tk.Tk()
         root.withdraw()

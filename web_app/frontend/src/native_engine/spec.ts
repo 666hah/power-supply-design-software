@@ -53,6 +53,10 @@ export function bank(p: Spec, side = "output"): Spec[] {
   if (!Array.isArray(values) || !values.length || values.length > 256)
     throw Error("电容组需要 1–256 个支路");
   return values.map((r: Spec, i: number) => {
+    if (r.impedance_mode !== undefined && !["fixed", "curve"].includes(r.impedance_mode))
+      throw Error(`第 ${i + 1} 颗电容计算方式无效`);
+    if (r.impedance_mode === "curve" && !r.impedance_curve?.points?.length)
+      throw Error(`第 ${i + 1} 颗电容尚未导入阻抗曲线`);
     for (const k of ["C", "ESR", "ESL"])
       if (
         !Number.isFinite(r[k] ?? 0) ||
@@ -65,6 +69,8 @@ export function bank(p: Spec, side = "output"): Spec[] {
 }
 export function normalize(raw: Spec) {
   const p = { ...clone(reference.defaults), ...decode(raw) };
+  if (["constant on-time", "cot"].includes(String(p.control_mode).toLowerCase()) || Number(p.buck_phases ?? 1) > 1)
+    throw Error("此 Buck COT 配置请用桌面版或 Python 计算内核打开。");
   p.V_in_min ??= p.V_in;
   p.V_in_max ??= p.V_in;
   p.input_voltage_case ??= "min";
@@ -274,5 +280,17 @@ export function roundEven(x: number) {
 }
 export const capability = (p: Spec) => {
   const gaps: string[] = [];
+  const capacitorBanks = [
+    p.input_capacitors,
+    p.output_capacitors,
+    ...(Array.isArray(p.outputs) ? p.outputs.map(rail => rail?.output_capacitors) : []),
+  ];
+  if (capacitorBanks.some(bank => Array.isArray(bank) && bank.some(capacitor =>
+    capacitor?.impedance_mode === "curve" ||
+    (capacitor?.impedance_mode === undefined && capacitor?.impedance_curve != null) ||
+    capacitor?.thermal_resistance_K_per_W != null,
+  ))) {
+    gaps.push("电容阻抗曲线与热阻（请使用桌面版或本地 Python 网页计算）");
+  }
   return gaps;
 };

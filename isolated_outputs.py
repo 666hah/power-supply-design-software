@@ -1,8 +1,9 @@
 """Nominal multi-output design, not a cross-regulation simulation.
 
-The primary processes total power. Flyback secondary currents are shared in
-proportion to power, conserving ampere-turns. Forward branches share one PWM
-and the supported nominal model requires CCM in every output choke.
+The primary processes total power. Fixed-frequency flyback secondary currents
+use nominal power weights. QR branches use charge-balanced synchronous
+triangles, not a coupled instantaneous-current solution. Forward branches
+share one PWM and the supported nominal model requires CCM in every choke.
 """
 import copy
 import math
@@ -159,8 +160,10 @@ def compute_isolated_op(p):
             shared_period_s=core['Ts'],
             independent_cross_regulation=False,
             independent_winding_commutation=False,
+            secondary_current_model='charge-balanced-shared-triangle',
             assumptions='所有输出共用由总负载决定的QR周期，非反馈电压由实际匝数及固定压降派生；'
-                        '各路电流采用标称功率分配近似，未独立求解漏感换流、辅助绕组轻载脉冲或交叉调整率。')
+                        '各路同步三角电流按负载平均电流匹配周期电荷，保持总负载与原边预设效率能量估算；'
+                        '这是支路纹波近似，不是同一互感电路的瞬时分流解，未独立求解漏感换流、辅助绕组轻载窄脉冲或交叉调整率。')
     op['output_turns'] = turns
     total = sum(r['P_out'] for r in rails)
     branch_ops = []
@@ -184,6 +187,17 @@ def compute_isolated_op(p):
                          I_d_rms=core['I_d_rms']*weight*q['N']/core['N'],
                          C_min=core['C_min']*weight*(core['V_out']/rail['V_out'])**2,
                          V_d_max=child['V_out_equiv']+core['V_in']/q['N'])
+            if p['topology']=='QR-FLYBACK':
+                # With unequal diode drops, the port-voltage ratio differs
+                # from Ns_j/Ns_fb. Power weighting then gives a nonzero DC
+                # capacitor current which FFT DC removal must not conceal.
+                # Keep the common primary energy/cycle estimate unchanged;
+                # each nominal triangular rectifier pulse supplies its load.
+                secondary_peak=2.*child['I_out']/core['Dp']
+                child.update(I_d_pk=secondary_peak,
+                             I_d_rms=secondary_peak*math.sqrt(core['Dp']/3.),
+                             I_L_pk=secondary_peak/q['N'],I_L_min=0.,
+                             dI_L=secondary_peak/q['N'])
         child.update(output_id=rail['id'],name=rail['name'])
         from voltage_nodes import attach_nodes
         attach_nodes(child,dict(p,**rail))
@@ -197,7 +211,8 @@ def compute_isolated_op(p):
                     'L','dI_L','I_L_pk','I_L_min','I_L_rms','L_min'):
             if key in main: op[key] = main[key]
     op['output_ops'] = branch_ops
-    op['warnings'] = list(op.get('warnings',[]))+['仅反馈路电压为设定值；其他输出由实际副边匝比推导理想近似电压。标称同步波形/功率比例模型不含交叉调整率，整流压降、DCR 与漏感影响需用耦合模型或仿真复核。']
+    allocation='电荷匹配三角波' if p['topology']=='QR-FLYBACK' else '功率比例'
+    op['warnings'] = list(op.get('warnings',[]))+[f'仅反馈路电压为设定值；其他输出由实际副边匝比推导理想近似电压。标称同步波形/{allocation}模型不含交叉调整率，整流压降、DCR 与漏感影响需用耦合模型或仿真复核。']
     return op
 
 
@@ -206,9 +221,10 @@ def multi_waveforms(op,n_cycles,n_pts):
     wf = make_waveforms(op['aggregate_op'],n_cycles,n_pts)
     outputs = [make_waveforms(q,n_cycles,n_pts) for q in op['output_ops']]
     main = outputs[op['feedback_output']-1]
-    for key in ('i_d','i_s','i_c','v_d','vout','vout_ripple','v_esl','ripple_pp',
-                'ripple_pp_total','esl_spike_pp','i_c_rms'):
+    for key in ('i_d','i_s','i_c','v_d','vout','vout_ripple','vout_ripple_impedance','v_esl','ripple_pp',
+                'ripple_pp_total','ripple_impedance_model','esl_spike_pp','i_c_rms'):
         if key in main: wf[key] = main[key]
+        else: wf.pop(key, None)
     wf['outputs'] = outputs
     return wf
 
@@ -221,7 +237,7 @@ def coupled_waveforms(op, n_cycles, n_pts):
     the FFT's DC removal must not hide an unregulated/charging output.
     """
     import numpy as np
-    from waveforms import cap_bank_ripple
+    from waveforms import cap_bank_ripple_fields
     solution = op['coupled_solution']
     period = float(op['Ts'])
     source_t = np.asarray(solution['t'], dtype=float)
@@ -251,15 +267,7 @@ def coupled_waveforms(op, n_cycles, n_pts):
         wf = dict(shared,i_s=current,i_d=current,i_c=current-child['I_out'])
         wf['v_d'] = np.maximum(child.get('V_out_cap',child['V_out'])+sample(solution['v_winding'][j+1])+
                                 op['coupled_model']['R'][j+1]*current,0.)
-        from capacitor_banks import tuples
-        caps = tuples(child)
-        full = cap_bank_ripple(t,wf['i_c'],caps)
-        low = cap_bank_ripple(t,wf['i_c'],[(c,r,0.) for c,r,_ in caps])
-        wf.update(vout_ripple=low,v_esl=full-low,vout=child['V_out']+low,
-                  vcap=child.get('V_out_cap',child['V_out'])+low,
-                  ripple_pp=float(np.ptp(low)),ripple_pp_total=float(np.ptp(full)),
-                  esl_spike_pp=float(np.max(np.abs(full-low))),
-                  i_c_rms=float(np.sqrt(np.mean(wf['i_c']**2))),
+        wf.update(cap_bank_ripple_fields(t, wf['i_c'], child),
                   charge_sampling_relative=errors[j])
         outputs.append(wf)
     result = dict(outputs[op['feedback_output']-1])
@@ -285,6 +293,9 @@ def multi_magnetics(op,p):
     q = selected_params(p); q['outputs'] = []
     coupled_metadata = op.get('coupled_model') or op.get('acf_model') or {}
     hardware = coupled_metadata.get('transformer_hardware')
+    if hardware is None:
+        from winding_coupling import resolve_winding_geometry
+        hardware = resolve_winding_geometry(p, op, op['outputs'])
     if hardware:
         # Auto gauges were selected once before the physical solve.  Reuse
         # that exact conductor/core geometry; otherwise final RMS would
@@ -320,14 +331,12 @@ def multi_magnetics(op,p):
     area = tr['Np']*tr['n_strand_p']*tr.get('parallel_wires_p',1)*tr['A_strand_p']
     for rail,child in zip(op['outputs'],op['output_ops']):
         current = child.get('I_s_rms',child['I_d_rms'])
-        frozen = hardware['windings'][rail['id']-1] if hardware else None
-        turns = frozen['Ns'] if frozen else int(rail['Ns']) or max(1,round(tr['Np']/child['N']))
-        strands = int(frozen['n_strand_s'] if frozen else rail['n_strand_s'])
-        copies = int(frozen.get('parallel_wires_s',1) if frozen else rail['parallel_wires_s'])
+        frozen = hardware['windings'][rail['id']-1]
+        turns, strands, copies = frozen['Ns'], frozen['n_strand_s'], frozen['parallel_wires_s']
         total_strands = strands*copies
-        diameter = frozen['d_wire_s'] if frozen else rail['d_wire_s'] or max(50e-6,mag.wire_diameter(current/total_strands,p['J']))
+        diameter = frozen['d_wire_s']
         a = math.pi*diameter**2/4
-        geometric_resistance = p['rho']*tr['MLT']*turns/(total_strands*a)
+        geometric_resistance = frozen['R_dc']
         resistance = coupled['R'][rail['id']] if coupled else geometric_resistance
         fr = mag.ac_factor(diameter,op['f_sw'],p['rho'])
         loss = fr*resistance*current**2
@@ -336,7 +345,8 @@ def multi_magnetics(op,p):
         windings.append(dict(id=rail['id'],name=rail['name'],Ns=turns,N=child['N'],
             n_actual=tr['Np']/turns,d_wire_s=diameter,n_strand_s=strands,parallel_wires_s=copies,
             I_rms=current,R_dc=resistance,Fr=fr,P_cu=loss,J_actual=current/(total_strands*a),
-            R_dc_geometry=geometric_resistance,
+            R_dc_geometry=geometric_resistance, MLT=frozen['MLT'], MLT_source=frozen['MLT_source'],
+            copper_length_m=frozen['copper_length_m'],
             V_turns_est=predicted,voltage_error=(predicted/rail['V_out']-1)*100))
         if op['topology']=='ACF-FORWARD':
             ip = dict(p,**{k:rail[k] for k in RAIL_KEYS},core_choice=rail['core_choice_L'],core_shape='auto',

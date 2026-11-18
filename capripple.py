@@ -3,10 +3,14 @@
 For each rail (input / output) the *ripple current* that the capacitor bank
 must absorb is decomposed into frequency bands with a coherent DFT (or an
 energy-calibrated flat-top FFT for noncoherent input),
-and the current is then divided among the (up to two) parallel capacitors by
-the ratio of their impedances at every frequency,
+and the current is then divided among the parallel capacitors by the ratio of
+their complex admittances at every frequency. If a branch uses fixed mode or the
+frequency lies outside its sweep, use
 
     Z_j(f) = R_esr,j + j*(2*pi*f*ESL_j - 1/(2*pi*f*C_j))
+
+The dissipation of each branch is the sum of its one-sided mean-square
+current times Re(Z_j) across the bins.
 
 A converter's ripple current is dominated by the switching-frequency
 harmonics, so the band decomposition is built around them: band 0 is below
@@ -20,6 +24,8 @@ total because of phase differences (circulating current) — that is physical.
 """
 
 import numpy as np
+
+from capacitor_impedance import THERMAL_FIELD, active_curve, impedance, parallel_response
 
 
 def _flattop(N):
@@ -47,19 +53,6 @@ def _bank_spectrum(x, dt):
     return freqs, X, float(np.sum(w))
 
 
-def _impedance(f, C, R, ESL):
-    """Ripple-current impedance of one capacitor at frequency f (Hz)."""
-    w = 2.0 * np.pi * f
-    return R + 1j * (w * ESL - 1.0 / (w * max(C, 1e-30)))
-
-
-def _split(ph, f, caps):
-    """Impedance-divide a peak-amplitude phasor among parallel caps."""
-    ad = [1.0 / _impedance(f, c['C'], c['ESR'], c['ESL']) for c in caps]
-    ytot = sum(ad)
-    return [ph * (a / ytot) for a in ad]
-
-
 def _divide_and_band(x, dt, f_sw, caps, n_harm=20):
     """Whole-bin power split. Coherent steady-state uses an unwindowed DFT.
 
@@ -85,21 +78,31 @@ def _divide_and_band(x, dt, f_sw, caps, n_harm=20):
         power *= total_bank**2 / max(float(power.sum()), 1e-30)
     labels = ['<0.5f'] + [f'{h}f' for h in range(1, n_harm+1)] + ['HF']
     band = np.minimum(np.floor(f/f_sw+.5).astype(int), n_harm+1)
-    w = 2*np.pi*f
-    Y = np.array([1/(c['ESR'] + 1j*(w*c['ESL']-1/(w*max(c['C'], 1e-30))))
-                  for c in caps])
-    ytot = Y.sum(axis=0)
-    if np.any(np.abs(ytot) < 1e-30):
-        raise ValueError('Singular parallel capacitor impedance')
-    currents = Y/ytot
+    impedances, coverage = zip(*(impedance(f, c, return_coverage=True) for c in caps))
+    _, currents = parallel_response(np.asarray(impedances))
     infos = []
-    for c, ratio in zip(caps, currents):
-        bins = np.bincount(band, weights=power*np.abs(ratio)**2,
-                           minlength=len(labels))
-        infos.append(dict(C=c['C'], ESR=c['ESR'], ESL=c['ESL'],
-                          total=float(np.sqrt(bins.sum())),
-                          bands=np.sqrt(bins).tolist()))
+    for cap, ratio, z, inside in zip(caps, currents, impedances, coverage):
+        branch_power = power * np.abs(ratio)**2
+        bins = np.bincount(band, weights=branch_power, minlength=len(labels))
+        mean_square = float(bins.sum())
+        loss = float(np.sum(branch_power * z.real))
+        curve = active_curve(cap)
+        resistance = cap.get(THERMAL_FIELD)
+        infos.append(dict(
+            C=cap['C'], ESR=cap['ESR'], ESL=cap['ESL'],
+            total=float(np.sqrt(mean_square)), bands=np.sqrt(bins).tolist(),
+            loss_W=loss,
+            thermal_resistance_K_per_W=resistance,
+            temperature_rise_K=loss * resistance if resistance is not None else None,
+            equivalent_esr_ohm=(loss / mean_square if mean_square else None) if curve else cap['ESR'],
+            impedance_model='curve' if curve else 'fixed_rlc',
+            curve_source=curve.get('source') if curve else None,
+            curve_range_hz=[curve['points'][0][0], curve['points'][-1][0]] if curve else None,
+            curve_coverage_fraction=min(1., float(branch_power[inside].sum()) / mean_square)
+            if curve and mean_square else None,
+        ))
     return dict(total_bank=total_bank, labels=labels, caps=infos,
+                loss_W=sum(c['loss_W'] for c in infos),
                 spectrum_method='coherent DFT' if coherent else 'flat-top estimate')
 
 
@@ -120,14 +123,13 @@ def cap_bank_esr_loss(t, i_c, f_sw, caps):
     """Total ESR loss of a parallel capacitor bank carrying ripple i_c.
 
     The ripple current is impedance-split between the caps (whole-bin spectral
-    split, see _divide_and_band) and P = sum(R_j * I_rms_j^2).  Returns
+    split, see _divide_and_band) and P = sum(Re(Z_j(f)) * I_rms_j(f)^2). Returns
     (P_total, [I_rms_j ...]).
     """
     rail = _divide_and_band(np.asarray(i_c, float), float(t[1] - t[0]),
                             f_sw, caps)
     totals = [c['total'] for c in rail['caps']]
-    p = sum(c['ESR'] * c['total'] ** 2 for c in rail['caps'])
-    return p, totals
+    return rail['loss_W'], totals
 
 
 def capacitor_ripple_analysis(t, i_cin, i_cout, f_sw, in_caps, out_caps,
@@ -141,8 +143,8 @@ def capacitor_ripple_analysis(t, i_cin, i_cout, f_sw, in_caps, out_caps,
                part of the source-side current.
     i_cout   : output capacitor bank total ripple current (A) (= wf['i_c']).
     f_sw     : switching frequency (Hz).
-    in_caps  : list of dicts {C, ESR, ESL} (1 or 2 parallel input caps).
-    out_caps : list of dicts {C, ESR, ESL} (1 or 2 parallel output caps).
+    in_caps  : normalized parallel input-bank list.
+    out_caps : normalized parallel output-bank list.
     n_harm   : number of harmonic bands (default 20).
 
     Returns dict(f_sw, total_in, total_out, input=..., output=...) where each

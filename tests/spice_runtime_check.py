@@ -12,6 +12,17 @@ from calculation_scheduler import CalculationCancelled
 
 
 class RuntimeChecks(unittest.TestCase):
+    def test_original_short_window_retains_narrow_current_peak(self):
+        from types import SimpleNamespace
+        raw=SimpleNamespace(time=np.array([0.,.1,.10001,.10002,.2]),
+                            trace=lambda _:np.array([0.,0.,8.,0.,0.]))
+        shown=TransientRaw.samples(raw,['i(ls2)'],.099,.101,None)
+        self.assertEqual(max(shown['i(ls2)']),8.)
+        self.assertIn(.10001,shown['time'])
+        self.assertEqual((shown['time'][0],shown['time'][-1]),(.099,.101))
+        coarse=TransientRaw.samples(raw,['i(ls2)'],.099,.101,3)
+        self.assertEqual(max(coarse['i(ls2)']),0.)
+
     def test_protection_reason_uses_only_evidence_at_first_trip(self):
         from spice_analysis import protection_stop
         t=np.arange(12)*1e-7
