@@ -64,6 +64,7 @@ class ExcelReportCheck(unittest.TestCase):
         from docx import Document
         from input_range_report import export_input_range_docx
         from openpyxl import load_workbook
+        from tolerance_report import TITLE
 
         case = dict(id='B013', voltage=33., load_profile='满载', parameters={'Rds_on': .06})
         inputs = [dict(path='Rds_on', label='主 MOS 导通电阻', unit='Ω', nominal=.05,
@@ -83,7 +84,7 @@ class ExcelReportCheck(unittest.TestCase):
             export_input_range_docx(word, self.snapshot, tolerance_result=evidence)
             export_input_range_xlsx(excel, self.snapshot, tolerance_result=evidence)
             doc = Document(word)
-            self.assertEqual(1, sum(p.style.name == 'Heading 1' and '最坏工况与容差' in p.text
+            self.assertEqual(1, sum(p.style.name == 'Heading 1' and TITLE in p.text
                                     for p in doc.paragraphs))
             doc_rows = [tuple(c.text for c in r.cells) for t in doc.tables for r in t.rows]
             self.assertIn(('主开关电压', '≤ 80 V', '82 V', '-2 V', 'B013 · 33 V · 满载', '20 / 20', '需复核'), doc_rows)
@@ -91,7 +92,7 @@ class ExcelReportCheck(unittest.TestCase):
             with excel.open('rb') as stream:
                 workbook = load_workbook(stream, read_only=True)
                 values = [tuple(v for v in row if v is not None and v != '')
-                          for row in workbook['最坏工况与容差'].values]
+                          for row in workbook[TITLE].values]
                 workbook.close()
             self.assertIn(('主开关电压', '≤ 80 V', 82, -2, 'B013 · 33 V · 满载', '20 / 20', '需复核'), values)
             self.assertIn(('主开关电压', '—', '—', .003, '待补尾部样本\n尾部样本不足'), values)
@@ -127,6 +128,14 @@ class ExcelReportCheck(unittest.TestCase):
                 self.assertIn('Vinmin',ET.tostring(cells['A4'],encoding='unicode'))
                 self.assertIn('Vinmax',ET.tostring(cells['J4'],encoding='unicode'))
                 self.assertEqual(root.find('.//{'+S+'}pane').get('ySplit'),'4')
+            summary=xml['xl/worksheets/sheet1.xml']
+            headline=summary.find('.//{'+S+'}c[@r="A5"]')
+            self.assertIn(headline.get('s'),('8','10','11'))
+            locations=[link.get('location') for link in summary.findall('.//{'+S+'}hyperlink')]
+            self.assertTrue(any('06 磁件与绕制' in location for location in locations))
+            self.assertTrue(any('07 环路与补偿电路' in location for location in locations))
+            self.assertTrue(any('00 工程验收' in link.get('location')
+                                for link in xml['xl/worksheets/sheet2.xml'].findall('.//{'+S+'}hyperlink')))
             overview=names.index('01 需求与工况总览')+1
             cells={c.get('r'):c for c in xml[f'xl/worksheets/sheet{overview}.xml'].findall('.//{'+S+'}c')}
             for addr,case in zip(('E6','N6'),snapshot['cases']):

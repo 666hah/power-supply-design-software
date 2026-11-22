@@ -10,14 +10,18 @@ def open_editor(app):
     except Exception as e:messagebox.showerror('请先完成参数',str(e));return
     raw=copy.deepcopy(getattr(app,'_parasitic_config',{}));count=len(p.get('outputs') or [None])
     cfg=resolved(p,count)
-    win=tk.Toplevel(app.root);win.title('寄生参数与吸收 · 同步计算 / 报告 / LTspice')
+    win=tk.Toplevel(app.root);win.title('寄生参数与吸收')
     win.geometry('860x720');win.minsize(680,420);win.transient(app.root)
     mode=tk.StringVar(value=cfg['mode']);vars={};rail_vars={}
     head=ttk.Frame(win,padding=12);head.pack(fill='x')
-    ttk.Label(head,text='寄生参数与吸收',font=('Microsoft YaHei UI',15,'bold')).pack(anchor='w')
-    ttk.Radiobutton(head,text='快速计算：沿用原有波形，不增加局部振铃求解',variable=mode,value='fast').pack(anchor='w',pady=3)
-    ttk.Radiobutton(head,text='寄生瞬态：反激局部 RLC 估算 / 正激物理周期',variable=mode,value='transient').pack(anchor='w',pady=3)
-    ttk.Label(head,text=NOTE,wraplength=800,justify='left').pack(fill='x',pady=5)
+    summary = tk.StringVar(win)
+    def show_mode(*_args):
+        summary.set('寄生瞬态 · 计算局部振铃' if mode.get() == 'transient' else '快速计算 · 使用稳态波形')
+    mode.trace_add('write', show_mode)
+    show_mode()
+    ttk.Label(head,textvariable=summary,style='ResultConclusion.TLabel').pack(fill='x')
+    ttk.Radiobutton(head,text='快速计算',variable=mode,value='fast').pack(anchor='w',pady=3)
+    ttk.Radiobutton(head,text='寄生瞬态（反激局部 RLC 或正激物理周期）',variable=mode,value='transient').pack(anchor='w',pady=3)
     # Footer is outside the scrolling body, always reachable on small displays.
     foot=ttk.Frame(win,padding=12);foot.pack(side='bottom',fill='x')
     outer=ttk.Frame(win);outer.pack(fill='both',expand=True)
@@ -44,6 +48,9 @@ def open_editor(app):
         rectifier=f'D_O{i}' if p.get('outputs') else 'D1（仿真 D_O1）'
         frame=ttk.LabelFrame(body,text=f'OUT{i} · 整流 {rectifier}'+(f' / 续流 D_F{i}' if p['topology']=='ACF-FORWARD' else ''),padding=8)
         frame.pack(fill='x',pady=6);rail_vars[f'OUT{i}']={};rows(frame,RAIL_FIELDS,row,rail_vars[f'OUT{i}'])
+    note = ttk.Label(body,text=NOTE,style='Muted.TLabel',wraplength=800,justify='left')
+    note.pack(fill='x',pady=(7,4))
+    note.bind('<Configure>',lambda event: note.configure(wraplength=max(160,event.width-8)))
     def commit():
         try:
             data={k:float(v.get())/FIELDS[k][2] for k,v in vars.items()}
@@ -58,5 +65,5 @@ def open_editor(app):
         app._parasitic_config=data;app.schedule_update();win.destroy()
     ttk.Button(foot,text='应用并重新计算',command=commit).pack(side='right',padx=6)
     ttk.Button(foot,text='取消',command=win.destroy).pack(side='right',padx=6)
-    ttk.Label(foot,text='参数单位在每行右侧；保存工程时一起保存。').pack(side='left')
+    ttk.Label(foot,text='设置随工程保存。').pack(side='left')
     return win

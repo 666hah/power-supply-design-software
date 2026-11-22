@@ -90,6 +90,12 @@ def _prepare_reference(base):
         # There is no second point that could silently select different hardware.
         return reference, {}, result
     fixed = pin_hardware(reference, result)
+    if base['topology'] == 'LLC' and not base['llc_ki'] and result['op']['llc']['loop_valid']:
+        from llc_model import controller_gains
+        try:
+            fixed['llc_kp'], fixed['llc_ki'] = controller_gains(reference, result['op']['llc'])
+        except ValueError as error:
+            result['op']['warnings'].append(f'Vinmin 的自动 PI 初值未建立：{error}')
     if fixed.get('_qr_rcd_hardware') and not reference.get('_qr_rcd_hardware'):
         # Kc selected the reference R/C once. Re-evaluate that same hardware
         # so the first endpoint carries the fixed-RC residual/provenance too.

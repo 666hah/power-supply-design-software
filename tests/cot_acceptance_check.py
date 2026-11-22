@@ -39,6 +39,16 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(result['passed']);self.assertEqual(result['status'],'fail')
         self.assertEqual(next(r for r in result['rows'] if r['id']=='pm')['status'],'fail')
 
+    def test_phase_margin_acceptance_checks_smallest_crossing_against_fixed_limit(self):
+        for margin, expected in ((45., 'fail'), (45.01, 'pass')):
+            with self.subTest(margin=margin):
+                data = probe()
+                data['simulation']['loop']['crossings'] = [dict(pm=60.), dict(pm=margin)]
+                result = assess_fra(data, {'cot_config': {'acceptance': {'pm_min_deg': 80.}}})
+                row = next(r for r in result['rows'] if r['id'] == 'pm')
+                self.assertEqual((row['comparison'], row['limit'], row['value'], row['status']),
+                                 ('>', 45., margin, expected))
+
     def test_missing_gain_margin_cannot_become_infinite_or_pass(self):
         p=probe(); p['simulation']['loop']['gm_db']=None
         result=assess_fra(p,{})

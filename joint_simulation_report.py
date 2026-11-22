@@ -166,29 +166,61 @@ def _input_label(spec):
     return f'固定输入 {_number(lo)} V' if lo == hi else f'输入 {_number(lo)} 至 {_number(hi)} V'
 
 
-def _judgement_rows(snapshot, bundle, spec):
-    """Select actionable rows from the same acceptance snapshot used in detail."""
-    from report_architecture import acceptance_columns
-    labels, details = acceptance_columns(snapshot, bundle, spec)
-    ids = ('Vinmin',) if len(labels) == 1 else ('Vinmin', 'Vinmax')
-    rows = []
-    for item, (name, criterion, *observations) in zip(snapshot.get('rows') or [], details):
-        cases = item.get('cases') or {}
-        bad = [i for i, key in enumerate(ids) if cases.get(key, {}).get('status') == 'review']
-        if not bad:
-            continue
-        cells = []
-        for index in bad:
-            values = [line.split('  ', 1)[0] for line in observations[index].splitlines() if '需整改' in line and not line.startswith('结论')]
-            cells.append(('' if len(labels) == 1 else labels[index] + ' ') + (' / '.join(values) or '需整改'))
-        rows.append((name, '，'.join(cells) + '。要求 ' + criterion))
-    return rows
-
-
 def _voltage_observations(evidence):
     from engineering_acceptance import _simulation_values
     cases = [case for case in (evidence or {}).get('cases', []) if not case.get('fault_test')]
     return [(case, _simulation_values(case)) for case in cases]
+
+
+def _joint_review(record, design_spec, bundle, evidence, snapshot_issue):
+    from report_architecture import acceptance_columns, acceptance_findings, acceptance_snapshot
+
+    stages = record.get('stages') or []
+    errors = list(map(str, record.get('errors') or []))
+    if record.get('error'):
+        errors.append(str(record['error']))
+    complete_states = ('complete', 'completed', 'success')
+    workflow_incomplete = bool(errors or record.get('status') not in complete_states
+                               or any(s.get('status') not in complete_states for s in stages))
+    acceptance = None
+    exceeded = []
+    findings = [('设计计算快照', snapshot_issue)] if snapshot_issue else []
+    if design_spec is not None:
+        acceptance = acceptance_snapshot(design_spec, bundle, joint_record=record, spice_evidence=evidence)
+        labels, _ = acceptance_columns(acceptance, bundle, design_spec)
+        exceeded = acceptance_findings(acceptance, labels)
+        if acceptance.get('simulation_matched'):
+            from engineering_acceptance import _number as _evidence_number
+            parts = (design_spec.get('component_management') or {}).get('items') or {}
+            rating = _evidence_number((parts.get('Q1') or {}).get('voltage_V'))
+            observations = _voltage_observations(evidence)
+            for case, obs in observations:
+                peak = obs.get('startup_vds_peak')
+                if rating is not None and rating > 0 and peak is not None and peak > rating:
+                    context = f"{case.get('id', '')} " if len(observations) > 1 else ''
+                    findings.insert(0, ('启动 MOS Vds 超额定',
+                                        f'{context}{_number(peak)} V，Q1 额定 {_number(rating)} V。'))
+    simulation = {}
+    if evidence is not None:
+        from spice_comparison_report import simulation_summary
+        simulation = simulation_summary(evidence)
+        findings.extend(simulation.get('findings') or [])
+    summary = (acceptance or {}).get('summary') or {}
+    state = summary.get('state', 'undefined')
+    workflow = '联合流程需复核' if workflow_incomplete else '联合流程已完成'
+    verdict = '工程验收 ' + (summary.get('label') or '待补设计输入')
+    stage_errors = {_stage_name(s, record): str(s['error']) for s in stages if s.get('error')}
+    unique_errors = [error for error in dict.fromkeys(errors) if error not in stage_errors.values()]
+    review_rows = [(name, error) for name, error in stage_errors.items() if error != '前置阶段未完成']
+    review_rows.extend(('流程', error) for error in unique_errors)
+    review_rows.extend(findings)
+    review_rows = list(dict.fromkeys(review_rows))
+    missing_rows = sum(any(cell.get('status') in ('undefined', 'stale')
+                           for cell in row.get('cases', {}).values())
+                       for row in (acceptance or {}).get('rows', []))
+    return dict(acceptance=acceptance, simulation=simulation, state=state, workflow=workflow, verdict=verdict,
+                workflow_incomplete=workflow_incomplete, pending=missing_rows,
+                exceeded=exceeded, review_rows=review_rows, unique_errors=unique_errors)
 
 
 def _key_results(doc, field, margin, metrics, voltage_observations):
@@ -272,7 +304,7 @@ def write_joint_report(path, record, *, design_run=None, spice_result=None, arch
     Returns a rendering receipt; the caller owns cancellation / publication.
     """
     from docx_layout import equation, figure, finalize_book_report, new_document, paragraph, table
-    from report_architecture import (acceptance_snapshot, add_acceptance_report,
+    from report_architecture import (acceptance_group_line, add_acceptance_report,
                                      conclusion_line, missing_evidence_note, module_section)
     from transformer_sim_report import distinct_endpoint_metrics
     if design_run is not None:
@@ -301,50 +333,26 @@ def write_joint_report(path, record, *, design_run=None, spice_result=None, arch
                        '开关电源设计与环路分析  联合评审')
     module_section(doc, '1 评审结论', new_page=False)
     stages = record.get('stages') or []
-    errors = list(map(str, record.get('errors') or []))
-    if record.get('error'):
-        errors.append(str(record['error']))
-    workflow_incomplete = bool(errors or record.get('status') not in ('complete', 'completed', 'success')
-                               or any(s.get('status') not in ('complete', 'completed', 'success') for s in stages))
-    acceptance = None
-    findings = [('设计计算快照', snapshot_issue)] if snapshot_issue else []
-    if design_spec is not None:
-        acceptance = acceptance_snapshot(design_spec, bundle, joint_record=record, spice_evidence=evidence)
-        findings.extend(_judgement_rows(acceptance, bundle, design_spec))
-        if acceptance.get('simulation_matched'):
-            from engineering_acceptance import _number as _evidence_number
-            parts = (design_spec.get('component_management') or {}).get('items') or {}
-            rating = _evidence_number((parts.get('Q1') or {}).get('voltage_V'))
-            for case, obs in voltage_observations:
-                peak = obs.get('startup_vds_peak')
-                if rating is not None and rating > 0 and peak is not None and peak > rating:
-                    context = f"{case.get('id', '')} " if len(voltage_observations) > 1 else ''
-                    findings.insert(0, ('启动 MOS Vds 超额定', f'{context}{_number(peak)} V，Q1 额定 {_number(rating)} V。'))
-    simulation = {}
-    if evidence is not None:
-        from spice_comparison_report import simulation_summary
-        simulation = simulation_summary(evidence)
-        findings.extend(simulation.get('findings') or [])
-    summary = (acceptance or {}).get('summary') or {}
-    review = workflow_incomplete or bool(findings) or 'review' in (summary.get('state'), simulation.get('state'))
-    state = 'review' if review else 'pass' if summary.get('state') == 'pass' else 'undefined'
-    workflow = '联合流程需复核' if workflow_incomplete else '联合流程已完成'
-    verdict = '工程验收 ' + (summary.get('label') or '待补设计输入')
-    stage_errors = {_stage_name(s, record): str(s['error']) for s in stages if s.get('error')}
-    unique_errors = [error for error in dict.fromkeys(errors) if error not in stage_errors.values()]
-    review_rows = [(name, error) for name, error in stage_errors.items() if error != '前置阶段未完成']
-    review_rows.extend(('流程', error) for error in unique_errors)
-    review_rows.extend(findings)
-    review_rows = list(dict.fromkeys(review_rows))
-    missing_rows = sum(any(cell.get('status') in ('undefined', 'stale')
-                           for cell in row.get('cases', {}).values())
-                       for row in (acceptance or {}).get('rows', []))
-    pending = missing_rows + (simulation.get('pending_count') or 0)
-    lead = conclusion_line(doc, f'重点复核 {len(review_rows)} 项，待补数据 {pending} 项', state)
+    review = _joint_review(record, design_spec, bundle, evidence, snapshot_issue)
+    acceptance = review['acceptance']
+    simulation = review['simulation']
+    unique_errors, review_rows = review['unique_errors'], review['review_rows']
+    pending, state = review['pending'], review['state']
+    workflow, verdict = review['workflow'], review['verdict']
+    workflow_incomplete = review['workflow_incomplete']
+    lead = conclusion_line(doc, verdict, state)
     lead.paragraph_format.keep_with_next = True
-    paragraph(doc, workflow+'。'+verdict, True)
+    group_line = acceptance_group_line(acceptance or {})
+    if group_line:
+        paragraph(doc, group_line, True)
+    exceeded = review['exceeded']
+    paragraph(doc, f'验收超限 {len(exceeded)} 项，待补数据 {pending} 项。{workflow}。', True)
+    if exceeded:
+        table(doc, ['验收超限项', '当前值与限值'], exceeded[:4], [2.3, 4.8])
+        if len(exceeded) > 4:
+            paragraph(doc, f'其余 {len(exceeded) - 4} 项见第 6 章。', True)
     if review_rows:
-        table(doc, ['优先复核', '本次观察与要求'], review_rows[:4], [2.3, 4.8])
+        table(doc, ['流程与仿真复核', '本次观察与要求'], review_rows[:4], [2.3, 4.8])
         if len(review_rows) > 4:
             paragraph(doc, f'其余 {len(review_rows) - 4} 项见对应章节。', True)
         if simulation.get('comparison_tolerance_pct') is not None and simulation.get('findings'):

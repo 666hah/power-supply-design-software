@@ -32,7 +32,7 @@ class WindingDragController:
     def _describe(self):
         p=self.points.get(self.selected)
         if not p:
-            self.note.set('点选一匝线并左右拖动；画布获得焦点后用 ← / → 微调，Shift ×10，Alt ÷10；Ctrl+Z 撤销位置。')
+            self.note.set('选中一匝线后可拖动或用方向键微调。Shift 放大步长 10 倍，Alt 缩小步长 10 倍。Ctrl+Z 撤销。')
             return
         x=self._x if self._x is not None else p['x']+p['width']/2
         self.note.set(f"已选 {p['section_id']} · 第 {p['turn']} 匝 · 并绕束 {p['bundle']}"
@@ -107,7 +107,7 @@ class WindingDragController:
         try:
             delta=float(self.step.get())/1e3
             if not math.isfinite(delta) or delta<=0:raise ValueError()
-        except (TypeError,ValueError):self.note.set('移动步长需为大于 0 的有限数值（mm）。');return
+        except (TypeError,ValueError):self.note.set('请填写大于 0 的有限移动步长，单位为 mm。');return
         if 'shift+' in key:delta*=10
         if 'alt+' in key:delta/=10
         p=self.points[self.selected]

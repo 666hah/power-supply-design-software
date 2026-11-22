@@ -349,40 +349,57 @@ def acceptance_snapshot(p, bundle=None, *, joint_record=None, spice_evidence=Non
                            spice_evidence=spice_evidence)
 
 
-def acceptance_rows(snapshot):
-    rows=[]
-    compact={'pass':'满足','review':'需整改','undefined':'待补目标或证据','stale':'证据已失效','na':'不适用'}
+_ACCEPTANCE_SOURCES = {'calculation': '计算', 'simulation': '仿真', 'measurement': '实测'}
+
+
+def _acceptance_number(item, value, *, margin=False):
     from report_docx import value as engineering_value
+    if isinstance(value, dict):
+        value = value.get('value')
+    if value is None:
+        return '—'
+    if item.get('metric') == 'eta':
+        return engineering_value(value * 100, '个百分点' if margin else '%')
+    unit = item.get('unit') or ''
+    return engineering_value(value, '°' if unit == 'deg' else unit)
+
+
+def _acceptance_threshold(item, values):
+    relation = values.get('comparison')
+    if relation == 'range' and values.get('lower') is not None and values.get('upper') is not None:
+        return _acceptance_number(item, values['lower']) + ' 至 ' + _acceptance_number(item, values['upper'])
+    if values.get('limit') is not None:
+        return (relation or '') + ' ' + _acceptance_number(item, values['limit'])
+    return '待补限值'
+
+
+def acceptance_rows(snapshot):
+    from engineering_acceptance import STATE_LABELS
+
+    rows=[]
     for item in snapshot.get('rows',[]):
-        unit=str(item.get('unit') or '')
-        scale=100 if item.get('metric')=='eta' else 1
-        if scale==100:unit='%'
-        def number(value):
-            return '—' if value is None else engineering_value(value*scale,unit)
-        limit=item.get('limit')
-        if item.get('comparison')=='range':
-            criterion=number(item.get('lower'))+' 至 '+number(item.get('upper'))
-        else:
-            criterion=(item.get('comparison') or '')+' '+number(limit) if limit is not None else '待设置阈值'+(' / '+unit if unit else '')
+        varies = item.get('limits_vary')
+        criterion = '分端点列示' if varies else _acceptance_threshold(item, item)
+        if item.get('note'):
+            criterion += '\n' + item['note']
         values=[]
         for case in ('Vinmin','Vinmax'):
             cell=(item.get('cases') or {}).get(case) or {}
-            parts=[]
-            for source,name in (('calculation','计算'),('simulation','仿真'),('measurement','实测')):
+            parts = ['限值 ' + _acceptance_threshold(item, cell)] if varies else []
+            for source,name in _ACCEPTANCE_SOURCES.items():
                 value=cell.get(source)
-                if isinstance(value,dict):
-                    value=value.get('value')
                 state=(cell.get('states') or {}).get(source,'undefined')
                 if source!='calculation' and value is None:continue
-                detail=name+' '+number(value)
-                if state in ('review','stale'):detail+='  '+compact[state]
+                detail = name + ' ' + _acceptance_number(item, value)
+                if state in ('review','stale'):detail+='  '+STATE_LABELS[state]
                 if source=='simulation' and cell.get('delta_simulation') is not None:
                     detail+='  偏差 '+_cell_text(cell['delta_simulation'])+'%'
                 elif source=='measurement' and cell.get('delta_measurement') is not None:
                     detail+='  偏差 '+_cell_text(cell['delta_measurement'])+'%'
                 parts.append(detail)
-            parts.append('结论 '+compact.get(cell.get('status'),'未评估'))
-            if cell.get('margin') is not None:parts.append('最小裕量 '+number(cell['margin']))
+            parts.append('结论 '+STATE_LABELS.get(cell.get('status'),'未评估'))
+            if cell.get('margin') is not None:
+                parts.append('最小裕量 '+_acceptance_number(item, cell['margin'], margin=True))
             reasons = str(cell.get('reason') or '').split('；')
             parts.extend(reason for reason in reasons if reason and not reason.startswith((
                 '同电压且MOS事件相同，复用 ', '同电压、同 MOS 事件，沿用 ')) and reason != '未重新仿真')
@@ -428,11 +445,47 @@ def acceptance_columns(snapshot, bundle, parameters=None):
     return ['Vinmin', 'Vinmax'], rows
 
 
+def acceptance_sections(snapshot, rows):
+    groups = snapshot.get('groups') or []
+    if not groups:
+        return [('', {}, rows)]
+    by_group = {group['id']: [] for group in groups}
+    for item, row in zip(snapshot.get('rows', []), rows):
+        by_group[item['group']].append(row)
+    return [(group['title'], group.get('summary') or {}, by_group[group['id']]) for group in groups]
+
+
+def acceptance_group_line(snapshot):
+    return '。'.join(f"{group['title']} {group['summary']['label']}"
+                    for group in snapshot.get('groups') or [])
+
+
+def acceptance_findings(snapshot, labels):
+    """Summarize only failed acceptance comparisons using their own endpoint limits."""
+    endpoints = ('Vinmin',) if len(labels) == 1 else ('Vinmin', 'Vinmax')
+    findings = []
+    for item in snapshot.get('rows') or []:
+        details = []
+        for label, case in zip(labels, endpoints):
+            cell = (item.get('cases') or {}).get(case) or {}
+            if cell.get('status') != 'review':
+                continue
+            failed = [name + ' ' + _acceptance_number(item, cell.get(source))
+                      for source, name in _ACCEPTANCE_SOURCES.items()
+                      if (cell.get('states') or {}).get(source) == 'review']
+            threshold = _acceptance_threshold(item, cell if item.get('limits_vary') else item)
+            details.append(('' if len(labels) == 1 else label + ' ')
+                           + (' / '.join(failed) or '超限') + '，要求 ' + threshold)
+        if details:
+            findings.append((item.get('name') or item.get('metric') or item.get('id'), '\n'.join(details)))
+    return findings
+
+
 def add_acceptance_report(doc,p,bundle=None,*,joint_record=None,spice_evidence=None,
-                          title='工程验收',short_summary=False,snapshot=None):
+                          title='工程验收',short_summary=False,snapshot=None,level=1):
     if snapshot is None:
         snapshot=acceptance_snapshot(p,bundle,joint_record=joint_record,spice_evidence=spice_evidence)
-    module_section(doc,title,level=1,new_page=False)
+    module_section(doc,title,level=level,new_page=False)
     summary=snapshot.get('summary') or {}
     labels, rows = acceptance_columns(snapshot, bundle, p)
     if summary:
@@ -441,48 +494,40 @@ def add_acceptance_report(doc,p,bundle=None,*,joint_record=None,spice_evidence=N
         if len(labels) == 1:
             counts = {state: sum((row.get('cases') or {}).get('Vinmin', {}).get('status') == state
                                  for row in snapshot.get('rows', [])) for state in counts}
-        pieces = [str(summary.get('label') or '待评估')]
+        pieces = ['总体判定 ' + str(summary.get('label') or '待评估')]
         pieces.extend(f"{STATE_LABELS.get(k,k)} {v} 项" for k,v in counts.items() if v and k != 'na')
-        if summary.get('unresolved_issues'):
-            pieces.append(f"未闭合问题 {summary['unresolved_issues']} 项")
         lead = conclusion_line(doc, '，'.join(pieces), summary.get('state'))
         lead.paragraph_format.keep_with_next = True
+        if summary.get('scope'):
+            paragraph(doc, summary['scope'], True)
     missing = missing_evidence_note(snapshot)
     if missing:
         note = paragraph(doc, missing, True)
         note.paragraph_format.keep_with_next = True
     for note in snapshot.get('evidence_notes') or []:
         paragraph(doc,str(note),True)
+    width = available_width(doc)
     if short_summary:
-        reviews=[]
-        conditions={row[0]:row[1] for row in acceptance_rows(snapshot)}
-        from report_docx import value
-        for item in snapshot.get('rows',[]):
-            case_ids = ('Vinmin',) if len(labels) == 1 else ('Vinmin','Vinmax')
-            pair=[(item.get('cases') or {}).get(k) or {} for k in case_ids]
-            if not any(cell.get('status')=='review' for cell in pair):continue
-            cells=[]
-            for cell in pair:
-                bad=[source for source in ('calculation','simulation','measurement')
-                     if (cell.get('states') or {}).get(source)=='review']
-                source_labels = {'calculation': '计算', 'simulation': '仿真', 'measurement': '实测'}
-                cells.append('，'.join(source_labels[source]+' '+value(cell.get(source),item.get('unit',''))
-                                      for source in bad) or '满足')
-            name=item.get('name') or item.get('metric') or item.get('id')
-            reviews.append((name,*cells,conditions.get(name,'待补目标')))
-        if reviews:
-            width=available_width(doc)
-            table(doc,['已知超限项目',*labels,'需求阈值'],reviews,
-                  [width*.29,*([width*.5/len(labels)]*len(labels)),width*.21])
-    if not short_summary:
-        width=available_width(doc)
-        if rows:
-            table(doc,['验收指标与证据','需求阈值',*labels],rows,
-                  [width*.28,width*.18,*([width*.54/len(labels)]*len(labels))])
-        else:paragraph(doc,'待配置验收阈值与测量条件。')
+        group_line = acceptance_group_line(snapshot)
+        if group_line:
+            paragraph(doc, group_line, True)
+        if reviews := acceptance_findings(snapshot, labels):
+            table(doc, ['超限项目', '当前值与限值'], reviews, [width*.33, width*.67])
+    else:
+        for group, group_summary, group_rows in acceptance_sections(snapshot, rows):
+            if group:
+                module_section(doc, group, level=level+1, new_page=False)
+            if group_summary:
+                lead = conclusion_line(doc, group_summary['label'], group_summary['state'])
+                lead.paragraph_format.keep_with_next = True
+            if group_rows:
+                table(doc,['验收指标与证据','限值与依据',*labels],group_rows,
+                      [width*.25,width*.24,*([width*.51/len(labels)]*len(labels))])
+            else:
+                paragraph(doc, '未取得适用的验收检查。')
         issues=snapshot.get('issues') or []
         if issues:
-            module_section(doc,'未闭合问题',level=2,new_page=False)
+            module_section(doc,'补充记录 · 整改',level=level+1,new_page=False)
             for issue in issues:
                 paragraph(doc,'；'.join(str(issue[k]) for k in ('id','title','description','effective_status','evidence') if issue.get(k)))
     return snapshot

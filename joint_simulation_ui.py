@@ -19,8 +19,9 @@ from tkinter import filedialog, messagebox, ttk
 from ui_preferences import preferences_path
 
 
-STAGES = (('prepare', '输入检查'), ('field', '变压器场仿真'),
-          ('calculation', '裕量回填与计算'), ('spice', '电路仿真'), ('report', '联合报告'))
+STAGES = (('prepare', '检查输入'), ('field', '变压器电磁仿真'),
+          ('calculation', '带裕量复算'), ('spice', '电路仿真'), ('report', '生成报告'))
+STAGE_COMPLETE = '已完成'
 
 
 def _settings_file():
@@ -107,29 +108,33 @@ class JointSimulationDialog:
         self.executable = settings_context.executable if self.embedded else tk.StringVar(win, find_ltspice() or '')
         self.prepare_missing = tk.BooleanVar(win, self.settings.get('prepare_reference_inputs', True))
         self.auto_circuit_plan = tk.BooleanVar(win, self.settings.get('auto_circuit_plan', not self.embedded))
-        self.status = tk.StringVar(win, '准备就绪。工具路径和电磁模型使用配置中心当前设置。')
+        self.status = tk.StringVar(win, '历史结果 · 可打开报告查看当时的设计与验证。' if self.result else
+                                   '未运行 · 确认回填裕量和保存目录后，可开始联合仿真。')
         self.legacy = tk.BooleanVar(win, False)
 
         self.frame = frame = ttk.Frame(container if self.embedded else win, padding=14)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(3, weight=1)
         heading = ttk.Frame(frame)
         heading.grid(row=0, column=0, sticky='ew')
         self.heading = ttk.Label(heading, text='电磁仿真，电路仿真，设计计算联合报告',
                                  font='TkHeadingFont', wraplength=1000, justify='left')
         self.heading.pack(side='left',fill='x',expand=True)
+        self.message = ttk.Label(frame, textvariable=self.status, wraplength=980, justify='left',
+                                 style='ResultConclusion.TLabel')
+        self.message.grid(row=1, column=0, sticky='ew', pady=(5, 0))
         self.design = ttk.Label(frame, text=self.describe(config), wraplength=980,
                                 style='Muted.TLabel', justify='left')
-        self.design.grid(row=1, column=0, sticky='ew', pady=(7, 12))
+        self.design.grid(row=2, column=0, sticky='ew', pady=(4, 10))
         from scrollable_results import ScrollableResults
         self.notebook = None
         if self.embedded:
             run_tab = ttk.Frame(frame)
-            run_tab.grid(row=2, column=0, sticky='nsew')
+            run_tab.grid(row=3, column=0, sticky='nsew')
         else:
             self.notebook = tabs = ttk.Notebook(frame)
-            tabs.grid(row=2, column=0, sticky='nsew')
+            tabs.grid(row=3, column=0, sticky='nsew')
             run_tab = ttk.Frame(tabs)
             tools_page = ttk.Frame(tabs)
             tabs.add(run_tab, text='联合运行与结果')
@@ -138,15 +143,15 @@ class JointSimulationDialog:
         run_scroll.pack(fill='both', expand=True)
         run_page = run_scroll.content
         run_page.columnconfigure(1, weight=1)
-        run_page.rowconfigure(6, weight=1)
-        ttk.Label(run_page, text='报告保存目录').grid(row=0, column=0, sticky='w', padx=(0, 10))
+        run_page.rowconfigure(5, weight=1)
+        ttk.Label(run_page, text='报告保存目录').grid(row=2, column=0, sticky='w', padx=(0, 10))
         output_entry = ttk.Entry(run_page, textvariable=self.output)
-        output_entry.grid(row=0, column=1, sticky='ew')
+        output_entry.grid(row=2, column=1, sticky='ew')
         output_pick = ttk.Button(run_page, text='选择目录…', command=self.pick_output)
-        output_pick.grid(row=0, column=2, padx=(8, 0))
+        output_pick.grid(row=2, column=2, padx=(8, 0))
         self.controls.extend((output_entry, output_pick))
         policy = ttk.LabelFrame(run_page, text='参数回填策略', padding=10)
-        policy.grid(row=1, column=0, columnspan=3, sticky='ew', pady=10)
+        policy.grid(row=3, column=0, columnspan=3, sticky='ew', pady=10)
         policy.columnconfigure(2, weight=1)
         ttk.Label(policy, text='漏感工程裕量 / 倍').grid(row=0, column=0, sticky='w')
         factor = ttk.Spinbox(policy, textvariable=self.factor, from_=1, to=3,
@@ -154,8 +159,8 @@ class JointSimulationDialog:
         factor.grid(row=0, column=1, padx=10)
         self.controls.append(factor)
         self.policy_text = ttk.Label(policy, wraplength=940, justify='left', text=
-            '以原边短路漏感为基准，按指定倍数求取裕量矩阵并保留各绕组自感。'
-            '默认 1.2 倍。完成后可将结果采用到当前单元。')
+            '按指定倍数放大原边短路漏感，同时保留各绕组自感。默认 1.2 倍。'
+            '核对报告后，可采用结果并重算当前单元。')
         self.policy_text.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(7, 0))
         plan = ttk.Checkbutton(policy, text='按当前设计自动安排完整电路试验',
                                variable=self.auto_circuit_plan)
@@ -171,33 +176,30 @@ class JointSimulationDialog:
 
         self.stage_frame = stages = ttk.Frame(run_page)
         self.stage_boxes = []
-        stages.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 7))
+        stages.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 7))
         for i, (key, label) in enumerate(STAGES):
             stages.columnconfigure(i, weight=1, uniform='stage')
-            box = ttk.LabelFrame(stages, text=f'{i+1:02d} {label}', padding=(8, 6))
+            box = ttk.LabelFrame(stages, text=label, padding=(8, 6))
             box.grid(row=0, column=i, sticky='nsew', padx=(0, 5 if i < 4 else 0))
-            value = tk.StringVar(win, '等待')
+            value = tk.StringVar(win, '未运行')
             ttk.Label(box, textvariable=value).pack(anchor='w')
             self.stages[key] = value
             self.stage_boxes.append(box)
         self.bar = ttk.Progressbar(run_page, mode='determinate', maximum=len(STAGES))
-        self.bar.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(0, 8))
-        self.message = ttk.Label(run_page, textvariable=self.status, wraplength=980,
-                                 justify='left')
-        self.message.grid(row=4, column=0, columnspan=3, sticky='ew')
+        self.bar.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 8))
         ttk.Label(run_page, text='运行记录', style='Muted.TLabel').grid(
-            row=5, column=0, columnspan=3, sticky='w', pady=(10, 4))
+            row=4, column=0, columnspan=3, sticky='w', pady=(6, 4))
         self.log = tk.Text(run_page, height=9, wrap='word', state='disabled',
                            font='TkDefaultFont', borderwidth=1, relief='solid')
-        self.log.grid(row=6, column=0, columnspan=2, sticky='nsew')
+        self.log.grid(row=5, column=0, columnspan=2, sticky='nsew')
         scroll = ttk.Scrollbar(run_page, command=self.log.yview)
-        scroll.grid(row=6, column=2, sticky='nsw')
+        scroll.grid(row=5, column=2, sticky='nsw')
         self.log.configure(yscrollcommand=scroll.set)
 
         if self.embedded:
             self.environment = settings_context
             tools = ttk.Frame(run_page)
-            tools.grid(row=7, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+            tools.grid(row=6, column=0, columnspan=3, sticky='ew', pady=(6, 0))
         else:
             scroll_tools = ScrollableResults(tools_page)
             scroll_tools.pack(fill='both', expand=True)
@@ -241,15 +243,16 @@ class JointSimulationDialog:
         self.toggle_legacy()
 
         self.footer = footer = ttk.Frame(frame)
-        footer.grid(row=3, column=0, sticky='ew', pady=(12, 0))
-        self.open_report = ttk.Button(footer, text='打开联合报告', command=lambda:self.open_path(self.result.get('report_path')))
+        footer.grid(row=4, column=0, sticky='ew', pady=(10, 0))
+        self.open_report = ttk.Button(footer, text='打开 Word', command=lambda:self.open_path(self.result.get('report_path')))
+        self.open_xlsx = ttk.Button(footer, text='打开 Excel', command=lambda:self.open_path(self.result.get('xlsx_path')))
         self.open_folder = ttk.Button(footer, text='打开运行目录', command=lambda:self.open_path(self.directory, directory=True))
         self.adopt = ttk.Button(footer, text='采用结果到当前单元', command=self.apply_result)
         self.run_button = ttk.Button(footer, text='开始联合仿真并导出', command=self.start)
         self.stop_button = ttk.Button(footer, text='取消任务', command=self.cancel)
-        self.action_buttons = (self.run_button, self.stop_button, self.open_report, self.open_folder, self.adopt)
+        self.action_buttons = (self.run_button,self.stop_button,self.open_report,self.open_xlsx,self.open_folder,self.adopt)
         self.refresh()
-        self.write('只需一次开始：输入检查 → 场解 → 带裕量参数复算 → 电路仿真 → 联合 Word 报告。')
+        self.write('输入检查 → 场解 → 带裕量参数复算 → 电路仿真 → Word 与 Excel 联合报告。')
         if self.result:
             self.write('已载入本单元保存的联合报告记录。该记录是历史证据，重新运行会建立独立目录。')
         frame.bind('<Configure>', self.resize, add='+')
@@ -261,9 +264,8 @@ class JointSimulationDialog:
             win.protocol('WM_DELETE_WINDOW', self.close)
 
     def describe(self, config):
-        return ('当前单元：' + _readable(config.get('topology', '未选择拓扑')) +
-                '  ·  磁芯 ' + (self.core or '未选择') +
-                '  ·  芯片与补偿沿用当前工程。Vin min / Vin max 按同一套回填后硬件验证。')
+        return (_readable(config.get('topology', '未选择拓扑')) + ' · 磁芯 ' + (self.core or '未选择') +
+                ' · 使用当前控制器与补偿。两个输入端点共用回填后的硬件。')
 
     def resize(self, event):
         if event.widget is self.frame:
@@ -281,7 +283,7 @@ class JointSimulationDialog:
         if self.closed:
             return
         for parent, widgets, maximum in ((self.stage_frame,self.stage_boxes,5),
-                                          (self.footer,self.action_buttons,5)):
+                                          (self.footer,self.action_buttons,6)):
             available = max(400,parent.winfo_width())
             cell = max(w.winfo_reqwidth() for w in widgets)+12
             columns = max(1,min(maximum,int(available//cell)))
@@ -372,13 +374,14 @@ class JointSimulationDialog:
             widget.state(['disabled'] if busy else ['!disabled'])
         self.stop_button.state(['!disabled'] if busy and not self.job.is_set() else ['disabled'])
         self.open_report.state(['!disabled'] if not busy and self.result.get('report_path') else ['disabled'])
+        self.open_xlsx.state(['!disabled'] if not busy and self.result.get('xlsx_path') else ['disabled'])
         self.open_folder.state(['!disabled'] if not busy and self.directory else ['disabled'])
         self.adopt.state(['!disabled'] if not busy and not self.applied and self.adoptable() else ['disabled'])
 
     def adoptable(self):
         return (bool(self.result.get('proposed_config')) and
                 self.result.get('status') in ('complete','completed','partial') and
-                self.stages['calculation'].get() == '完成')
+                self.stages['calculation'].get() == STAGE_COMPLETE)
 
     def start(self):
         if self.job is not None:
@@ -411,7 +414,7 @@ class JointSimulationDialog:
             auto_circuit_plan = bool(self.auto_circuit_plan.get())
             save_environment_locally = not self.embedded
         except (ValueError, OSError, tk.TclError) as exc:
-            self.status.set('尚未开始：' + str(exc))
+            self.status.set('未运行 · ' + str(exc))
             self.write(self.status.get())
             return
         try:
@@ -425,9 +428,9 @@ class JointSimulationDialog:
         self.directory = output
         self.job = cancel = threading.Event()
         for value in self.stages.values():
-            value.set('等待')
+            value.set('未运行')
         self.bar['value'] = 0
-        self.status.set('正在冻结输入并检查工具…')
+        self.status.set('运行中 · 正在检查输入、绕组和求解工具。')
         if self.notebook is not None:
             self.notebook.select(0)
         self.refresh()
@@ -459,7 +462,7 @@ class JointSimulationDialog:
 
     def progress(self, event):
         if not isinstance(event, dict):
-            self.status.set(str(event))
+            self.status.set('运行中 · ' + str(event))
             self.write(event)
             return
         stage, state = event.get('stage'), event.get('status', 'running')
@@ -469,13 +472,13 @@ class JointSimulationDialog:
             if state in ('complete', 'completed'):
                 state = 'running'
         if stage in self.stages:
-            self.stages[stage].set({'running':'运行中', 'complete':'完成', 'completed':'完成',
+            self.stages[stage].set({'running':'运行中', 'complete':STAGE_COMPLETE, 'completed':STAGE_COMPLETE,
                 'partial':'部分完成', 'failed':'失败', 'cancelled':'已取消', 'skipped':'未执行',
-                'pending':'等待'}.get(state, str(state)))
-            self.bar['value'] = sum(value.get() == '完成' for value in self.stages.values())
+                'pending':'未运行'}.get(state, str(state)))
+            self.bar['value'] = sum(value.get() == STAGE_COMPLETE for value in self.stages.values())
         message = event.get('message')
         if message:
-            self.status.set(str(message))
+            self.status.set('运行中 · ' + str(message))
             self.write(message)
 
     def poll(self):
@@ -493,26 +496,30 @@ class JointSimulationDialog:
             if kind == 'error':
                 if data[1]:
                     self.directory = data[1]
-                self.status.set(('已取消；已保存的运行文件保留。' if requested_cancel else '本次未完成：' + data[0]))
+                self.status.set('已取消 · 已有记录可在运行目录查看。' if requested_cancel else '失败 · ' + data[0])
                 for value in self.stages.values():
                     if value.get() == '运行中':
                         value.set('已取消' if requested_cancel else '失败')
             else:
                 self.result = data
                 self.directory = data.get('directory', self.directory)
+                preparation = (data.get('record') or {}).get('reference_preparation')
+                if preparation:
+                    self.write(preparation)
                 state = data.get('status', 'partial')
                 if state in ('complete', 'completed'):
-                    self.status.set(('任务已完成，取消请求晚于完成；' if requested_cancel else '') +
-                                    '联合报告已生成；结果已用于导出副本，当前单元尚未改写。')
+                    self.status.set('已完成 · 联合报告已生成。核对后可采用结果。')
                 elif state == 'cancelled' or requested_cancel:
-                    self.status.set('已取消；已完成阶段及诊断记录保留，不代表完整验证通过。')
+                    self.status.set('已取消 · 可查看已完成阶段及诊断记录。')
+                elif state == 'failed':
+                    self.status.set('失败 · 请查看运行记录和已生成的诊断文件。')
                 else:
-                    self.status.set('联合报告已保存，存在失败或未覆盖项目，请查看报告结论。')
+                    self.status.set('部分完成 · 请在联合报告中核对失败或未覆盖项目。')
                 summary = data.get('summary')
                 if summary:
                     self.write(summary if isinstance(summary, str) else json.dumps(summary, ensure_ascii=False))
             for value in self.stages.values():
-                if value.get() == '等待':
+                if value.get() == '未运行':
                     value.set('未执行')
             self.write(self.status.get())
             if self.directory:
@@ -525,7 +532,7 @@ class JointSimulationDialog:
     def cancel(self):
         if self.job is not None:
             self.job.set()
-            self.status.set('正在停止当前步骤；不会继续启动后续阶段…')
+            self.status.set('正在取消 · 等待当前步骤停止。')
             self.write(self.status.get())
             self.refresh()
 
@@ -538,15 +545,15 @@ class JointSimulationDialog:
             proposed = copy.deepcopy(self.result['proposed_config'])
             proposed['__joint_simulation'] = {
                 key: copy.deepcopy(self.result[key]) for key in (
-                    'directory', 'report_path', 'manifest_path', 'status', 'input_id', 'summary')
+                    'directory', 'report_path', 'xlsx_path', 'manifest_path', 'status', 'input_id', 'summary')
                 if key in self.result}
             self.app._apply_config(proposed)
         except (ValueError, OSError, KeyError, tk.TclError) as exc:
             self.write('未采用：' + str(exc))
-            self.status.set('未覆盖当前单元；导出报告和工程仍可查阅。')
+            self.status.set('待复核 · 当前单元有修改，可打开报告和工程核对。')
             return
         self.applied = True
-        self.status.set('已采用带裕量场解参数到当前单元并重算；返回画布后可保存系统工程。')
+        self.status.set('已采用 · 当前单元按带裕量的场解参数重算。可返回画布保存工程。')
         if hasattr(self.app, 'status_var'):
             self.app.status_var.set(self.status.get())
         self.write(self.status.get())
@@ -571,7 +578,7 @@ class JointSimulationDialog:
         if not path.is_absolute() or path.drive.startswith('\\\\'):
             self.write('请选择本机磁盘上的报告或目录。')
             return
-        if not (path.is_dir() if directory else path.is_file() and path.suffix.lower() in ('.docx', '.html', '.pdf')):
+        if not (path.is_dir() if directory else path.is_file() and path.suffix.lower() in ('.docx', '.xlsx', '.html', '.pdf')):
             self.write('找不到报告或目录：' + str(path))
             return
         try:

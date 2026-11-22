@@ -47,6 +47,7 @@ GROUPS = {
     ],
     'stage': [
         ('储能与变比', ('L', 'N')),
+        ('LLC 谐振腔', ('llc_lr', 'llc_cr', 'llc_lm', 'llc_tank_r')),
         ('有源钳位正激', ('Lm_forward', 'C_clamp', 'ESR_clamp', 'forward_d_max')),
         ('电压应力', ('ring_margin',)),
         ('旧版兼容参数', ('Vf',)),
@@ -55,6 +56,8 @@ GROUPS = {
         ('Q1 · 主开关 MOS', ('Rds_on', 'Coss', 'Qg', 'Vth', 'gfs', 'mos_curve_vds', 'Vgp_on', 'Vgp_off',
                            'Qg_th', 'Qgs', 'Qgd', 'Rg', 'k_sw')),
         ('D1 · 输出整流器', ('Vf_diode', 'Rd_diode', 'Qrr')),
+        ('LLC 副边二极管桥', ('llc_rect_r', 'llc_diode_cj')),
+        ('LLC 桥臂换流', ('llc_qoss',)),
         ('Q2 · 钳位 MOS', ('Rds_aux', 'Qg_aux', 'Coss_aux')),
     ],
     'capacitors': [
@@ -68,10 +71,12 @@ GROUPS = {
     'drive': [
         ('驱动电压与电阻', ('Vgs', 'Rg_drive', 'Rs_on', 'Rs_off')),
         ('正激驱动时序', ('forward_dead_time',)),
+        ('LLC 驱动时序', ('llc_dead_time',)),
     ],
     'sense': [
         ('电流采样', ('Rs', 'A_sense')),
         ('PWM 与斜坡补偿', ('Vm', 'ma_slope')),
+        ('LLC 混合滞环检测', ('llc_hhc_sense', 'llc_hhc_ramp')),
     ],
     'mag': [
         ('成品电感参数（0=未提供）', ('inductor_dcr', 'inductor_rated_current',
@@ -80,16 +85,22 @@ GROUPS = {
         ('磁导率与气隙估算', ('mu_r',)),
         ('绕组与导线', ('Np', 'Ns', 'd_wire_p', 'd_wire_s', 'n_strand_p',
                       'n_strand_s', 'parallel_wires_p','parallel_wires_s')),
+        ('独立谐振电感 Lr 绕制', ('llc_lr_leakage_H','llc_lr_turns','llc_lr_strands','llc_lr_wire_diameter',
+                              'llc_lr_design_peak','llc_lr_min_ae','llc_lr_bobbin_radius',
+                              'llc_lr_window_width','llc_lr_window_height')),
         ('散热与温升', ('Rth_transformer', 'h_conv', 'temp_rise_limit')),
         ('材料与磁芯损耗系数', ('rho', 'k_core', 'a_core', 'b_core')),
     ],
     'ctrl': [
         ('补偿器零极点', ('KP', 'fz1', 'fz2', 'fp1', 'fp2')),
+        ('LLC 调频与电压环', ('llc_fmin', 'llc_fmax', 'llc_kp', 'llc_ki')),
+        ('LLC 启动与保护', ('llc_soft_start', 'llc_ocp', 'llc_uvlo', 'llc_ovp')),
     ],
 }
 
-ISOLATED_TOPOLOGIES = ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD')
+ISOLATED_TOPOLOGIES = ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD', 'LLC')
 FORWARD_TOPOLOGIES = ('ACF-FORWARD',)
+LLC_TOPOLOGIES = ('LLC',)
 
 META = {
     'inductor_dcr': FieldSpec('成品电感直流电阻', 'DCR', 'Ω', topologies=('BUCK','BOOST','BUCK-BOOST')),
@@ -139,6 +150,33 @@ META = {
     'cot_min_off_s': FieldSpec('最短关断时间', 'toff,min', 's', topologies=('BUCK',)),
     'cot_kp_hz': FieldSpec('比例增益', 'Kp', 'Hz', topologies=('BUCK',)),
     'cot_ki_hz_per_s': FieldSpec('积分增益', 'Ki', 'Hz/s', topologies=('BUCK',)),
+    'llc_lr': FieldSpec('原边等效串联谐振电感', 'Lr', 'H', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_lr_leakage_H': FieldSpec('计入总 Lr 的原边漏感（0 = 待测）', 'Lσ', 'H', topologies=LLC_TOPOLOGIES),
+    'llc_lr_turns': FieldSpec('绕组匝数（0 = 自动）', 'NLr', '匝', topologies=LLC_TOPOLOGIES),
+    'llc_lr_strands': FieldSpec('单根绞线股数', '', '股', topologies=LLC_TOPOLOGIES),
+    'llc_lr_wire_diameter': FieldSpec('裸铜单股直径（0 = 自动）', '', 'm', topologies=LLC_TOPOLOGIES),
+    'llc_lr_design_peak': FieldSpec('设计校核峰值（0 = 稳态峰值）', '', 'A', topologies=LLC_TOPOLOGIES),
+    'llc_lr_min_ae': FieldSpec('磁路最小截面（0 = Ae）', 'Amin', 'm²', topologies=LLC_TOPOLOGIES),
+    'llc_lr_bobbin_radius': FieldSpec('骨架绕线起始半径（0 = 估算）', '', 'm', topologies=LLC_TOPOLOGIES),
+    'llc_lr_window_width': FieldSpec('净窗口轴向宽度（0 = 估算）', '', 'm', topologies=LLC_TOPOLOGIES),
+    'llc_lr_window_height': FieldSpec('净窗口径向深度（0 = 估算）', '', 'm', topologies=LLC_TOPOLOGIES),
+    'llc_cr': FieldSpec('串联谐振电容', 'Cr', 'F', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_lm': FieldSpec('变压器原边励磁电感', 'Lm', 'H', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_tank_r': FieldSpec('原边谐振支路等效串联电阻', 'Rr', 'Ω', topologies=LLC_TOPOLOGIES),
+    'llc_rect_r': FieldSpec('单只整流二极管斜率电阻', 'Rd', 'Ω', topologies=LLC_TOPOLOGIES),
+    'llc_diode_cj': FieldSpec('单只整流二极管结电容', 'Cj', 'F', topologies=LLC_TOPOLOGIES),
+    'llc_qoss': FieldSpec('单只 MOS 输出电荷（0 按 Coss 估算）', 'Qoss', 'C', topologies=LLC_TOPOLOGIES),
+    'llc_dead_time': FieldSpec('桥臂换流死区', 'tdead', 's', topologies=LLC_TOPOLOGIES),
+    'llc_hhc_sense': FieldSpec('谐振电容电压采样比例', 'As,Cr', 'V/V', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_hhc_ramp': FieldSpec('每半周的补偿斜坡', 'Sr', 'V/s', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_fmin': FieldSpec('允许最低开关频率', 'fmin', 'Hz', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_fmax': FieldSpec('允许最高开关频率', 'fmax', 'Hz', required=True, topologies=LLC_TOPOLOGIES),
+    'llc_kp': FieldSpec('电压环比例增益', 'Kp', '', topologies=LLC_TOPOLOGIES),
+    'llc_ki': FieldSpec('电压环积分增益', 'Ki', '', topologies=LLC_TOPOLOGIES),
+    'llc_soft_start': FieldSpec('软启动时间', 'tss', 's', topologies=LLC_TOPOLOGIES),
+    'llc_ocp': FieldSpec('谐振电流保护（0 停用）', 'Iocp', 'A', topologies=LLC_TOPOLOGIES),
+    'llc_uvlo': FieldSpec('直流输入欠压（0 停用）', 'UVLO', 'V', topologies=LLC_TOPOLOGIES),
+    'llc_ovp': FieldSpec('输出过压（0 停用）', 'OVP', 'V', topologies=LLC_TOPOLOGIES),
     'Cin1': FieldSpec('容量', 'Cin1', 'F', required=True),
     'Rcin1': FieldSpec('等效串联电阻', 'ESRin1', 'Ω'),
     'ESLin1': FieldSpec('等效串联电感', 'ESLin1', 'H'),
@@ -205,6 +243,14 @@ def applicable(key: str, topology: str, control_mode: str) -> bool:
     field = META[key]
     if field.topologies and topology not in field.topologies:
         return False
+    if topology == 'LLC':
+        if key in ('llc_hhc_sense', 'llc_hhc_ramp'):
+            return control_mode == 'Hybrid Hysteretic'
+        if key in ('L', 'Vf', 'Rd_diode', 'Qrr', 'Rs', 'A_sense', 'Vm', 'ma_slope',
+                   'KP', 'fz1', 'fz2', 'fp1', 'fp2', 'eta_guess',
+                   'Vth', 'gfs', 'mos_curve_vds', 'Vgp_on', 'Vgp_off', 'Qg_th', 'Qgs', 'Qgd',
+                   'Rg', 'k_sw', 'Rg_drive', 'Rs_on', 'Rs_off'):
+            return False
     cot = topology == 'BUCK' and control_mode == 'Constant On-Time'
     if key in ('cot_ton_s', 'cot_min_off_s', 'cot_kp_hz', 'cot_ki_hz_per_s') or (
             topology == 'BUCK' and key in ('Rds_aux', 'Qg_aux', 'Coss_aux')):

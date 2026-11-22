@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { buildWindingPaths } from './winding_paths.js';
 
 // A presentation-only mesh. Electrical and FEM inputs are never written here.
 const $ = id => document.getElementById(id);
 const palette = ['#8b381e','#174c80','#166756','#683b8c','#a77b16','#922b4b','#3f596b','#773e24'];
-const state = {payload:null, design:null, mode:'all', auto:false, sectionGroups:[], coreParts:[], insulation:[], leads:[], catalog:[], displayOnly:false, curveSteps:64, tubeSides:12};
+const state = {payload:null, design:null, mode:'all', auto:false, sectionGroups:[], coreParts:[], insulation:[], leads:[], crossovers:[], windingPaths:null, catalog:[], displayOnly:false, curveSteps:64, tubeSides:12};
 let renderer, scene, camera, controls, assembly, grid, renderTimer, autoTimer, orthoHeight=60;
 const viewport=$('viewport');
 function status(text){$('status').textContent=text;}
@@ -60,73 +61,102 @@ function buildCore(record, data, gap = 0, gapKind = 'none') {
     }
   }
 }
-function roundedRectPoints(info){
-  const w=info.width_mm,h=info.height_mm,r=Math.min(info.corner_radius_mm||0,w/2,h/2),c=info.center_xy_mm||[0,0],a=[];
-  if(!(w>0&&h>0))throw Error('矩形骨架路径尺寸无效');
-  for(let corner=0;corner<4;corner++){
-    const angle=corner*Math.PI/2,ox=(corner===0||corner===3?1:-1)*(w/2-r),oy=(corner<2?1:-1)*(h/2-r);
-    for(let j=0;j<=16;j++){const t=angle+j*Math.PI/32;a.push([c[0]+ox+r*Math.cos(t),c[1]+oy+r*Math.sin(t)]);}
-  }return a;
+
+function conductorMaterial(color) {
+  return new THREE.MeshStandardMaterial({color, metalness: .28, roughness: .31, side: THREE.DoubleSide});
 }
-function makeRoute(placement){
-  if(placement.route_type==='circular')return (theta,v)=>{const radius=placement.r0_mm+v;return [radius*Math.cos(theta),radius*Math.sin(theta),Math.cos(theta),Math.sin(theta)];};
-  let path=placement.route_type==='rounded_rectangle'?roundedRectPoints(placement.rounded_rectangle_mm):placement.path_xy_mm;
-  if(!path||path.length<3)throw Error('绕组需要已配置的闭合骨架路径');
-  path=path.map(p=>[...p]);if(path[0][0]===path.at(-1)[0]&&path[0][1]===path.at(-1)[1])path.pop();
-  const area=path.reduce((s,p,i)=>{const q=path[(i+1)%path.length];return s+p[0]*q[1]-q[0]*p[1];},0);if(area<0)path.reverse();
-  const normals=path.map((p,i)=>{const a=path[(i+path.length-1)%path.length],b=path[(i+1)%path.length];const dx=b[0]-a[0],dy=b[1]-a[1],l=Math.hypot(dx,dy);return [dy/l,-dx/l];});
-  const lengths=[0];for(let i=0;i<path.length;i++){const p=path[i],q=path[(i+1)%path.length];lengths.push(lengths.at(-1)+Math.hypot(q[0]-p[0],q[1]-p[1]));}
-  return(theta,v)=>{const target=(((theta/(2*Math.PI))%1+1)%1)*lengths.at(-1);let i=0;while(i<path.length-1&&lengths[i+1]<target)i++;const j=(i+1)%path.length,f=(target-lengths[i])/(lengths[i+1]-lengths[i]||1);let nx=normals[i][0]*(1-f)+normals[j][0]*f,ny=normals[i][1]*(1-f)+normals[j][1]*f;const len=Math.hypot(nx,ny);nx/=len;ny/=len;return[path[i][0]*(1-f)+path[j][0]*f+nx*v,path[i][1]*(1-f)+path[j][1]*f+ny*v,nx,ny];};
-}
-function trackGeometry(turns,placement,direction){
-  const vertices=[],normals=[],indices=[],steps=state.curveSteps,sides=state.tubeSides,route=makeRoute(placement),z0=placement.z0_mm||0,dir=direction==='cw'?-1:1;
-  for(let i=0;i<turns.length;i++){
-    const turn=turns[i],p=turns[Math.max(0,i-1)],q=turns[Math.min(turns.length-1,i+1)],a=turn.center_mm,b=p.center_mm,c=q.center_mm;
-    for(let j=0;j<=steps;j++){
-      // The stated cross-section centres occur at theta=pi. Endpoints meet the
-      // next turn without fabricating layer-to-layer or pin lead connections.
-      const f=j/steps,u=f<=.5?(b[0]+a[0])/2+(a[0]-b[0])*f:a[0]+(c[0]-a[0])*(f-.5);
-      const v=f<=.5?(b[1]+a[1])/2+(a[1]-b[1])*f:a[1]+(c[1]-a[1])*(f-.5);
-      const [x,y,nx,ny]=route(dir*(2*Math.PI*f),v);
-      for(let k=0;k<sides;k++){
-        const angle=k/sides*2*Math.PI,cr=Math.cos(angle),sz=Math.sin(angle),rw=turn.height_mm/2,zw=turn.width_mm/2;
-        vertices.push(x+nx*rw*cr,y+ny*rw*cr,z0+u+zw*sz);
-        const nr=cr/Math.max(rw,1e-8),nz=sz/Math.max(zw,1e-8),nl=Math.hypot(nr,nz);normals.push(nx*nr/nl,ny*nr/nl,nz/nl);
-        if(j<steps){const base=(i*(steps+1)+j)*sides+k,next=(i*(steps+1)+j)*sides+(k+1)%sides;indices.push(base,next,base+sides,next,next+sides,base+sides);}
+
+function conductorGeometry(samples) {
+  const vertices = [], normals = [], indices = [], sides = state.tubeSides;
+  const point = i => new THREE.Vector3(...samples[i].point);
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i], center = point(i);
+    const tangent = point(Math.min(samples.length - 1, i + 1))
+      .sub(point(Math.max(0, i - 1))).normalize();
+    let radial = new THREE.Vector3(...sample.normal);
+    radial.addScaledVector(tangent, -radial.dot(tangent));
+    if (radial.lengthSq() < 1e-10) {
+      radial = new THREE.Vector3(Math.abs(tangent.x) < .8 ? 1 : 0, Math.abs(tangent.x) < .8 ? 0 : 1, 0);
+      radial.addScaledVector(tangent, -radial.dot(tangent));
+    }
+    radial.normalize();
+    const axial = new THREE.Vector3().crossVectors(tangent, radial).normalize();
+    const r = Math.max(sample.height / 2, 1e-8), z = Math.max(sample.width / 2, 1e-8);
+    for (let side = 0; side < sides; side++) {
+      const angle = side / sides * 2 * Math.PI, c = Math.cos(angle), s = Math.sin(angle);
+      const position = center.clone().addScaledVector(radial, r * c).addScaledVector(axial, z * s);
+      const normal = radial.clone().multiplyScalar(c / r).addScaledVector(axial, s / z).normalize();
+      vertices.push(...position.toArray());
+      normals.push(...normal.toArray());
+      if (i < samples.length - 1) {
+        const a = i * sides + side, b = i * sides + (side + 1) % sides;
+        indices.push(a, b, a + sides, b, b + sides, a + sides);
       }
     }
   }
-  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));g.setIndex(indices);g.computeBoundingSphere();return g;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
 }
-function buildWindings(payload){
-  const total=(payload.windings||[]).reduce((s,w)=>s+w.sections.reduce((a,b)=>a+b.turns.length,0),0);
-  if(total>12000)throw Error(`当前共有 ${total.toLocaleString()} 个线束截面，超过单次 3D 预览的 12,000 个上限；请减少预览工程规模，计算数据未删减。`);
-  state.curveSteps=total>2000?20:total>1000?32:total>300?48:64;
-  state.tubeSides=total>300?8:12;
-  if(!total)return;const placement=payload.placement;if(!placement)throw Error('当前工程未给出绕组路径');
-  for(let wi=0;wi<payload.windings.length;wi++){
-    const w=payload.windings[wi],color=w.color||palette[wi%palette.length];
-    for(const section of w.sections){
-      const group=new THREE.Group();assembly.add(group);group.userData={id:section.id,winding:w.id,enabled:true,origin:group.position.clone(),kind:'winding',layer:section.layer_index};
+
+function buildWindings(payload) {
+  const total = (payload.windings || []).reduce((n, w) => n + w.sections.reduce((s, l) => s + l.turns.length, 0), 0);
+  if (total > 12000) throw Error(`当前共有 ${total.toLocaleString()} 个线束截面，超过单次 3D 预览的 12,000 个上限；请减少预览工程规模，计算数据未删减。`);
+  state.curveSteps = total > 2000 ? 20 : total > 1000 ? 32 : total > 300 ? 48 : 64;
+  state.tubeSides = total > 300 ? 8 : 12;
+  if (!total) return;
+  const placement = payload.placement;
+  if (!placement) throw Error('当前工程未给出绕组路径');
+  const paths = buildWindingPaths(payload, state.curveSteps);
+  state.windingPaths = paths;
+  const groups = new Map();
+  for (let wi = 0; wi < payload.windings.length; wi++) {
+    const winding = payload.windings[wi], color = winding.color || palette[wi % palette.length];
+    for (const section of winding.sections) {
+      const group = new THREE.Group();
+      assembly.add(group);
+      group.userData = {id: section.id, winding: winding.id, enabled: true,
+        origin: group.position.clone(), kind: 'winding', layer: section.layer_index};
       state.sectionGroups.push(group);
-      const tracks=new Map();for(const t of section.turns){const key=`${t.wire_index||1}/${t.sub_bundle_index||t.bundle_index||1}`;if(!tracks.has(key))tracks.set(key,[]);tracks.get(key).push(t);}
-      for(const turns of tracks.values()){
-        turns.sort((a,b)=>a.turn_index-b.turn_index);
-        const geom=trackGeometry(turns,placement,section.direction),material=new THREE.MeshStandardMaterial({color,metalness:.28,roughness:.31,side:THREE.DoubleSide});
-        const m=mesh(geom,material,group);m.userData={kind:'winding',name:`${w.name||w.id} · ${section.id} · ${turns.length} 匝`,section:section.id};
-      }
-      if(section.insulation_before_mm>0&&section.turns.length&&placement.route_type==='circular'){
-        const ts=section.turns,u0=Math.min(...ts.map(t=>t.center_mm[0]-t.width_mm/2)),u1=Math.max(...ts.map(t=>t.center_mm[0]+t.width_mm/2));
-        const r=placement.r0_mm+Math.min(...ts.map(t=>t.center_mm[1]-t.height_mm/2))-section.insulation_before_mm/2;
-        if(r>0){const sheet=mesh(cylinder(r,u1-u0),new THREE.MeshStandardMaterial({color:0xd7ac54,transparent:true,opacity:.12,side:THREE.DoubleSide,depthWrite:false}));sheet.position.z=(placement.z0_mm||0)+(u0+u1)/2;sheet.userData={layer:section.layer_index,origin:sheet.position.clone()};state.insulation.push(sheet);}
+      groups.set(section.id, group);
+      if (section.insulation_before_mm > 0 && section.turns.length && placement.route_type === 'circular') {
+        const turns = section.turns;
+        const u0 = Math.min(...turns.map(t => t.center_mm[0] - t.width_mm / 2));
+        const u1 = Math.max(...turns.map(t => t.center_mm[0] + t.width_mm / 2));
+        const radius = placement.r0_mm + Math.min(...turns.map(t => t.center_mm[1] - t.height_mm / 2)) - section.insulation_before_mm / 2;
+        if (radius > 0) {
+          const sheet = mesh(cylinder(radius, u1 - u0), new THREE.MeshStandardMaterial({
+            color: 0xd7ac54, transparent: true, opacity: .12, side: THREE.DoubleSide, depthWrite: false}));
+          sheet.position.z = (placement.z0_mm || 0) + (u0 + u1) / 2;
+          sheet.userData = {layer: section.layer_index, origin: sheet.position.clone()};
+          state.insulation.push(sheet);
+        }
       }
     }
+    for (const track of paths.tracks.filter(t => t.winding === winding)) {
+      const m = mesh(conductorGeometry(track.samples), conductorMaterial(color), groups.get(track.section.id));
+      m.userData = {kind: 'winding', name: `${winding.name || winding.id} · ${track.section.id} · ${track.turns.length} 匝 · 线束 ${track.key}`,
+        section: track.section.id, track: track.key};
+    }
+    for (const link of paths.links.filter(l => l.winding === winding)) {
+      const m = mesh(conductorGeometry(link.samples), conductorMaterial(color));
+      const type = link.connection.kind === 'pin_return' ? '针脚侧回线' : link.connection.kind === 'declared' ? '已声明跨层引线' : '相邻层折返';
+      m.userData = {kind: 'crossover', winding: winding.id, sections: [link.from.section.id, link.to.section.id],
+        name: `${winding.name || winding.id} · ${link.from.section.id} → ${link.to.section.id} · ${type} · 线束 ${link.key}`};
+      state.crossovers.push(m);
+    }
   }
-  for(const lead of payload.leads||[]){
-    if(!lead.path_xyz_mm||lead.path_xyz_mm.length<2)continue;
-    const points=lead.path_xyz_mm.map(p=>new THREE.Vector3(...p));
-    const g=new THREE.BufferGeometry().setFromPoints(points),line=new THREE.Line(g,new THREE.LineBasicMaterial({color:0x624a33}));
-    line.userData={kind:'lead',name:`已声明引线 ${lead.node}`};assembly.add(line);state.leads.push(line);
+  for (const lead of payload.leads || []) {
+    if (!lead.path_xyz_mm || lead.path_xyz_mm.length < 2) continue;
+    const points = lead.path_xyz_mm.map(p => new THREE.Vector3(...p));
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({color: 0x624a33}));
+    line.userData = {kind: 'lead', name: `已声明引线 ${lead.node}`};
+    assembly.add(line);
+    state.leads.push(line);
   }
 }
 function addGrid(){
@@ -136,7 +166,7 @@ function addGrid(){
   $('scale').textContent=`尺寸 / mm · 网格 ${(Math.ceil(span*1.8/10)*10/20).toFixed(1)} mm`;
 }
 function fitView(kind='perspective'){
-  const b=new THREE.Box3();for(const item of [...state.coreParts,...state.sectionGroups,...state.leads])if(item.visible)b.expandByObject(item);if(b.isEmpty()){b.min.set(-15,-15,-15);b.max.set(15,15,15);}
+  const b=new THREE.Box3();for(const item of [...state.coreParts,...state.sectionGroups,...state.leads,...state.crossovers])if(item.visible)b.expandByObject(item);if(b.isEmpty()){b.min.set(-15,-15,-15);b.max.set(15,15,15);}
   const aspect=viewport.clientWidth/viewport.clientHeight||1;
   const center=b.getCenter(new THREE.Vector3()),size=b.getSize(new THREE.Vector3()),r=Math.max(size.x,size.y,size.z,5),dist=r/(2*Math.tan(THREE.MathUtils.degToRad(18)))*Math.max(1,1/aspect)*1.45;
   if(kind==='perspective')camera=new THREE.PerspectiveCamera(36,aspect,.01,dist*100);
@@ -153,6 +183,7 @@ function applyVisibility(){
   const half=$('coreHalf').value;
   for(const m of state.coreParts){m.visible=state.mode!=='windings'&&(opacity>0||$('edges').checked)&&(m.userData.half===0||half==='both'||(half==='lower'?m.userData.half<0:m.userData.half>0));const transparent=opacity<.999;if(m.material.transparent!==transparent){m.material.transparent=transparent;m.material.depthWrite=!transparent;m.material.needsUpdate=true;}m.material.opacity=opacity;m.material.visible=opacity>0;m.userData.edge.visible=$('edges').checked;m.userData.edge.material.opacity=.32+.5*opacity;m.position.copy(m.userData.origin);m.position.z+=m.userData.half*explode*span*1.1;}
   for(const group of state.sectionGroups){group.visible=state.mode!=='core'&&group.userData.enabled;group.position.copy(group.userData.origin);group.position.x+=explode*(group.userData.layer-1)*span*.55;}
+  for(const connector of state.crossovers){connector.visible=state.mode!=='core'&&explode===0&&connector.userData.sections.every(id=>state.sectionGroups.some(group=>group.userData.id===id&&group.userData.enabled));}
   for(const m of state.insulation){const owner=state.sectionGroups.find(g=>g.userData.layer===m.userData.layer);m.visible=$('insulation').checked&&state.mode!=='core'&&(owner?.userData.enabled??true);m.position.copy(m.userData.origin);m.position.x+=explode*(m.userData.layer-1)*span*.55;}
   if(grid)grid.visible=$('grid').checked;
   for(const lead of state.leads)lead.visible=state.mode!=='core';
@@ -179,7 +210,7 @@ function showInfo(core){
   if(d?.center_diameter)row('中柱 / mm',`Ø ${d.center_diameter}`);if(d?.window_height)row('沟深 / mm',`${d.window_height}${core.template==='ei_rect'?'（E 芯）':'（半芯）'}`);if(core.source_page)row('来源页',String(core.source_page));el.append(dl);
   if(core.source_url&&/^https:\/\//.test(core.source_url)){const a=labelNode('a','查看尺寸来源 ↗');a.href=core.source_url;a.target='_blank';a.rel='noopener noreferrer';el.append(a);}
 }
-function showNotes(payload){const el=$('notes');el.replaceChildren();for(const n of [...(payload.notes||[]),...(payload.core?.notes||[])]){const text=typeof n==='string'?n:n.text||n.message||JSON.stringify(n);el.append(labelNode('p',text,n.severity==='warning'?'warning':''));}if(payload.core?.status==='dimensions_pending')el.prepend(labelNode('p','该型号机械尺寸尚待核对，当前不生成磁芯外形。','warning'));if(state.curveSteps<64)el.append(labelNode('p',`当前线束较多，曲面每匝采用 ${state.curveSteps} 段显示；全部匝数和原截面尺寸保留。`));if(payload.leads?.length)el.append(labelNode('p','分解装配时，已声明引线仍保留原始坐标，仅用于检查路径。'));}
+function showNotes(payload){const el=$('notes');el.replaceChildren();for(const n of [...(payload.notes||[]),...(payload.core?.notes||[]),...(state.windingPaths?.notes||[])]){const text=typeof n==='string'?n:n.text||n.message||JSON.stringify(n);el.append(labelNode('p',text,n.severity==='warning'?'warning':''));}if(payload.core?.status==='dimensions_pending')el.prepend(labelNode('p','该型号机械尺寸尚待核对，当前不生成磁芯外形。','warning'));if(state.curveSteps<64)el.append(labelNode('p',`当前线束较多，曲面每匝采用 ${state.curveSteps} 段显示；全部匝数和原截面尺寸保留。`));if(state.crossovers.length)el.append(labelNode('p','层间跨线按串联接线显示，分解装配时暂时隐藏；回线附近的局部撑高为装配示意。'));if(payload.leads?.length)el.append(labelNode('p','分解装配时，已声明外部引线保留原始坐标。'));}
 function catalogUI(catalog){
   state.catalog=catalog||[];const select=$('catalog');select.replaceChildren(new Option('当前工程磁芯',''));let families=new Map();
   for(const record of state.catalog){
@@ -189,7 +220,7 @@ function catalogUI(catalog){
 }
 function showPayload(payload,{keepView=false}={}){
   if(!renderer)return;state.payload=payload;$('fatal').hidden=true;$('loading').hidden=true;
-  disposeGroup(assembly);state.coreParts=[];state.sectionGroups=[];state.insulation=[];state.leads=[];
+  disposeGroup(assembly);state.coreParts=[];state.sectionGroups=[];state.insulation=[];state.leads=[];state.crossovers=[];state.windingPaths=null;
   try{buildCore(payload.core,payload.core_mesh,payload.gap_mm||0,payload.gap_kind);buildWindings(payload);}
   catch(e){failure(e.message);}
   layerUI(payload);showInfo(payload.core);showNotes(payload);addGrid();applyVisibility();
@@ -207,7 +238,7 @@ window.updateScene=function(payload){
   showPayload(payload,{keepView:Boolean(state.payload&&payload.core?.model===state.payload.core?.model)});
 };
 let lastHover=0;
-function hover(event){if(event.buttons||performance.now()-lastHover<50)return;lastHover=performance.now();const rect=renderer.domElement.getBoundingClientRect(),pointer=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2);const ray=new THREE.Raycaster();ray.setFromCamera(pointer,camera);const candidates=[];for(const g of state.sectionGroups)if(g.visible)g.traverse(o=>{if(o.isMesh)candidates.push(o);});const hit=ray.intersectObjects(candidates,false)[0];$('selection').hidden=!hit;if(hit)$('selection').textContent=hit.object.userData.name;}
+function hover(event){if(event.buttons||performance.now()-lastHover<50)return;lastHover=performance.now();const rect=renderer.domElement.getBoundingClientRect(),pointer=new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2);const ray=new THREE.Raycaster();ray.setFromCamera(pointer,camera);const candidates=state.crossovers.filter(m=>m.visible);for(const g of state.sectionGroups)if(g.visible)g.traverse(o=>{if(o.isMesh)candidates.push(o);});const hit=ray.intersectObjects(candidates,false)[0];$('selection').hidden=!hit;if(hit)$('selection').textContent=hit.object.userData.name;}
 function animate(time){autoTimer=null;if(state.auto){controls.autoRotate=true;controls.autoRotateSpeed=.65;controls.update();renderer.render(scene,camera);autoTimer=requestAnimationFrame(animate);}else controls.autoRotate=false;}
 for(const id of ['perspective','front','top','side'])$(id).onclick=()=>fitView(id);
 $('reset').onclick=()=>{$('explode').value='0';applyVisibility();fitView();};
@@ -244,5 +275,25 @@ window.previewDiagnostics=(options={})=>{
   const windingBounds=new THREE.Box3();for(const group of state.sectionGroups)windingBounds.expandByObject(group);
   const result={ready:!!renderer,coreParts:state.coreParts.length,layers:state.sectionGroups.length,triangles:renderer?.info.render.triangles,drawCalls:renderer?.info.render.calls,renderedBundleCount:(state.payload?.windings||[]).reduce((n,w)=>n+w.sections.reduce((s,l)=>s+l.turns.length,0),0),displayedCoreModel:state.payload?.core?.model,meshBacked:state.payload?.core_mesh?.schema==='power-core-mesh.v1',meshModel:state.payload?.core_mesh?.model,meshSchema:state.payload?.core_mesh?.schema,camera:camera?.position.toArray(),projection:camera?.isOrthographicCamera?'orthographic':'perspective',visibleLayers:state.sectionGroups.filter(g=>g.visible).length,coreOpacity:Number($('opacity').value)/100,explode:Number($('explode').value)/100,coreBounds:bounds.isEmpty()?null:{min:bounds.min.toArray(),max:bounds.max.toArray(),size:bounds.getSize(new THREE.Vector3()).toArray()},windingBounds:windingBounds.isEmpty()?null:{min:windingBounds.min.toArray(),max:windingBounds.max.toArray()},fatal:$('fatal').hidden?null:$('fatal').textContent,mode:state.mode,displayOnly:state.displayOnly,signature:state.design?.signature};
   if(options.parts)result.parts=state.coreParts.map(part=>{const b=new THREE.Box3().setFromObject(part);return{role:part.userData.role,half:part.userData.half,visible:part.visible,min:b.min.toArray(),max:b.max.toArray()};});
+  const paths=state.windingPaths;
+  result.crossovers=state.crossovers.length;
+  result.visibleCrossovers=state.crossovers.filter(m=>m.visible).length;
+  if(paths){
+    result.conductorTracks=paths.tracks.length;
+    result.localLiftMax_mm=paths.tracks.reduce((n,t)=>t.samples.reduce((m,s)=>Math.max(m,s.lift),n),0);
+    result.connectionKinds=paths.links.map(link=>link.connection.kind);
+    if(options.paths){
+      result.conductorPaths=paths.tracks.map(t=>({section:t.section.id,winding:t.winding.id,track:t.key,
+        turnIds:t.turns.map(turn=>turn.id),phase:t.phase,start_mm:t.samples[0].point,end_mm:t.samples.at(-1).point,
+        liftMax_mm:t.samples.reduce((n,s)=>Math.max(n,s.lift),0)}));
+      result.connections=paths.links.map(link=>({winding:link.winding.id,track:link.key,
+        from:link.from.section.id,to:link.to.section.id,kind:link.connection.kind,
+        start_mm:link.samples[0].point,end_mm:link.samples.at(-1).point,
+        minimumZ_mm:link.samples.reduce((n,s)=>Math.min(n,s.point[2]),Infinity),
+        pointCount:link.samples.length,
+        endGap_mm:Math.max(new THREE.Vector3(...link.samples[0].point).distanceTo(new THREE.Vector3(...link.from.samples.at(-1).point)),
+          new THREE.Vector3(...link.samples.at(-1).point).distanceTo(new THREE.Vector3(...link.to.samples[0].point)))}));
+    }
+  }
   return result;
 };

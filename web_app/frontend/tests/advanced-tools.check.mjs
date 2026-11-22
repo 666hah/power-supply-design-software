@@ -130,7 +130,7 @@ await check('整定提交真实case/fc/pm，候选不自动改变输入且显式
   const t = mount({ caseId: 'Vinmax' });
   assert.equal(Number(t.field('目标穿越频率 fc').value), 3.2);
   await fire(t.field('目标穿越频率 fc'), 'input', 2.4);
-  await fire(t.field('目标相位裕度 PM'), 'input', 70);
+  await fire(t.field('整定目标相位裕度 PM'), 'input', 70);
   await fire(t.field('补偿器类型'), 'change', 'type3');
   await fire(t.button('计算候选补偿参数'));
   assert.deepEqual(t.api.posts[0], { path: '/jobs/job-current/action', payload: { action: 'tune', options: { case: 'Vinmax', fc: 2400, pm: 70, controller_type: 'type3' } } });

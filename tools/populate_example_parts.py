@@ -19,6 +19,10 @@ from config_io import decode_config
 from design_engine.specification import load_spec
 from component_management import component_registry, normalize_management
 from capacitor_banks import bank, output_ref
+from cot_settings import COT_MODE
+from example_catalog import PERSONAL_QR
+from example_qr_margin import (LOW_VOLTAGE_EXAMPLES, QR_REFERENCE_EXAMPLE,
+                               isolated_low_voltage_with_margin, personal_qr_with_margin)
 
 LIB = ROOT/'resources/components'
 PASSIVES = json.loads((LIB/'example_passive_parts.json').read_text('utf-8'))['parts']
@@ -57,13 +61,13 @@ def cap_choice(value, voltage):
     return 'EEUFR1H101'
 
 
-def capacitor_bank(values, voltage, prefix, refs, selections):
+def capacitor_bank(values, voltage, prefix, refs, selections, *, primary_key=None):
     result = []
     for old in values:
         # 440µF is an aggregate, not a fictitious single 440µF catalog part.
         chunks = [220e-6,220e-6] if math.isclose(old['C'],440e-6,rel_tol=1e-8) else [old['C']]
         for nominal in chunks:
-            key = cap_choice(nominal, voltage)
+            key = primary_key if not result and primary_key else cap_choice(nominal, voltage)
             part = PASSIVES[key]
             result.append(copy.deepcopy(part['calculation']))
             ref = prefix(len(result))
@@ -82,6 +86,10 @@ def legacy_bank(config, caps, side='output'):
 
 
 def apply_switching(raw, name):
+    if name == '24W_BUCK_CAP_IMPEDANCE.json':
+        # The curated board's impedance curves are synthetic measurement data.
+        # Regenerating from a scalar catalog would destroy the intact example.
+        return copy.deepcopy(raw)
     p = load_spec(raw)
     cfg = copy.deepcopy(raw)
     meta, selected = {}, {}
@@ -123,7 +131,10 @@ def apply_switching(raw, name):
     input_bank = bank(p,'input')
     if name=='3_OUTPUT_CROSS_REGULATION.json' and len(input_bank)==2:
         input_bank = [input_bank[0],copy.deepcopy(input_bank[0]),input_bank[1]]
-    inp = capacitor_bank(input_bank,p.get('V_in_max',p['V_in']),lambda i:'C_IN'+str(i),meta,selected)
+    bulk_key = 'HHXF500ARA221MJH0G'
+    input_key = bulk_key if name in ('24W_BUCK_VM_TPS40200.json', '24W_BUCK_PCM_LTC3864.json') else None
+    inp = capacitor_bank(input_bank,p.get('V_in_max',p['V_in']),lambda i:'C_IN'+str(i),meta,selected,
+                         primary_key=input_key)
     legacy_bank(cfg,inp,'input')
     multi = bool(p.get('outputs') or psr)
     rails = p.get('outputs') or [p]
@@ -144,8 +155,9 @@ def apply_switching(raw, name):
         output_bank = bank(actual)
         if name in ('3_OUTPUT_COUPLED_FLYBACK.json','3_OUTPUT_CROSS_REGULATION.json') and i==3 and len(output_bank)==2:
             output_bank = [output_bank[0],copy.deepcopy(output_bank[0]),output_bank[1]]
+        output_key = bulk_key if name == '24W_BOOST_PCM_LM5022.json' else None
         caps = capacitor_bank(output_bank,abs(float(rail.get('V_out',p['V_out']))),
-            lambda j,i=i:output_ref(i,j,multi),meta,selected)
+            lambda j,i=i:output_ref(i,j,multi),meta,selected,primary_key=output_key)
         target = copy.deepcopy((raw.get('outputs') or [{}])[i-1] if p.get('outputs') else {})
         legacy_bank(target,caps)
         target['Vf_diode'] = SEMIS[dk]['calculator_parameters']['Vf_diode']
@@ -160,6 +172,8 @@ def apply_switching(raw, name):
         legacy_bank(cfg,newrails[int(p.get('feedback_output',1))-1]['output_capacitors'])
     if topo in ('BUCK','BOOST','BUCK-BOOST'):
         lk = 'XAL7070-223MEC' if math.isclose(p['L'],22e-6,rel_tol=1e-6) else 'XAL7070-473MEC'
+        if name in ('24W_BUCK_VM_TPS40200.json', '24W_BUCK_PCM_LTC3864.json', '24W_BOOST_PCM_LM5022.json'):
+            lk = 'XGL1010-473MED'
         induct = SUPPORT['parts'][lk]
         cfg.update(inductor_design_enabled=False, inductor_extra_loss=0., **induct['calculation'])
         cfg.setdefault('spice_config',{})['niso_inductor_dcr'] = cfg['inductor_dcr']
@@ -255,11 +269,23 @@ def apply_ldo(raw):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--write',action='store_true');args=parser.parse_args()
+    parser = argparse.ArgumentParser()
+    available = {path.name: path for path in (ROOT/'examples').glob('*.json')
+                 if path.name != PERSONAL_QR}
+    parser.add_argument('--example', choices=sorted(available), action='append', required=True,
+                        help='具体示例文件名，可重复指定')
+    parser.add_argument('--write', action='store_true')
+    args = parser.parse_args()
     manifest=[]
-    for path in sorted((ROOT/'examples').glob('*.json')):
+    for path in sorted(available[name] for name in set(args.example)):
         blob=path.read_bytes();raw=json.loads(blob.decode('utf-8-sig'));new=copy.deepcopy(raw)
-        if raw.get('schema_version')=='power.system-network/2':
+        if path.name == QR_REFERENCE_EXAMPLE:
+            new = personal_qr_with_margin(raw)
+        elif path.name in LOW_VOLTAGE_EXAMPLES:
+            new = isolated_low_voltage_with_margin(raw)
+        elif raw.get('topology') == 'LLC' or raw.get('control_mode') == COT_MODE:
+            parser.error(f'{path.name} 的 BOM 由该算例维护，历史批量选型不适用。')
+        elif raw.get('schema_version')=='power.system-network/2':
             for unit in new['units']:
                 unit['spec'] = apply_ldo(unit['spec']) if unit['spec'].get('topology')=='LDO' else apply_switching(unit['spec'],path.name)
         else:

@@ -3,12 +3,17 @@
    node_modules; never overwrites a release directory. Run from any directory. #>
 [CmdletBinding()]
 param([ValidateSet('web','desktop','all')][string]$Target='all',
-      [string]$ReleaseId='20261023', [string]$Python='', [switch]$SkipFrontend)
+      [string]$ReleaseId='20261023', [string]$Python='', [switch]$SkipFrontend,
+      [switch]$IncludePersonalQr)
 $ErrorActionPreference='Stop'
 $projectRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ($ReleaseId -notmatch '^[a-zA-Z0-9_-]+$') { throw 'ReleaseId must contain only letters, numbers, underscores or hyphens.' }
 if (-not $Python) { $Python=Join-Path $projectRoot '.venv-web/Scripts/python.exe' }
 $releaseRoot=Join-Path $projectRoot ('releases/Windows-x64/'+$ReleaseId)
+$personalQr=Join-Path $projectRoot 'examples/90W_QR_L6565_252_442V.json'
+if ($IncludePersonalQr -and -not (Test-Path -LiteralPath $personalQr -PathType Leaf)) {
+    throw 'Personal QR example is missing from the local project.'
+}
 function Run-Checked([string]$program,[string[]]$arguments) {
     & $program @arguments
     if ($LASTEXITCODE -ne 0) { throw "$program failed: $LASTEXITCODE" }
@@ -35,6 +40,11 @@ try {
         Copy-Item -LiteralPath (Join-Path $projectRoot ('packaging/'+$readme)) -Destination (Join-Path $folder 'README.txt')
         if ($part -eq 'web') {
             Copy-Item -LiteralPath (Join-Path $projectRoot 'packaging/StartWeb.cmd') -Destination (Join-Path $folder 'StartWeb.cmd')
+        }
+        if ($IncludePersonalQr) {
+            $localExamples=Join-Path $folder 'user_data/examples'
+            New-Item -ItemType Directory -Path $localExamples -Force | Out-Null
+            Copy-Item -LiteralPath $personalQr -Destination $localExamples
         }
         & (Join-Path $PSScriptRoot 'release_manifest.ps1') -Folder $folder -Write -Target $part -ReleaseId $ReleaseId
         Write-Output "Built complete portable folder: $folder"

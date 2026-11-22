@@ -7,7 +7,8 @@ from magnetic_report_view import as_text
 from scrollable_results import ScrollableResults
 
 COLORS = dict(success='#12724c', danger='#b42318', warning='#956000')
-STATES = dict(success='通过', danger='超限', warning='待复核')
+STATES = dict(success='满足', danger='超限', warning='待复核')
+STATE_ORDER = dict(danger=0, warning=1, success=2)
 
 
 class MagneticReport(ttk.Frame):
@@ -17,7 +18,7 @@ class MagneticReport(ttk.Frame):
         self._wrapped = []
         heading = ttk.Frame(self, padding=(9, 6))
         heading.pack(fill='x')
-        ttk.Label(heading, text='磁件设计报告', font='TkHeadingFont').pack(side='left')
+        ttk.Label(heading, text='磁件设计结论', style='ResultConclusion.TLabel').pack(side='left')
         ttk.Button(heading, text='复制报告', command=self._copy).pack(side='right')
         self.scroll = ScrollableResults(self, background='#ffffff')
         self.scroll.pack(fill='both', expand=True)
@@ -41,12 +42,14 @@ class MagneticReport(ttk.Frame):
         summary = tk.Frame(self.scroll.content, background='#f3f6fa', padx=10, pady=8)
         summary.pack(fill='x', padx=5, pady=(2, 8))
         summary.columnconfigure(0, weight=1)
-        self._label(summary, view['summary'], color='#506277', row=0, column=0)
-        for i, c in enumerate(view['conclusions'], 1):
+        conclusions = sorted(view['conclusions'], key=lambda item: STATE_ORDER[item['state']])
+        for i, c in enumerate(conclusions):
             color = COLORS[c['state']]
             self._label(summary, f"{STATES[c['state']]} · {c['device']} · {c['title']}",
-                        color=color, bold=True, row=i*2-1, column=0, pady=(9, 2))
-            self._label(summary, c['detail'], color=color, bold=True, row=i*2, column=0)
+                        color=color, bold=True, row=i*2, column=0, pady=(0 if not i else 8, 2))
+            self._label(summary, c['detail'], color='#243649', row=i*2+1, column=0)
+        if not conclusions:
+            self._label(summary, view['summary'], color='#506277', row=0, column=0)
         for section in view['sections']:
             card = tk.Frame(self.scroll.content, background='#ffffff', padx=10, pady=8)
             card.pack(fill='x', padx=5, pady=(0, 7))

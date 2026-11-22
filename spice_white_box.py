@@ -122,6 +122,16 @@ def prepare(files, case):
     return devices
 
 
+def bom_reference(ref, multi_output):
+    """Resolve existing RAW/report labels to their physical BOM designator."""
+    if ref.startswith('D_OUT'):
+        return 'D_B'+(ref[5:] or '1') if multi_output else 'D_OUT'
+    renamed = {'C_ACTIVE': 'C_CL1', 'QA': 'Q2', 'D_INPUT_BLOCK': 'D_IN'}
+    if not multi_output:
+        renamed.update(D_O1='D1', D_F1='D2')
+    return renamed.get(ref, ref)
+
+
 def _attach_voltage_ratings(devices, parameters, multi_output):
     from component_management import normalize_management, rule_for
 
@@ -130,13 +140,7 @@ def _attach_voltage_ratings(devices, parameters, multi_output):
         kind = probe['kind']
         if kind not in ('capacitor','diode','mos'):
             continue
-        ref = probe['ref']
-        bom_ref = 'C_CL1' if ref=='C_ACTIVE' else ref
-        if kind=='diode':
-            if ref.startswith('D_OUT'):
-                bom_ref = 'D_B'+ref[5:] if multi_output else 'D_OUT'
-            elif not multi_output:
-                bom_ref = {'D_O1':'D1','D_F1':'D2'}.get(ref,ref)
+        bom_ref = bom_reference(probe['ref'], multi_output)
         item = config['items'].get(bom_ref,{})
         rating = item.get('voltage_V')
         if not rating:

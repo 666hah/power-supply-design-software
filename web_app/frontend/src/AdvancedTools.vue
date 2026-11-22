@@ -254,7 +254,7 @@ function exportComparison() {
       <header class="at-heading"><div><h3>{{ cot ? 'COT 电压外环自动整定' : 'Venable K 因子自动整定' }}</h3><p>按 {{ caseId }} 工况计算候选参数，确认后写入工程。</p></div><span class="at-badge">{{ cot ? '频率 PI' : psr ? 'MP6005 物理 COMP 网络' : 'SSR 外环' }}</span></header>
       <div class="at-grid">
         <AdvancedNumber v-model="fc" label="目标穿越频率 fc" unit="kHz" :scale="1000" :min="0" />
-        <AdvancedNumber v-model="pm" label="目标相位裕度 PM" unit="°" :min="1" :max="cot ? 179 : 89" />
+        <AdvancedNumber v-model="pm" label="整定目标相位裕度 PM" unit="°" :min="1" :max="cot ? 179 : 89" />
         <label v-if="!cot" class="at-field"><span>补偿器类型</span><select v-model="controller"><option value="auto">自动（沿用原版控制模式规则）</option><option value="type2">二型补偿</option><option value="type3">三型补偿</option></select></label>
       </div>
       <div class="at-actions"><button class="primary" :disabled="!ready" @click="tune">{{ cot ? '计算候选 PI 增益' : '计算候选补偿参数' }}</button></div>

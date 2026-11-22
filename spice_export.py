@@ -202,6 +202,9 @@ def project_files(parameters, *, bundle=None):
 
 
 def _project_files(parameters, *, bundle=None):
+    if parameters.get('topology') == 'LLC':
+        from llc_spice_comparison import export_files
+        return export_files(parameters,bundle)
     from app_resources import resource_path
     from isolated_outputs import output_specs, RAIL_KEYS
     from winding_coupling import resolve_winding_geometry, resolve_winding_model

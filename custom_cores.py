@@ -52,7 +52,7 @@ def validate_selected_cores(p):
     from inductor_selection import purchased
     if purchased(p):
         return
-    owner='_fixed_transformer' if p.get('topology') in ('FLYBACK','QR-FLYBACK','ACF-FORWARD') else '_fixed_inductor'
+    owner='_fixed_transformer' if p.get('topology') in ('FLYBACK','QR-FLYBACK','ACF-FORWARD','LLC') else '_fixed_inductor'
     if is_custom(p.get('core_choice')) and not (p.get(owner) or {}).get('core_geometry'):
         validate_geometry(p.get('custom_core',{}))
     if p.get('topology')=='ACF-FORWARD' and not p.get('outputs') and is_custom(p.get('core_choice_L')) and not (p.get('_fixed_inductor') or {}).get('core_geometry'):

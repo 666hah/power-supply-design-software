@@ -1,5 +1,8 @@
 /** Review catalog ported from design_checks.py; no check implies certification. */
 import { type Spec, rails, bank } from "./spec";
+
+const MIN_PHASE_MARGIN_DEG = 45;
+
 export function reviewCatalog(source: Spec, res: Spec, evaluation: Spec) {
   const p = { ...source, ...rails(source)[(source.feedback_output || 1) - 1] },
     op = res.op,
@@ -178,13 +181,13 @@ export function reviewCatalog(source: Spec, res: Spec, evaluation: Spec) {
   else {
     add(
       "phase_margin",
-      "全部穿越最小相位裕度",
+      "全部穿越的最小相位裕度",
       loop.min_pm,
-      (p.pm_target ?? 60) - 1,
-      ">=",
+      MIN_PHASE_MARGIN_DEG,
+      ">",
       "deg",
       undefined,
-      "目标容差1°。",
+      "按验收线判定。环路页的整定目标可单独设置。",
     );
     const highest = Math.max(...loop.all_crosses.map((c: Spec) => c.fc)),
       limit =
@@ -424,23 +427,11 @@ export function reviewCatalog(source: Spec, res: Spec, evaluation: Spec) {
       margin: r.limit === null || r.value === null ? null : r.limit - r.value,
       pass_: r.state === "pass",
     });
-  // Keep the existing native UI identifiers while exposing the full desktop catalog.
-  if (loop)
-    rows.push({
-      id: "phase-margin",
-      name: "主反馈相位裕度",
-      value: loop.pm,
-      limit: p.pm_target,
-      comparison: ">=",
-      unit: "°",
-      state:
-        loop.pm === null
-          ? "undefined"
-          : loop.pm >= p.pm_target
-            ? "pass"
-            : "review",
-      note: "所选穿越；全部穿越检查见上方。",
-    });
+  // Preserve the selected-crossover reading for consumers of the native snapshot.
+  if (loop && Number.isFinite(loop.pm))
+    add("phase-margin", "所选穿越的相位裕度", loop.pm, null, "", "°", "info",
+      "验收取全部穿越的最小相位裕度。",
+    );
   rows.push({
     id: "closed-loop-poles",
     name: "闭环极点验证",

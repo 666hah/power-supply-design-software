@@ -91,24 +91,24 @@
       },
       "C_IN1": {
         "manufacturer": "Panasonic",
-        "model": "EEUFR1H331L",
-        "package": "Radial Ø10×25 mm; pitch 5 mm",
-        "conditions": "额定纹波：100 kHz / +105°C；阻抗上限：100 kHz / +20°C；容量±20%。",
-        "note": "软件ESR采用原厂100 kHz阻抗上限作为电阻代理，非独立测得ESR；5 nH ESL为工程占位，原厂未给该型号值。；额定纹波仅对应所列频温条件，跨条件需修正；ESL及阻抗代理见参数来源。；资料：https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1H331L https://industrial.panasonic.com/cdbs/www-data/pdf/RDF0000/ABA0000C1259.pdf",
+        "model": "EEUFR1J331",
+        "package": "径向 Ø12.5 × 20 mm，脚距 5 mm",
+        "conditions": "330 µF±20%；额定纹波 1.582 A RMS@100 kHz；阻抗上限 33 mΩ@100 kHz。",
+        "note": "计算以阻抗上限代理 ESR，5 nH ESL 为工程估算。与同组低 ESR 混合电容分担纹波。 https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1J331",
         "capacitor_type": "electrolytic",
-        "voltage_V": 50.0,
-        "ripple_A": 2.15,
+        "voltage_V": 63,
+        "ripple_A": 1.582,
         "power_W": null
       },
       "C_IN2": {
         "manufacturer": "Panasonic",
-        "model": "EEUFR1H101",
-        "package": "Radial Ø8×11.5 mm; pitch 3.5 mm",
-        "conditions": "额定纹波：100 kHz / +105°C；阻抗上限：100 kHz / +20°C；容量±20%。",
-        "note": "软件ESR采用原厂100 kHz阻抗上限作为电阻代理，非独立测得ESR；5 nH ESL为工程占位，原厂未给该型号值。；额定纹波仅对应所列频温条件，跨条件需修正；ESL及阻抗代理见参数来源。；资料：https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1H101 https://industrial.panasonic.com/cdbs/www-data/pdf/RDF0000/ABA0000C1259.pdf",
+        "model": "EEH-AZS1J101B",
+        "package": "径向 Ø10 × 11.7 mm，脚距 5 mm",
+        "conditions": "100 µF±20%；额定纹波 3.00 A RMS@100 kHz/125°C，2.10 A RMS@100 kHz/135°C；100 kHz ESR 上限 19 mΩ。",
+        "note": "混合聚合物铝电解电容，按铝电解降额规则；5 nH ESL 为工程估算。 https://na.industrial.panasonic.com/products/capacitors/aluminum-electrolytic-capacitors/lineup/conductive-polymer-hybrid-aluminum-electrolytic/series/135824/model/135931",
         "capacitor_type": "electrolytic",
-        "voltage_V": 50.0,
-        "ripple_A": 0.87,
+        "voltage_V": 63,
+        "ripple_A": 3,
         "power_W": null
       },
       "C_O1A": {
@@ -522,10 +522,10 @@
   "Rth_transformer": 100.0,
   "temp_rise_limit": 40.0,
   "Cin1": 0.00033,
-  "Rcin1": 0.022,
+  "Rcin1": 0.033,
   "ESLin1": 5e-09,
-  "Cin2": 9.999999999999999e-05,
-  "Rcin2": 0.061,
+  "Cin2": 0.0001,
+  "Rcin2": 0.019,
   "ESLin2": 5e-09,
   "cin2_enable": true,
   "C_out2": 1e-05,
@@ -822,12 +822,12 @@
   "input_capacitors": [
     {
       "C": 0.00033,
-      "ESR": 0.022,
+      "ESR": 0.033,
       "ESL": 5e-09
     },
     {
-      "C": 9.999999999999999e-05,
-      "ESR": 0.061,
+      "C": 0.0001,
+      "ESR": 0.019,
       "ESL": 5e-09
     }
   ],
@@ -861,11 +861,11 @@
       },
       "C_IN1": {
         "catalog": "passive",
-        "key": "EEUFR1H331L"
+        "key": "EEUFR1J331"
       },
       "C_IN2": {
         "catalog": "passive",
-        "key": "EEUFR1H101"
+        "key": "EEH-AZS1J101B"
       },
       "C_O1A": {
         "catalog": "passive",

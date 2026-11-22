@@ -134,7 +134,7 @@ def open_preview(app):
         else:
             app._transformer_preview = PreviewSession(app, scene)
         if hasattr(app, 'status_var'):
-            app.status_var.set('已打开独立 3D 预览；绕制参数修改后自动刷新，可继续操作设计窗口。')
+            app.status_var.set('已打开三维预览。重新计算后会更新绕组结构。')
     except (OSError, ValueError, tk.TclError) as exc:
         messagebox.showerror('3D 结构预览', str(exc), parent=app.root)
 

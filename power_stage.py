@@ -21,8 +21,9 @@ TOPO_BUCKBOOST = 'BUCK-BOOST'
 TOPO_FLYBACK = 'FLYBACK'
 TOPO_QRFLYBACK = 'QR-FLYBACK'
 TOPO_ACFFORWARD = 'ACF-FORWARD'
+from llc_settings import TOPOLOGY as TOPO_LLC, DEFAULTS as LLC_DEFAULTS
 TOPOLOGIES = [TOPO_BUCK, TOPO_BOOST, TOPO_BUCKBOOST, TOPO_FLYBACK, TOPO_QRFLYBACK,
-              TOPO_ACFFORWARD]
+              TOPO_ACFFORWARD, TOPO_LLC]
 
 # Default parameters (SI).  The GUI reads this table to build entry widgets,
 # so it is the single source of truth for parameter names / defaults.
@@ -122,6 +123,7 @@ DEFAULT_PARAMS.update(outputs=[],feedback_mode='SSR',feedback_output=1,
 DEFAULT_PARAMS['engineering_acceptance'] = {}
 from cot_settings import DEFAULTS as COT_DEFAULTS
 DEFAULT_PARAMS.update(COT_DEFAULTS)
+DEFAULT_PARAMS.update(LLC_DEFAULTS)
 
 
 # ----------------------------------------------------------------------------
@@ -135,7 +137,7 @@ def validate_design_inputs(p):
     validate_inductor(p)
     from custom_cores import validate_selected_cores
     validate_selected_cores(p)
-    if p['topology'] in (TOPO_FLYBACK, TOPO_QRFLYBACK, TOPO_ACFFORWARD):
+    if p['topology'] in (TOPO_FLYBACK, TOPO_QRFLYBACK, TOPO_ACFFORWARD, TOPO_LLC):
         from transformer_gap import validate_inputs
         validate_inputs(p)
         from parallel_wires import count
@@ -177,6 +179,9 @@ def validate_design_inputs(p):
     eta = float(p.get('eta_guess', DEFAULT_PARAMS['eta_guess']))
     if not np.isfinite(eta) or not 0 < eta <= 1:
         raise ValueError('预设效率 eta_guess 必须满足 0 < η ≤ 1（例如 0.93）')
+    if p['topology'] == TOPO_LLC:
+        from llc_settings import validate
+        validate(p)
 
 
 def _with_efficiency(p, solver):
@@ -229,6 +234,9 @@ def _compute_operating_point(p):
     from parasitics import effective_parameters
     p = effective_parameters(p)
     validate_design_inputs(p)
+    if p['topology'] == TOPO_LLC:
+        from llc_design import operating_point
+        return operating_point(p)
     from cot_settings import active as cot_active, COT_MODE
     if cot_active(p):
         from cot_buck import compute_operating_point as compute_cot

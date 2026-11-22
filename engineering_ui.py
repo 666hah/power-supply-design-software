@@ -1,26 +1,10 @@
-"""Engineering review UI. Background workflows never access Tk widgets."""
+"""Desktop parameter navigation, hardware tolerance and acceptance."""
 import copy
-import json
-import math
 import queue
 import threading
 import tkinter as tk
 import weakref
-from tkinter import ttk, filedialog, messagebox
-
-from design_checks import STATE_LABELS
-
-
-def number(value, unit=''):
-    if value is None:
-        return '未定义'
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return '启用' if value else '停用'
-    if not math.isfinite(value):
-        return '无有限值'
-    return f'{value:.5g}'+(' '+unit if unit else '')
+from tkinter import ttk
 
 
 class Tooltip:
@@ -114,13 +98,13 @@ class Tooltip:
 
 class EngineeringUI:
     def _init_engineering_state(self):
-        self._corner_result = self._comparison = self._baseline = None
         self._work_queue = queue.Queue()
         self._work_cancel = threading.Event()
         self._work_running = False
         self._work_poll = None
 
     def _build_param_filters(self, parent):
+        self.left_canvas.bind('<Map>', self._schedule_parameter_scrollregion, add='+')
         frame = ttk.Frame(parent, style='WorkspaceToolbar.TFrame', padding=(4, 3, 4, 4))
         frame.pack(fill='x')
         frame.columnconfigure(0, weight=1)
@@ -137,19 +121,32 @@ class EngineeringUI:
             row=1, column=1, sticky='ew')
         ttk.Label(frame, text='搜索名称或符号', style='WorkspaceHint.TLabel').grid(
             row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
-        self.param_search.trace_add('write', lambda *_: self._filter_params())
+        self.param_search.trace_add('write', lambda *_: self._filter_parameter_panel(refresh_rows=False))
 
     def _expand_params(self):
+        self._cancel_parameter_scroll()
+        folded = tuple(self._folded_sections)
         self._folded_sections.clear()
-        self.param_search.set('')
-        self._filter_params()
+        if self.param_search.get():
+            self.param_search.set('')
+        elif folded:
+            self._apply_parameter_folds(folded)
 
     def _fold_section(self, frame):
+        self._cancel_parameter_scroll()
         if frame in self._folded_sections:
             self._folded_sections.remove(frame)
         else:
             self._folded_sections.add(frame)
-        self._filter_params()
+        self._apply_parameter_folds((frame,))
+
+    def _apply_parameter_folds(self, frames):
+        Tooltip.hide_all(self.root)
+        if self.param_search.get().strip():
+            return
+        for frame in frames:
+            self._apply_parameter_section(frame)
+        self._schedule_parameter_scrollregion()
 
     def _filter_params(self):
         if hasattr(self, 'param_search'):
@@ -180,9 +177,55 @@ class EngineeringUI:
             height=max(self.left_inner.winfo_reqheight(),canvas.winfo_height())
             # A scroll region shorter than the viewport lets Tk retain a
             # negative origin after folding: the inputs then sit below a gap.
-            canvas.configure(scrollregion=(0,0,content_width,height))
-            if self.left_inner.winfo_reqheight()<=canvas.winfo_height() or canvas.canvasy(0)<0:
+            region = (0, 0, content_width, height)
+            if canvas.cget('scrollregion') != f'0 0 {content_width} {height}':
+                canvas.configure(scrollregion=region)
+            if canvas.canvasy(0) != 0 and (height == canvas.winfo_height() or canvas.canvasy(0) < 0):
                 canvas.yview_moveto(0)
+            requested = getattr(self, '_parameter_scroll_target', None)
+            anchor = getattr(self, '_parameter_scroll_anchor', None)
+            target = requested or anchor
+            view_height = canvas.winfo_height()
+            if target is not None and view_height > 4:
+                if target.winfo_ismapped():
+                    origin = self.left_inner.winfo_rooty()
+                    top = target.winfo_rooty() - origin
+                    if target is anchor:
+                        bottom = top + target.winfo_height()
+                        # Center the related rows that fit around the primary
+                        # input. Far-away controls should not pull it offscreen.
+                        for widget in self._parameter_scroll_context:
+                            if widget.winfo_ismapped():
+                                row_top = widget.winfo_rooty() - origin
+                                start = min(top, row_top)
+                                end = max(bottom, row_top + widget.winfo_height())
+                                if end - start <= view_height:
+                                    top, bottom = start, end
+                        offset = (top + bottom - view_height) / 2
+                    else:
+                        offset = top - 4
+                    offset = max(0, min(height - view_height, offset))
+                    if abs(canvas.canvasy(0) - offset) > 1:
+                        canvas.yview_moveto(offset / height)
+                self._parameter_scroll_target = None
+
+    def _cancel_parameter_scroll(self):
+        """Release a located field's anchor when the user navigates the pane."""
+        self._parameter_scroll_target = None
+        self._set_parameter_scroll_anchor(None)
+
+    def _set_parameter_scroll_anchor(self, widget, context=()):
+        self._parameter_scroll_context = context
+        previous = getattr(self, '_parameter_scroll_anchor', None)
+        if previous is widget:
+            return
+        if previous is not None and previous.winfo_exists():
+            previous.unbind('<Map>', self._parameter_scroll_map_binding)
+        self._parameter_scroll_anchor = widget
+        # The canvas can map before a nested field, with no subsequent
+        # geometry change. Also request alignment when the actual field maps.
+        self._parameter_scroll_map_binding = (widget.bind('<Map>', self._schedule_parameter_scrollregion, add='+')
+                                              if widget is not None else None)
 
     def _schedule_parameter_scrollregion(self,_event=None):
         if not getattr(self,'_closing',False) and not getattr(self,'_param_scroll_syncing',False) and self._param_layout_job is None:
@@ -204,100 +247,31 @@ class EngineeringUI:
             tree.tag_configure(tag,foreground=color)
         return tree
 
-    def _build_review_tab(self):
-        nb = ttk.Notebook(self.tab_review); nb.pack(fill='both',expand=True,padx=4,pady=4)
-        self.review_notebook = nb
-        acceptance_frame = ttk.Frame(nb)
-        nb.add(acceptance_frame, text='工程验证与验收')
-        from engineering_acceptance_ui import AcceptancePanel
-        self.acceptance_panel = AcceptancePanel(acceptance_frame, get_spec=self._current_spec,
-            on_apply=lambda data: self._acceptance_apply(data),
-            on_refresh=lambda: self._acceptance_refresh_endpoints(),
-            on_import_evidence=lambda: self._acceptance_import_evidence(),
-            get_range_result=lambda: self._acceptance_get_range_result(),
-            get_joint_record=lambda: self._acceptance_get_joint_record(),
-            get_spice_evidence=lambda: self._acceptance_get_spice_evidence())
-        self.acceptance_panel.pack(fill='both', expand=True)
-        check_frame, corner_frame, compare_frame = [ttk.Frame(nb) for _ in range(3)]
-        for f,label in [(check_frame,'统一设计检查'),(corner_frame,'固定硬件角点'),(compare_frame,'方案 A / B 对比')]:
-            nb.add(f,text=label)
+    def _build_tolerance_tab(self):
         from tolerance_ui import TolerancePanel
-        self._tolerance_panel = TolerancePanel(nb, get_spec=self._current_spec, start=self._run_tolerances,
-                                              cancel=self._work_cancel.set, make_tree=self._tree)
-        nb.insert(3, self._tolerance_panel, text='最坏工况与容差')
-        self.review_summary = tk.StringVar(value='等待首轮计算…')
-        ttk.Label(check_frame,textvariable=self.review_summary,wraplength=1100,
-                  padding=8,style='Margin.TLabel').pack(fill='x')
-        self.review_tree = self._tree(check_frame,('name','actual','limit','state'),
-                                     ('检查项','计算值','阈值 / 建议','结论'),[230,170,210,90])
-        self.review_note = tk.StringVar(value='选择检查项查看依据。满足仅表示模型内满足阈值。')
-        ttk.Label(check_frame,textvariable=self.review_note,wraplength=1100,padding=8).pack(fill='x')
-        self.review_tree.bind('<<TreeviewSelect>>',self._review_selected)
-        controls = ttk.Frame(corner_frame,padding=6); controls.pack(fill='x')
-        self.corner_lo = tk.DoubleVar(value=30); self.corner_hi = tk.DoubleVar(value=30)
-        self.corner_lo.trace_add('write', lambda *_: self._invalidate_workflows())
-        self.corner_hi.trace_add('write', lambda *_: self._invalidate_workflows())
-        for label,var in [('输入下限 / V',self.corner_lo),('输入上限 / V',self.corner_hi)]:
-            ttk.Label(controls,text=label).pack(side='left',padx=4)
-            ttk.Entry(controls,textvariable=var,width=8,state='readonly').pack(side='left')
-        self.corner_button = ttk.Button(controls,text='分析输入端点角点',command=self._run_corners_ui)
-        self.corner_button.pack(side='left',padx=8)
-        ttk.Button(controls,text='取消',command=self._work_cancel.set).pack(side='left')
-        ttk.Button(controls,text='使用需求输入范围',command=self._reset_corner_range).pack(side='left',padx=8)
-        self.corner_status = tk.StringVar(value='输入范围与需求页一致；固定 Vin min 的磁芯、匝数、线径与补偿参数，扫描两端输入 × 10–100% 负载。')
-        ttk.Label(corner_frame,textvariable=self.corner_status,wraplength=1100,padding=6).pack(fill='x')
-        self.corner_progress = ttk.Progressbar(corner_frame,maximum=10); self.corner_progress.pack(fill='x',padx=6)
-        self.corner_tree = self._tree(corner_frame,
-            ('id','vin','load','mode','eta','vds','ripple','dt','pm','state'),
-            ('角点','Vin / V','负载','模式','效率 / %','Vds / V','纹波 / mV','温升 / K','最小 PM / °','检查'),
-            [75,90,75,75,100,100,110,100,110,160])
-        self.corner_worst = tk.StringVar(value='最坏角点尚未计算；不自动整定、不修改当前参数。')
-        ttk.Label(corner_frame,textvariable=self.corner_worst,wraplength=1100,padding=6).pack(fill='x')
-        self.corner_tree.bind('<<TreeviewSelect>>',self._corner_selected)
-        controls = ttk.Frame(compare_frame,padding=6); controls.pack(fill='x')
-        ttk.Button(controls,text='锁定当前方案为 A',command=self._capture_baseline).pack(side='left',padx=4)
-        ttk.Button(controls,text='当前设计作为 B',command=lambda:self._compare_ui(False)).pack(side='left',padx=4)
-        ttk.Button(controls,text='读取配置作为 B',command=lambda:self._compare_ui(True)).pack(side='left',padx=4)
-        self.compare_status = tk.StringVar(value='先锁定 A，再修改参数或读取 B 配置。不会把 B 配置写回当前设计。')
-        ttk.Label(compare_frame,textvariable=self.compare_status,wraplength=1100,padding=6).pack(fill='x')
-        self.compare_tree = self._tree(compare_frame,('name','a','b','delta'),
-                                      ('指标 / 输入差异','方案 A','方案 B','B − A'),[240,180,180,160])
-        from matplotlib.figure import Figure
-        from resource_canvas import EfficientFigureCanvasTkAgg as FigureCanvasTkAgg
-        self.fig_compare = Figure(figsize=(8,2.8),layout='constrained')
-        self.canvas_compare = FigureCanvasTkAgg(self.fig_compare,master=compare_frame)
-        self.canvas_compare.get_tk_widget().pack(fill='both',expand=True)
 
-    def _clear_review(self, error):
-        if hasattr(self,'review_tree'):
-            self.review_tree.delete(*self.review_tree.get_children())
-            self.review_summary.set('当前输入未成功计算：'+error)
-        if hasattr(self, 'acceptance_panel'):
-            self.acceptance_panel.refresh()
+        self._tolerance_panel = TolerancePanel(
+            self.tab_tolerance, get_spec=self._tolerance_spec, start=self._run_tolerances,
+            cancel=self._work_cancel.set, make_tree=self._tree,
+        )
+        self._tolerance_panel.pack(fill='both', expand=True)
 
-    def _update_review(self):
-        if hasattr(self, 'acceptance_panel'):
-            self.acceptance_panel.refresh()
-        if not self._snapshot_valid or not self._last or not hasattr(self,'review_tree'):
-            return
-        checks = self._last['checks']
-        self.review_tree.delete(*self.review_tree.get_children())
-        for c in checks:
-            self.review_tree.insert('', 'end', iid=c['id'], values=(c['name'],number(c['value'],c['unit']),
-                c['comparison']+' '+number(c['limit'],c['unit']) if c['limit'] is not None else '—',
-                STATE_LABELS[c['state']]), tags=(c['state'],))
-        failed = sum(c['state']=='review' for c in checks)
-        undefined = sum(c['state']=='undefined' for c in checks)
-        p = self._last.get('calculation_params', self._last['p'])
-        label = 'Vinmax' if p.get('input_voltage_case') == 'max' else 'Vinmin'
-        self.review_summary.set(f'{label} = {p["V_in"]:.6g} V · 同一计算快照 · {len(checks)} 项核查 · {failed} 项需复核 · {undefined} 项未计算。模型内通过 ≠ 硬件认证。')
+    def _build_review_tab(self):
+        from engineering_acceptance_ui import AcceptancePanel
 
-    def _review_selected(self, _event):
-        ids = self.review_tree.selection()
-        if ids and self._last:
-            c = next((c for c in self._last['checks'] if c['id']==ids[0]),None)
-            if c:
-                self.review_note.set(c['name']+'：'+(c['note'] or '按当前输入与统一检查阈值计算。'))
+        self.acceptance_panel = AcceptancePanel(
+            self.tab_review, get_spec=self._current_spec,
+            on_apply=self._acceptance_apply,
+            on_refresh=self._acceptance_refresh_endpoints,
+            on_import_evidence=self._acceptance_import_evidence,
+            get_range_result=self._acceptance_get_range_result,
+            get_joint_record=self._acceptance_get_joint_record,
+            get_spice_evidence=self._acceptance_get_spice_evidence,
+        )
+        self.acceptance_panel.pack(fill='both', expand=True)
+
+    def _refresh_acceptance(self):
+        self.acceptance_panel.refresh()
 
     def _current_spec(self):
         p = self.get_params()
@@ -308,249 +282,76 @@ class EngineeringUI:
                 p['winding_config'] = copy.deepcopy(winding)
         return p
 
-    def _invalidate_workflows(self):
-        # A is deliberately frozen; corners/current-B are invalidated by edits.
-        try:
-            current = self._current_spec()
-            scan_range = (self.corner_lo.get(), self.corner_hi.get())
-        except Exception:
-            current, scan_range = None, None
-        if hasattr(self, '_tolerance_panel'):
-            self._tolerance_panel.invalidate(current)
-        if self._corner_result is not None and (
-                self._corner_result['base_spec'] != current or tuple(self._corner_result['v_in']) != scan_range):
-            self.corner_status.set('当前输入已变化；上次角点结果已失效，请重新分析。')
-            self._corner_result = None
-            self.corner_tree.delete(*self.corner_tree.get_children())
-            self.corner_worst.set('结果已失效。')
-        if self._comparison is not None and self._comparison['context_spec'] != current:
-            self.compare_status.set('A 仍已锁定；当前 B 输入已变化，请重新比较。')
-            self._comparison = None
-            self.compare_tree.delete(*self.compare_tree.get_children())
-            self.fig_compare.clear(); self.canvas_compare.draw_idle()
-
-    def _reset_corner_range(self):
-        try:
-            self._sync_corner_input_range()
-            self._corner_result = None
-            self.corner_tree.delete(*self.corner_tree.get_children())
-            self.corner_status.set('已使用需求页输入范围；请重新分析。')
-        except Exception as exc:
-            messagebox.showerror('角点范围',str(exc))
-
-    def _sync_corner_input_range(self):
-        """The demand range is the single source of review endpoint voltages."""
-        if not hasattr(self, 'corner_lo'):
+    def _invalidate_tolerance_result(self):
+        if self._tolerance_panel.fingerprint is None:
             return
         try:
-            vin = self.get_param('V_in')
-            lo = self.get_param('V_in_min') if 'V_in_min' in self.params else vin
-            hi = self.get_param('V_in_max') if 'V_in_max' in self.params else vin
-            if not (math.isfinite(lo) and math.isfinite(hi) and 0 < lo <= hi):
-                return
-            for var, value in ((self.corner_lo, lo), (self.corner_hi, hi)):
-                if var.get() != value:
-                    var.set(value)
-            if hasattr(self, 'corner_button'):
-                self.corner_button.configure(text=f'分析 {5 if lo == hi else 10} 个角点')
-        except (KeyError, ValueError, tk.TclError):
-            pass
+            current = self._tolerance_spec()
+        except (ValueError, TypeError, KeyError, tk.TclError):
+            current = None
+        self._tolerance_panel.invalidate(current)
 
-    def _start_work(self, kind, spec, fn, callback):
-        if self._work_running:
-            messagebox.showinfo('分析任务','已有分析正在运行，请等待完成或取消。'); return
-        self._work_running = True
-        self._work_cancel.clear()
-        spec = copy.deepcopy(spec)
-        self.corner_button.configure(state='disabled')
-        def worker():
-            try:
-                result = fn()
-                self._work_queue.put(('done',result))
-            except Exception as exc:
-                self._work_queue.put(('error',str(exc)))
-        threading.Thread(target=worker,name='engineering-analysis',daemon=True).start()
-        def poll():
-            self._work_poll = None
-            if self._closing:
-                return
-            while not self._work_queue.empty():
-                state,data = self._work_queue.get_nowait()
-                if state=='progress':
-                    done,total,label = data
-                    if kind == 'tolerances':
-                        self._tolerance_panel.progress(done, total, label)
-                    else:
-                        self.corner_progress.configure(maximum=total,value=done)
-                        self.corner_status.set(f'正在分析 {label} · {done}/{total}，界面可继续操作。')
-                    continue
-                self._work_running = False
-                self.corner_button.configure(state='normal')
-                if kind == 'tolerances':
-                    try:
-                        current = self._current_spec()
-                    except Exception:
-                        current = None
-                    self._tolerance_panel.invalidate(current)
-                    self._tolerance_panel.finished(result=data if state == 'done' else None,
-                                                   error=data if state == 'error' else None,
-                                                   cancelled=self._work_cancel.is_set())
-                    return
-                if state=='done' and kind=='corners' and self._work_cancel.is_set():
-                    self.corner_status.set('角点分析已取消；不保留不完整结果。'); return
-                if state=='error':
-                    self.corner_status.set(data) if kind=='corners' else self.compare_status.set(data)
-                    if not self._work_cancel.is_set(): messagebox.showerror('工程分析',data)
-                    return
-                try:
-                    unchanged = self._current_spec()==spec
-                except Exception:
-                    unchanged = False
-                if not unchanged:
-                    self.corner_status.set('计算期间输入已变化，结果未应用，请重新分析。') if kind=='corners' else self.compare_status.set('计算期间输入已变化，结果未应用。')
-                    return
-                callback(data); return
-            self._work_poll = self.root.after(80,poll)
-        self._work_poll = self.root.after(80,poll)
+    def _tolerance_spec(self):
+        return dict(self._current_spec(), __comp=self._comp_state())
 
-    def _run_tolerances(self, spec, variables, settings):
+    def _run_tolerances(self, spec, variables, settings, *, boundary_run=None):
         if self._work_running:
-            messagebox.showinfo('最坏工况校核', '已有工程分析正在运行。')
             return
         from time import monotonic
-        from tolerance_analysis import analyze
+        from tolerance_analysis import analyze, resume_monte_carlo
 
-        spec = copy.deepcopy(spec)
-        self._tolerance_panel.started(spec)
-        queue, cancelled = self._work_queue, self._work_cancel.is_set
+        spec, variables, settings = copy.deepcopy((spec, variables, settings))
+        self._tolerance_panel.started(spec, sampling=boundary_run is not None)
+        self._work_cancel.clear()
+        self._work_running = True
+        messages, cancelled = self._work_queue, self._work_cancel.is_set
 
-        def calculate():
+        def worker():
             last_update = -1.
 
             def report(done, total, label):
                 nonlocal last_update
                 now = monotonic()
                 if done in (0, total) or now - last_update >= .08:
-                    queue.put(('progress', (done, total, label)))
+                    messages.put(('progress', (done, total, label)))
                     last_update = now
 
-            return analyze(spec, variables, **settings, progress=report, cancelled=cancelled)
+            try:
+                if boundary_run is None:
+                    result, plan = analyze(spec, variables, **settings, retain_plan=True,
+                                           progress=report, cancelled=cancelled)
+                    messages.put(('boundary', (result, plan)))
+                else:
+                    result = resume_monte_carlo(spec, *boundary_run, **settings,
+                                                progress=report, cancelled=cancelled)
+                    messages.put(('done', result))
+            except Exception as exc:
+                messages.put(('error', str(exc)))
 
-        self._start_work('tolerances', spec, calculate, None)
+        threading.Thread(target=worker, name='hardware-tolerance-analysis', daemon=True).start()
 
-    def _run_corners_ui(self):
-        try:
-            if self._work_running:
-                messagebox.showinfo('分析任务','请等待当前分析完成。'); return
-            from analysis_workflows import corners
-            self._sync_corner_input_range()
-            p = self._current_spec(); lo,hi = self.corner_lo.get(),self.corner_hi.get()
-            self._corner_result = None; self.corner_tree.delete(*self.corner_tree.get_children())
-            self.corner_status.set('正在固定标称磁件并计算角点…')
-            self.corner_progress.configure(value=0)
-            self._start_work('corners',p,lambda:corners(p,lo,hi,progress=lambda *data:self._work_queue.put(('progress',data)),
-                            cancelled=self._work_cancel.is_set),self._show_corners)
-        except Exception as exc:
-            messagebox.showerror('角点分析',str(exc))
+        def poll():
+            self._work_poll = None
+            if self._closing:
+                return
+            while True:
+                try:
+                    state, data = messages.get_nowait()
+                except queue.Empty:
+                    break
+                if state == 'progress':
+                    self._tolerance_panel.progress(*data)
+                    continue
+                self._work_running = False
+                self._invalidate_tolerance_result()
+                result = data[0] if state == 'boundary' else data if state == 'done' else None
+                self._tolerance_panel.finished(
+                    result=result,
+                    boundary_run=data if state == 'boundary' else None,
+                    error=data if state == 'error' else None,
+                    cancelled=cancelled(),
+                )
+                return
+            self._work_poll = self.root.after(80, poll)
 
-    def _show_corners(self, result):
-        # Also reject a changed scan range, not just a changed power design.
-        if tuple(result['v_in'])!=(self.corner_lo.get(),self.corner_hi.get()):
-            self.corner_status.set('扫描范围已变化，请重新分析。'); return
-        self._corner_result = result
-        for c in result['corners']:
-            if c['skipped']:
-                vals = (c['id'],number(c['V_in']),f"{c['load_frac']*100:g}%",'无效','—','—','—','—','—',c['error'])
-            else:
-                vals = (c['id'],number(c['V_in']),f"{c['load_frac']*100:g}%",c['mode'],number(c['eta']*100),
-                        number(c['V_sw_max']),number(c['ripple_pp']*1000),number(c['dT']),number(c['min_pm']),
-                        f"{len(c['failed_checks'])} 项需复核" if c['failed_checks'] else '满足')
-            self.corner_tree.insert('','end',iid=c['id'],values=vals,
-                                    tags=('review' if c['skipped'] or c['failed_checks'] else 'pass',))
-        summary = []
-        for key,label,scale,unit in [('min_eta','最低效率',100,'%'),('max_dT','最高温升',1,'K'),
-                                     ('max_ripple_pp','最大纹波',1000,'mV'),('min_pm','最小 PM',1,'°')]:
-            if key in result['worst']:
-                summary.append(label+' '+number(result['worst'][key]*scale,unit)+' @ '+result['worst_cases'][key]['id'])
-        self.corner_worst.set('；'.join(summary))
-        self.corner_status.set('角点完成。磁件、L/C、器件与补偿均固定；无效点显式列出。点击角点查看复核项。')
-
-    def _corner_selected(self, _event):
-        ids = self.corner_tree.selection()
-        if ids and self._corner_result:
-            c = next(c for c in self._corner_result['corners'] if c['id']==ids[0])
-            details = c.get('error') or '；'.join(x['name']+'：'+STATE_LABELS[x['state']] for x in c['checks'] if x['state'] in ('review','undefined')) or '已建模检查满足阈值。'
-            self.corner_status.set(c['id']+' · '+details)
-
-    def _capture_baseline(self):
-        try:
-            if self._work_running:
-                messagebox.showinfo('分析任务','请等待当前分析完成。'); return
-            from analysis_workflows import evaluate
-            p = self._current_spec()
-            self._start_work('baseline',p,lambda:evaluate(p),self._show_baseline)
-            self.compare_status.set('正在计算并锁定方案 A…')
-        except Exception as exc:
-            messagebox.showerror('方案 A',str(exc))
-
-    def _show_baseline(self, snap):
-        self._baseline = snap; self._comparison = None
-        self.compare_tree.delete(*self.compare_tree.get_children())
-        self.fig_compare.clear(); self.canvas_compare.draw_idle()
-        self.compare_status.set('方案 A 已锁定：'+snap['op']['topology']+'。可以修改当前参数或读取配置作为 B。')
-
-    def _compare_ui(self, from_file):
-        if not self._baseline:
-            messagebox.showinfo('方案对比','请先锁定方案 A。'); return
-        try:
-            if self._work_running:
-                messagebox.showinfo('分析任务','请等待当前分析完成。'); return
-            from analysis_workflows import evaluate, compare
-            from design_api import load_spec
-            p = self._current_spec(); b = copy.deepcopy(p); name = 'B：当前设计'
-            if from_file:
-                path = filedialog.askopenfilename(filetypes=[('设计配置','*.json')],title='读取方案 B，不修改当前参数')
-                if not path: return
-                with open(path,encoding='utf-8-sig') as f: b = load_spec(json.load(f))
-                from pathlib import Path
-                name = 'B：'+Path(path).stem
-            self._comparison = None
-            self.compare_tree.delete(*self.compare_tree.get_children())
-            self.fig_compare.clear(); self.canvas_compare.draw_idle()
-            baseline = copy.deepcopy(self._baseline)
-            def calculate():
-                result = compare(baseline,evaluate(b),('A：锁定快照',name))
-                result['source'] = 'file' if from_file else 'current'
-                result['context_spec'] = copy.deepcopy(p)
-                return result
-            self._start_work('compare',p,calculate,self._show_comparison)
-            self.compare_status.set('正在计算方案 B 并比较…')
-        except Exception as exc:
-            messagebox.showerror('方案对比',str(exc))
-
-    def _show_comparison(self, result):
-        self._comparison = result
-        self.compare_tree.delete(*self.compare_tree.get_children())
-        for row in result['metrics']:
-            unit = row['unit']
-            self.compare_tree.insert('','end',values=(row['name'],number(row['a'],unit),number(row['b'],unit),
-                number(row['delta'],'百分点' if unit=='%' else unit)))
-        for diff in result['differences']:
-            self.compare_tree.insert('','end',values=('输入：'+diff['key'],number(diff['a']),number(diff['b']),'—'))
-        for snap,label in [(result['a'],'A'),(result['b'],'B')]:
-            failed = [c['name'] for c in snap['checks'] if c['state'] in ('review','undefined')]
-            self.compare_tree.insert('','end',values=(label+' 需复核', '；'.join(failed),'',''),tags=('review',))
-        self.compare_status.set('同输入 / 输出 / 功率需求，可比较；差值 B − A，不自动判定优劣。' if result['same_requirements'] else
-                                '注意：A / B 电路需求不同，指标不可直接作为方案优劣结论。')
-        self.fig_compare.clear(); axes = self.fig_compare.subplots(1,2)
-        for snap,label in [(result['a'],'A'),(result['b'],'B')]:
-            loop = snap['res'].get('loop')
-            if loop:
-                import numpy as np
-                axes[0].semilogx(loop['f'],20*np.log10(np.maximum(abs(loop['gains'][2]),1e-300)),label=label)
-                axes[1].semilogx(loop['f'],loop['phases'][2],label=label)
-        axes[0].axhline(0,color='#999',lw=.7); axes[1].axhline(-180,color='#999',lw=.7)
-        for ax,ylabel in zip(axes,('开环增益 / dB','开环相位 / °')):
-            ax.set(xlabel='频率 / Hz',ylabel=ylabel); ax.grid(alpha=.2)
-            if ax.get_legend_handles_labels()[0]: ax.legend()
-        self.canvas_compare.draw_idle()
+        self._work_poll = self.root.after(80, poll)

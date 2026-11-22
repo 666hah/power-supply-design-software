@@ -9,6 +9,75 @@
     "RCD的R/C随软件设计派生，候选型号数值不匹配时必须明确，不能悄改既定硬件。"
   ],
   "parts": {
+    "B32774P6106K000": {
+      "kind": "capacitor",
+      "manufacturer": "TDK",
+      "model": "B32774P6106K000",
+      "package": "MKP 径向 22 × 36.5 × 31.5 mm，脚距 27.5 mm",
+      "capacitance_F": 1e-05,
+      "voltage_V": 630,
+      "ripple_A": 12.5,
+      "capacitor_type": "film",
+      "calculation": {
+        "C": 1e-05,
+        "ESR": 0.0042,
+        "ESL": 2.4e-08
+      },
+      "conditions": "10 µF±10%；630 V@85°C，540 V@105°C，450 V@125°C；12.5 A RMS、ESR=4.2 mΩ 为 10 kHz、85°C 条件，ESL 典型 24 nH。",
+      "sources": [
+        {
+          "url": "https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/b3277xp.pdf",
+          "location": "B3277*P 630 V/10 µF 行及脚注"
+        }
+      ],
+      "note": "输入直流母线电容；额定纹波及耐压须按实用频率与热点温度核对。"
+    },
+    "EEUFR1J331": {
+      "kind": "capacitor",
+      "manufacturer": "Panasonic",
+      "model": "EEUFR1J331",
+      "package": "径向 Ø12.5 × 20 mm，脚距 5 mm",
+      "capacitance_F": 0.00033,
+      "voltage_V": 63,
+      "ripple_A": 1.582,
+      "capacitor_type": "electrolytic",
+      "calculation": {
+        "C": 0.00033,
+        "ESR": 0.033,
+        "ESL": 5e-09
+      },
+      "conditions": "330 µF±20%；额定纹波 1.582 A RMS@100 kHz；阻抗上限 33 mΩ@100 kHz。",
+      "sources": [
+        {
+          "url": "https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1J331",
+          "location": "规格表"
+        }
+      ],
+      "note": "计算以阻抗上限代理 ESR，5 nH ESL 为工程估算。与同组低 ESR 混合电容分担纹波。"
+    },
+    "EEH-AZS1J101B": {
+      "kind": "capacitor",
+      "manufacturer": "Panasonic",
+      "model": "EEH-AZS1J101B",
+      "package": "径向 Ø10 × 11.7 mm，脚距 5 mm",
+      "capacitance_F": 0.0001,
+      "voltage_V": 63,
+      "ripple_A": 3,
+      "capacitor_type": "electrolytic",
+      "calculation": {
+        "C": 0.0001,
+        "ESR": 0.019,
+        "ESL": 5e-09
+      },
+      "conditions": "100 µF±20%；额定纹波 3.00 A RMS@100 kHz/125°C，2.10 A RMS@100 kHz/135°C；100 kHz ESR 上限 19 mΩ。",
+      "sources": [
+        {
+          "url": "https://na.industrial.panasonic.com/products/capacitors/aluminum-electrolytic-capacitors/lineup/conductive-polymer-hybrid-aluminum-electrolytic/series/135824/model/135931",
+          "location": "规格表"
+        }
+      ],
+      "note": "混合聚合物铝电解电容，按铝电解降额规则；5 nH ESL 为工程估算。"
+    },
     "EEUFR1H331L": {
       "kind": "capacitor",
       "manufacturer": "Panasonic",
@@ -739,6 +808,29 @@
       ],
       "note": "单颗20%平均≤0.6W；RCD可用相同电阻串联均分电压/功耗。具体串并联值必须与软件派生R匹配，未匹配只可作为候选BOM，不能冒充实装验证。",
       "allowed_average_power_at_20pct_W": 0.6000000000000001
+    },
+    "HHXF500ARA221MJH0G": {
+      "kind": "capacitor",
+      "manufacturer": "Nippon Chemi-Con",
+      "model": "HHXF500ARA221MJH0G",
+      "package": "SMD Ø10×16.5 mm",
+      "capacitance_F": 0.00022,
+      "voltage_V": 50,
+      "ripple_A": 3.23,
+      "capacitor_type": "electrolytic",
+      "calculation": {
+        "C": 0.00022,
+        "ESR": 0.013,
+        "ESL": 5e-09
+      },
+      "conditions": "220 µF ±20%，50 V。ESR 最大 13 mΩ（20 °C、100 kHz）。额定纹波 3.8 Arms（135 °C、100 kHz）或 5.3 Arms（125 °C、100 kHz）。",
+      "note": "50 kHz 算例按原厂 30 kHz 频率系数 0.85 保守折算 135 °C 下纹波额定值，ESL 为工程占位。",
+      "sources": [
+        {
+          "url": "https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=HHXF500ARA221MJH0G",
+          "location": "型号规格和纹波电流频率系数"
+        }
+      ]
     },
     "PR03000206803JAC00": {
       "kind": "resistor",

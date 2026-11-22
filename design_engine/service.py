@@ -510,8 +510,9 @@ def export_report(run: DesignRun, path: str | Path, *, compensation_state: dict 
     if suffix not in ('.docx', '.xlsx'):
         raise ValueError('报告格式必须为 .docx 或 .xlsx')
     bundle = run.runtime_bundle()
-    if any(case.get('result') is not None and not case.get('error') and not case.get('efficiency_curve')
-           for case in bundle['cases']):
+    if bundle['base_spec']['topology'] != 'LLC' and any(
+            case.get('result') is not None and not case.get('error') and not case.get('efficiency_curve')
+            for case in bundle['cases']):
         raise ValueError('快照缺少效率扫描；请先以 include_efficiency=True 计算，导出阶段不会补算')
     if suffix == '.xlsx':
         from report_xlsx import export_input_range_xlsx as writer

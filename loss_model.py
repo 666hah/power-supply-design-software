@@ -119,6 +119,9 @@ def total_losses(op, p, wf=None):
     p = effective_sources(p)
     if wf is None:
         wf = make_waveforms(op, n_cycles=2, n_pts=2048)
+    if op.get('llc'):
+        from llc_design import losses
+        return losses(op, p, wf)
     from isolated_outputs import selected_params, multi_magnetics, RAIL_KEYS
     source_p = p
     p = selected_params(p)
@@ -292,7 +295,8 @@ def compute_design(p):
     check_calculation_cancelled()
     wf = make_waveforms(op)
     from parasitic_ringing import attach
-    attach(p,op,wf)
+    if not op.get('llc'):
+        attach(p,op,wf)
     check_calculation_cancelled()
     res = total_losses(op, p, wf)
     return res

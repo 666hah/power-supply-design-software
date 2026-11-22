@@ -29,6 +29,10 @@ SOURCES = {
                    'https://www.st.com/resource/en/datasheet/l6565.pdf'),
     'ACF-FORWARD': ('TI · SLUA535A', 'UCC2897A 有源钳位正激设计，功率级与钳位网络',
                     'https://www.ti.com/lit/an/slua535a/slua535a.pdf'),
+    'LLC': ('Infineon · AN 2012-09', 'LLC 功率级、桥式比例与首谐波初选',
+            'https://www.infineon.com/assets/row/public/documents/24/42/infineon-design-example-resonant-llc-converter-operation-and-design-applicationnotes-en.pdf'),
+    'HHC': ('TI · SLUAAJ7', 'UCC25640x §2.4 混合滞环、电容电压与补偿斜坡',
+            'https://www.ti.com/lit/an/sluaaj7/sluaaj7.pdf'),
 }
 SCOPE = {
     'BUCK': '已接入。异步 Buck，电压模式或峰值电流模式，成品电感。',
@@ -37,6 +41,7 @@ SCOPE = {
     'FLYBACK': '已接入。MP6005 定频峰值电流 SSR，满载 CCM 或 DCM，支持继承多路绕组并核对交叉负载。',
     'QR-FLYBACK': '待接入。联算励磁电感、退磁与谷底时间、工作频率范围和钳位应力。',
     'ACF-FORWARD': '待接入。分别设计励磁电感和各路滤波电感，检查复位、钳位及死区。',
+    'LLC': '原边半桥或全桥，副边桥式整流。首谐波初选后按周期解复算两端与轻载。',
 }
 # key, display label, display-unit multiplier to SI, default in display units
 FIELDS = (
@@ -48,12 +53,22 @@ FIELDS = (
 )
 MODES = {'Voltage Mode': 'TPS40200 · 电压模式', 'Peak Current Mode': 'LTC3864 · 峰值电流模式'}
 TOPOLOGY_MODES = {'BUCK': MODES, 'BOOST': {'Peak Current Mode': 'LM5022 · 峰值电流模式'},
-                  'FLYBACK': {'Peak Current Mode': 'MP6005 · 定频峰值电流 / SSR'}}
+                  'FLYBACK': {'Peak Current Mode': 'MP6005 · 定频峰值电流 / SSR'},
+                  'LLC': {'Hybrid Hysteretic':'混合滞环 HHC','Voltage Mode':'电压变频 PFM'}}
 
 
 def fields_for(topology):
     if topology == 'BUCK':
         return FIELDS
+    if topology == 'LLC':
+        return (
+            ('vin_min','最低直流输入 / V',1.,360.),('vin_max','最高直流输入 / V',1.,420.),
+            ('vout','输出电压 / V',1.,48.),('iout','额定输出电流 / A',1.,6.25),
+            ('imin','最小负载电流 / A（可留空）',1.,.625),('fs','串联谐振频率 / kHz',1000.,100.),
+            ('ripple','允许输出纹波 / %',.01,.5),('pm','最低相位裕度 / °',1.,60.),
+            ('bridge','原边桥型（1 半桥，2 全桥）',1.,1.),
+            ('q','额定首谐波品质因数 Q',1.,.315),('ratio','励磁与谐振电感比 Lm/Lr',1.,5.),
+        )
     if topology == 'FLYBACK':
         defaults = dict(vin_min=20.,vin_max=30.,vout=30.,iout=4./3.,imin=2./3.,fs=250.,il_ratio=65.)
         labels = dict(vout='反馈路端口电压 / V',iout='反馈路额定电流 / A',imin='反馈路最小电流 / A（可留空）',fs='MP6005 标称固定频率 / kHz',

@@ -15,7 +15,7 @@ LATIN = 'Cambria'
 BODY = 'SimSun'
 HEADING = 'Microsoft YaHei'
 INK = '243547'
-EQUATION_NUMBER = re.compile(r'\s*\((?:CR|QRCR)?\d+\)\s*$')
+EQUATION_NUMBER = re.compile(r'\s*\((?:CR|QRCR)?\d+(?:-\d+)?\)\s*$')
 TABLE_TITLES = {
     ('变量', '含义 / 内部单位'): '常用符号与内部单位',
     ('拓扑', 'Lmin 的软件表达式'): '各拓扑的最小电感初选值',
@@ -43,6 +43,7 @@ TABLE_TITLES = {
     ('输出', 'Vin / V'): '固定输入和本路负载时的分组跨度',
     ('输出', '全部角点范围 / V'): '各路全包络与纯交叉调整率',
     ('输入组', '需要的数据及含义'): '准谐振多路求解的输入',
+    ('计算项目', 'Vinmin 10 V'): '四相 COT 同一硬件的两端计算结果',
     ('文件', '主要入口'): '主要计算和验证入口',
 }
 
@@ -137,6 +138,13 @@ def prepare_book(doc):
 
 
 def _set_bookmark(paragraph, index):
+    for start in paragraph._p.xpath('./w:bookmarkStart'):
+        if start.get(qn('w:name'), '').startswith('calculation_chapter_'):
+            ident = start.get(qn('w:id'))
+            paragraph._p.remove(start)
+            for end in paragraph._p.xpath('./w:bookmarkEnd'):
+                if end.get(qn('w:id')) == ident:
+                    paragraph._p.remove(end)
     name = f'calculation_chapter_{index}'
     start, end = OxmlElement('w:bookmarkStart'), OxmlElement('w:bookmarkEnd')
     start.set(qn('w:name'), name)
@@ -162,26 +170,34 @@ def _toc_link(paragraph, heading, anchor):
 
 
 def _contents(doc, chapters):
+    for paragraph in doc.paragraphs:
+        if paragraph.style.name in ('Contents Title', 'Contents Group', 'Contents Entry'):
+            doc.element.body.remove(paragraph._p)
     anchor = chapters[0]._p
     title = doc.add_paragraph('目录', 'Contents Title')
     title.paragraph_format.page_break_before = True
     title.paragraph_format.keep_with_next = True
     anchor.addprevious(title._p)
     groups = {
-        1: '工作点与拓扑',
-        5: '波形、损耗与磁件',
-        8: '小信号模型与补偿',
-        11: '保护、效率与设计评审',
-        14: '隔离电源与多路算例',
-        21: '附录',
+        '1': '工作点与拓扑',
+        '5': '波形、损耗与磁件',
+        '8': '小信号模型与补偿',
+        '11': '保护、效率与设计评审',
+        '14': '隔离电源与多路算例',
+        '21': 'COT 控制与 LLC 谐振变换器',
+        '附录 A': '附录',
     }
     for index, heading in enumerate(chapters, 1):
-        if index in groups:
-            group = doc.add_paragraph(groups[index], 'Contents Group')
+        key = heading.text.split('  ', 1)[0]
+        if key in groups:
+            group = doc.add_paragraph(groups[key], 'Contents Group')
             group.paragraph_format.keep_with_next = True
+            group.paragraph_format.space_before = Pt(6)
             anchor.addprevious(group._p)
         entry = doc.add_paragraph(style='Contents Entry')
         entry.paragraph_format.left_indent = Mm(5)
+        entry.paragraph_format.line_spacing = Pt(17)
+        entry.paragraph_format.space_after = Pt(1)
         entry.paragraph_format.tab_stops.add_tab_stop(Mm(177), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
         _toc_link(entry, heading.text, _set_bookmark(heading, index))
         anchor.addprevious(entry._p)
@@ -215,28 +231,30 @@ def finish_book(doc):
     paragraphs = doc.paragraphs
     chapters = [p for p in paragraphs if p.style.name == 'Heading 1']
     width = doc.sections[0].page_width - doc.sections[0].left_margin - doc.sections[0].right_margin
-    chapter, sequence, table_sequence, figure_sequence = 0, 0, 0, 0
+    chapter, sequence, table_sequence, figure_sequence = '', 0, 0, 0
     from docx.table import Table
     from docx.text.paragraph import Paragraph
+    previous = None
     for block in list(doc.iter_inner_content()):
         if isinstance(block, Paragraph) and block.style.name == 'Heading 1':
-            chapter += 1
+            chapter = block.text.split('  ', 1)[0].removeprefix('附录 ')
             table_sequence, figure_sequence = 0, 0
         elif isinstance(block, Table):
             table_sequence += 1
-            tag = 'A' if chapter == 21 else str(chapter)
-            columns = tuple(cell.text for cell in block.rows[0].cells[:2])
-            caption = doc.add_paragraph(TABLE_TITLES[columns], 'Caption')
-            _number_caption(caption, f'表 {tag}-{table_sequence}')
-            caption.paragraph_format.keep_with_next = True
-            block._tbl.addprevious(caption._p)
-        elif isinstance(block, Paragraph) and block.style.name == 'Caption':
+            if not (isinstance(previous, Paragraph) and previous.text.startswith('表 ')):
+                columns = tuple(cell.text for cell in block.rows[0].cells[:2])
+                caption = doc.add_paragraph(TABLE_TITLES[columns], 'Caption')
+                _number_caption(caption, f'表 {chapter}-{table_sequence}')
+                caption.paragraph_format.keep_with_next = True
+                block._tbl.addprevious(caption._p)
+        elif isinstance(block, Paragraph) and block.style.name == 'Caption' and not block.text.startswith('表 '):
             figure_sequence += 1
             if not block.text.startswith('图 '):
                 _number_caption(block, f'图 {chapter}-{figure_sequence}')
+        previous = block
 
     paragraphs = doc.paragraphs
-    chapter = 0
+    chapter = ''
     for index, p in enumerate(paragraphs):
         name = p.style.name
         for run in p.runs:
@@ -250,9 +268,9 @@ def finish_book(doc):
         if name == 'Title':
             p.paragraph_format.space_before = Pt(115)
         elif name == 'Heading 1':
-            chapter += 1
+            chapter = p.text.split('  ', 1)[0].removeprefix('附录 ')
             sequence = 0
-            p.paragraph_format.page_break_before = chapter in (1, 5, 8, 11, 14, 19, 20, 21, 22)
+            p.paragraph_format.page_break_before = chapter in ('1', '5', '8', '11', '14', '19', '20', '21', '22', 'A', 'B')
         elif name == 'Heading 2':
             p.paragraph_format.page_break_before = False
         elif chapter and name != 'Formula Symbols' and p._p.xpath('./m:oMath'):

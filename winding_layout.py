@@ -67,7 +67,7 @@ def validate_winding_config(raw=None):
         raw = {}
     if not isinstance(raw,dict):
         raise ValueError('winding_config 必须是参数字典')
-    unknown=set(raw)-set(DEFAULT_WINDING_CONFIG)-{'model_3d'}
+    unknown=set(raw)-set(DEFAULT_WINDING_CONFIG)-{'model_3d','preview_core_reference'}
     if unknown:
         raise ValueError('未知绕制参数：'+', '.join(sorted(unknown)))
     cfg=copy.deepcopy(DEFAULT_WINDING_CONFIG)
@@ -75,9 +75,13 @@ def validate_winding_config(raw=None):
     if 'model_3d' in cfg:
         from transformer_geometry_contract import validate_profile
         validate_profile(cfg['model_3d'])
+    if 'preview_core_reference' in cfg:
+        model=cfg['preview_core_reference']
+        if not isinstance(model,str) or not model.strip():
+            raise ValueError('3D 外形参考型号必须为非空文字')
     from winding_positions import validate as validate_positions
     cfg['turn_positions']=validate_positions(cfg['turn_positions'])
-    for key in set(cfg)-{'order','overrides','layer_plan','model_3d','turn_positions'}:
+    for key in set(cfg)-{'order','overrides','layer_plan','model_3d','turn_positions','preview_core_reference'}:
         value=cfg[key]
         if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0:
             raise ValueError(key+' 必须为有限非负长度（SI：m）')

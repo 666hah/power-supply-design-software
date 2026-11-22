@@ -1,6 +1,8 @@
 """Single review catalog. A model check is not hardware certification."""
 import math
 
+from loop_acceptance import MIN_PHASE_MARGIN_DEG
+
 STATE_LABELS = {'pass': '满足', 'review': '需复核', 'undefined': '未计算',
                 'na': '不适用', 'reference': '初选参考'}
 
@@ -84,6 +86,22 @@ def check_catalog(p, res, loop=None, loop_error=None):
             if cfg['source_inductance_H'] or cfg['source_resistance_ohm']:
                 add('cot_input_network','输入阻抗与滤波互动',None,state='review',
                     note='源电阻直流压降与损耗已计入；当前平均电压环按刚性母线，输入 R/L/C 动态在开关 FRA 和阶跃中核对。')
+    elif op.get('llc'):
+        x = op['llc']
+        add('llc_regulation', '设定值与周期稳压状态', abs(op['V_out']-p['V_out']), .02*p['V_out'],
+            unit='V', state='pass' if x['regulation_ok'] else 'review',
+            note='最高频率稳定分支。触及限频、限流或电路无可用解时复核。')
+        add('llc_periodic_error','周期归一化闭合残差',x['residual'],1e-4)
+        add('llc_inductive','基波电流滞后角',x['phase_deg'],0.,'>','deg')
+        add('llc_zvs','开通前单桥臂 Vds 残压', x['v_zvs'],max(.5,.005*op['V_in_bus']),unit='V',
+            state='pass' if x['zvs_ok'] else 'review',
+            note='死区使用常数换流电容，开关报告按门极前采样核对。')
+        if source['llc_ocp']:
+            add('llc_ocp','谐振电流峰值与限流阈值',op['I_L_pk'],source['llc_ocp'],'<','A')
+        if source['llc_ovp']:
+            add('llc_ovp','工作点输出低于过压阈值',op['V_out'],source['llc_ovp'],'<','V')
+        add('llc_fmax','实际开关频率上界',op['f_sw'],source['llc_fmax'],unit='Hz')
+        add('llc_fmin','实际开关频率下界',op['f_sw'],source['llc_fmin'],'>=','Hz')
     elif op['topology'] == 'FLYBACK':
         add('L_min', '励磁电感 Lm 初选参考', op['L'], op.get('L_min'), '参考', 'H',
             state='reference' if op['mode'] == 'CCM' else 'na',
@@ -111,8 +129,9 @@ def check_catalog(p, res, loop=None, loop_error=None):
         note='ESL 尖峰不计入此项。')
     add('efficiency', '模型效率目标', res['eta'], p.get('target_eta', .92), '>=',
         note='输入/输出电容 ESR 已计入；未计辅助电源、热态参数等系统损耗。')
-    add('efficiency_preset_gap', '预设与最终效率差值', abs(res['eta_delta'])*100, 2., unit='pp',
-        note='2 个百分点为设计复核提示，不是模型精度保证；偏差较大请调整预设并重新设计/整定。最终效率不覆盖输入值。')
+    if not op.get('llc'):
+        add('efficiency_preset_gap', '预设与最终效率差值', abs(res['eta_delta'])*100, 2., unit='pp',
+            note='2 个百分点为设计复核提示，不是模型精度保证；偏差较大请调整预设并重新设计/整定。最终效率不覆盖输入值。')
     devices = [(k, (res.get('mag') or {}).get(k)) for k in ('inductor', 'transformer')]
     devices = [(k, d) for k, d in devices if d]
     if not devices:
@@ -154,7 +173,8 @@ def check_catalog(p, res, loop=None, loop_error=None):
     elif loop['fc'] is None:
         add('loop', '环路 0 dB 下降穿越', None, state='review', note='扫描范围内无下降穿越，PM 未定义，不能据此判稳定。')
     else:
-        add('phase_margin', '全部穿越的最小相位裕度', loop['min_pm'], p.get('pm_target', 60)-1., '>=', 'deg', note='目标容差 1°。')
+        add('phase_margin', '全部穿越的最小相位裕度', loop['min_pm'], MIN_PHASE_MARGIN_DEG, '>', 'deg',
+            note='按验收线判定。环路页的整定目标可单独设置。')
         highest = max(v['fc'] for v in loop['all_crosses'])
         model_limit = loop.get('model', {}).get('recommended_fc_max')
         add('fc_vs_fsw', '最高穿越与模型带宽建议' if model_limit else '最高穿越与开关频率建议', highest,
@@ -168,7 +188,8 @@ def check_catalog(p, res, loop=None, loop_error=None):
                  '没有有限相位穿越，不表示无限硬件稳定裕量。')
     if loop and loop.get('model'):
         model = loop['model']
-        model_label = 'COT 电压外环模型适用性' if model.get('kind') == 'cot-cadence-pi' else '多路环路模型适用性'
+        model_label = ('LLC 周期环路模型适用性' if op.get('llc') else
+                       'COT 电压外环模型适用性' if model.get('kind') == 'cot-cadence-pi' else '多路环路模型适用性')
         add('loop_model', model_label, None, state='review', note=model['assumptions'])
         add('loop_closed_poles', '近似闭环极点实部最大值', loop['closed_loop_max_pole_real'], 0, '<', 'rad/s',
             note='近似模型的极点检查，不替代所有角点、控制器与样机 FRA 验证。')

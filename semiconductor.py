@@ -43,6 +43,10 @@ def device_stress(op):
         return dict(switch=sw, auxiliary=low)
     d = {'I_rms': op['I_d_rms'], 'I_pk': op['I_d_pk'],
          'I_avg': op['I_d_avg'], 'V_max': op['V_d_max']}
+    if op.get('llc'):
+        sw.update(V_block=op['V_in_bus'], note='单颗桥臂 MOS；选型包络另含设置的振铃裕量。')
+        d.update(V_block=op['V_d_max'], note='单颗副边全桥整流管；高频换流尖峰用开关仿真核对。')
+        return dict(switch=sw, diode=d)
     if topo in (TOPO_FLYBACK, TOPO_QRFLYBACK):
         # Keep the physical plateau distinct from the configured Kc ceiling.
         V_ref = op['V_r']

@@ -1,10 +1,8 @@
 """Form hints reuse the desktop's metadata; no electrical formula duplication."""
 import copy
 import json
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-from example_catalog import EXAMPLES
+from example_catalog import EXAMPLES, available_examples, example_device_defaults, example_path
 
 # Keep old files addressable for established regression and saved links, but
 # publish only the same curated catalog as the desktop.
@@ -22,10 +20,17 @@ _LEGACY_EXAMPLES = {
 }
 
 
-def read_example(name):
-    if name not in EXAMPLES and name not in _LEGACY_EXAMPLES:
+def example_file(name):
+    if name not in EXAMPLES and name not in _LEGACY_EXAMPLES and name not in available_examples():
         raise ValueError('示例不存在')
-    return json.loads((ROOT/'examples'/name).read_text(encoding='utf-8'))
+    return example_path(name)
+
+
+def read_example(name):
+    from tolerance_defaults import example_tolerance_defaults
+
+    config = json.loads(example_file(name).read_text(encoding='utf-8-sig'))
+    return example_tolerance_defaults(example_device_defaults(name, config))
 
 
 def normalize_config(spec):
@@ -90,7 +95,7 @@ def bootstrap():
         'd_out_enable': ('启用输出防反二极管', 'D_OUT', '', 1.),
         'target_eta': ('评审目标效率', 'η,target', '%', 100.),
         'fc_target': ('目标穿越频率', 'fc', 'Hz', 1.),
-        'pm_target': ('目标相位裕度', 'PM', '°', 1.),
+        'pm_target': ('整定目标相位裕度', 'PM', '°', 1.),
         'psr_Na': ('辅助绕组匝数', 'Na', '匝', 1.),
         'psr_Vcc': ('控制器供电电压', 'Vcc', 'V', 1.),
         'psr_aux_target': ('辅助绕组目标电压', 'Vaux', 'V', 1.),
@@ -127,7 +132,7 @@ def bootstrap():
     from cot_buck_spice import FRA_KEYS, normalize_cot_settings
     cot_defaults = normalize_cot_settings(None, 400_000.)
     return json_value(dict(version='0.2.0-local', spec=spec, parameters=parameters,
-        sections=dict(SECTION_TITLES,psr='MP6005 原边反馈参数'), topologies=TOPOLOGIES, examples=EXAMPLES,
+        sections=dict(SECTION_TITLES,psr='MP6005 原边反馈参数'), topologies=TOPOLOGIES, examples=available_examples(),
         materials=STEINMETZ_MATERIALS,
         permeability_materials=__import__('transformer_gap').MATERIAL_PERMEABILITY,
         spice_presets=dict(generic=normalize_settings(),mp6005=mp6005_preset(),mp6005_acf=__import__('acf_spice').preset(),l6565=__import__('qr_spice_settings').l6565_preset(),tps40200=__import__('nonisolated').preset(1),ltc3864=__import__('nonisolated').preset(2),lm5022=__import__('nonisolated').preset(3),

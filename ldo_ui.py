@@ -24,6 +24,7 @@ class LdoDesigner:
         self._field_labels = []
         self._field_groups = []
         self._result_pages = {}
+        self._table_headers = {}
         from ui_preferences import font_size
 
         if not self._embedded:
@@ -52,6 +53,7 @@ class LdoDesigner:
         style.configure('Ldo.TLabel', foreground=INK, background='white', font=self._body_font)
         style.configure('LdoMuted.TLabel', foreground=MUTED, background='white', font=self._body_font)
         style.configure('LdoSection.TLabel', foreground=BLUE, background='white', font=self._section_font)
+        style.configure('LdoConclusion.TLabel', foreground=INK, background='#eaf2fb', font=self._section_font)
         style.configure('LdoTitle.TLabel', foreground=INK, background='white', font=self._heading_font)
         style.configure('Ldo.TButton', foreground=INK, background='white', bordercolor='#cedbea',
                         padding=(11, 6), font=self._body_font)
@@ -78,8 +80,11 @@ class LdoDesigner:
                 ttk.Button(head, text='返回系统架构', command=self.close, style='Ldo.TButton').grid(row=0, column=2, padx=(8, 0))
             ttk.Button(head, text=GITHUB_LABEL, command=lambda: open_github(root),
                        style='Ldo.TButton').grid(row=0, column=3, padx=(8, 0))
-        self.status = tk.StringVar(value='静态线性模型。未知的规格书限值可留空。')
-        ttk.Label(head, textvariable=self.status, style='LdoMuted.TLabel').grid(row=1, column=0, columnspan=3, sticky='ew')
+        self.status = tk.StringVar(value='待计算 · 结果按静态线性模型评估。')
+        conclusion = ttk.Label(head, textvariable=self.status, style='LdoConclusion.TLabel',
+                               justify='left', padding=(8, 5))
+        conclusion.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(6, 0))
+        conclusion.bind('<Configure>', lambda event: conclusion.configure(wraplength=max(1, event.width-16)))
         split = ttk.Panedwindow(self.frame, orient='horizontal')
         split.pack(fill='both', expand=True)
         left = ttk.Frame(split, style='LdoCard.TFrame')
@@ -100,7 +105,7 @@ class LdoDesigner:
         canvas.bind('<Configure>', resize_form)
 
         basic = self.group(form, '器件与控制')
-        for k, label in [('manufacturer', '厂家'), ('model', '型号'), ('package', '封装'), ('notes', '资料来源与条件')]:
+        for k, label in [('manufacturer', '制造商'), ('model', '型号'), ('package', '封装'), ('notes', '资料来源与条件')]:
             self.field(basic, k, label)
         self.choice(basic, 'output_mode', '输出类型')
         self.choice(basic, 'reverse_blocking', '反向电流保护')
@@ -121,9 +126,8 @@ class LdoDesigner:
         right = ttk.Frame(split, style='Ldo.TFrame', padding=(8, 0, 0, 0))
         split.add(right, weight=3)
         self.book = ttk.Notebook(right, style='Ldo.TNotebook')
-        self.book.pack(fill='both', expand=True)
-        self.corner = self.tree('corners', '四角点结果', ['工况','Vin / V','Iout / A','压差裕量 / V','芯片 / W','效率 / %','结温 / °C'])
-        self.checks = self.tree('checks', '检查与降额', ['检查项','计算值','限值','状态','说明'])
+        self.corner = self.tree('corners', '关键结果', ['工况','输入电压 / V','输出电流 / A','压差裕量 / V','芯片损耗 / W','效率 / %','结温 / °C'])
+        self.checks = self.tree('checks', '规格与降额', ['检查项','计算值','限值','状态','判定依据'])
         bom = ttk.Frame(self.book, padding=12, style='LdoCard.TFrame')
         self.book.add(bom, text='器件 BOM')
         self._result_pages['bom'] = bom
@@ -147,8 +151,7 @@ class LdoDesigner:
         self.bind_form_scroll(bom_view, bom_view)
         self.vars['output_mode'][0].trace_add('write',lambda *args:self.update_mode());self.update_mode()
         notes = ttk.Frame(right, style='LdoCard.TFrame')
-        notes.pack(fill='x', pady=(8, 0))
-        ttk.Label(notes, text='计算说明', style='LdoSection.TLabel').pack(anchor='w', padx=9, pady=(7, 0))
+        ttk.Label(notes, text='计算条件', style='LdoSection.TLabel').pack(anchor='w', padx=9, pady=(7, 0))
         content = ttk.Frame(notes, style='LdoCard.TFrame')
         content.pack(fill='x')
         self.info = tk.Text(content, height=3, wrap='word', font=self._body_font, background='white',
@@ -159,10 +162,12 @@ class LdoDesigner:
         self.info.pack(side='left', fill='x', expand=True)
         if not self._embedded:
             bar = ttk.Frame(right, style='Ldo.TFrame')
-            bar.pack(fill='x', pady=(8, 0))
+            bar.pack(side='bottom', fill='x', pady=(8, 0))
             for kind in ('docx', 'xlsx', 'json'):
                 ttk.Button(bar, text='导出 '+kind.upper(), command=lambda k=kind:self.report(k),
                            style='Ldo.TButton').pack(side='left', padx=(0, 8))
+        notes.pack(side='bottom', fill='x', pady=(8, 0))
+        self.book.pack(fill='both', expand=True)
         self.compute()
 
     def set_font_size(self, size):
@@ -173,6 +178,8 @@ class LdoDesigner:
         self._unit_width = max(self._body_font.measure(unit) for _, fields in FIELDS for _, _, unit, _ in fields)+7
         for group in self._field_groups:
             group.columnconfigure(2, minsize=self._unit_width)
+        for table in self._table_headers:
+            self._fit_table_columns(table)
 
     def bind_form_scroll(self, canvas, widget):
         def scroll(event):
@@ -239,10 +246,17 @@ class LdoDesigner:
         frame.columnconfigure(0, weight=1)
         for column, label in enumerate(headers):
             table.heading(column, text=label)
-            width = 230 if label == '说明' else 126 if label == '检查项' else 88
-            table.column(column, width=width, anchor='w' if label in ('检查项', '说明') else 'center')
+            table.column(column, anchor='w' if label in ('检查项', '判定依据') else 'center')
+        self._table_headers[table] = tuple(headers)
+        self._fit_table_columns(table)
         table.tag_configure('review', background='#fff3df')
         return table
+
+    def _fit_table_columns(self, table):
+        for column, label in enumerate(self._table_headers[table]):
+            minimum = self._section_font.measure('低线 · 满载' if label == '工况' else label) + 18
+            target = {'判定依据': 230, '检查项': 126}.get(label, 88)
+            table.column(column, width=max(minimum, target), minwidth=minimum)
 
     def selected_result_page(self):
         selected = self.book.select()
@@ -296,12 +310,37 @@ class LdoDesigner:
 
     def compute(self):
         try:
-            r=calculate(self._config_dict());self.spec=r['spec'];self.result=r
-            for t in (self.corner,self.checks):t.delete(*t.get_children())
-            for c in r['corners']:self.corner.insert('', 'end',values=[c['id'],fmt(c['V_in']),fmt(c['I_out']),fmt(c['dropout_margin']),fmt(c['P_chip']),fmt(c['eta']*100 if c['eta'] is not None else None),fmt(c['T_j'])],tags=() if c['regulated'] else ('review',))
-            for c in r['checks']:self.checks.insert('','end',values=[c['name'],fmt(c['value'])+c['unit'],c['comparison']+fmt(c['limit']),STATE[c['state']],c['note']],tags=() if c['state']=='pass' else ('review',))
-            self.info.configure(state='normal');self.info.delete('1.0','end');self.info.insert('end','\n'.join(r['notes'])+'\n'+('R2 = '+fmt(r['divider']['R_bottom'])+' Ω' if self.spec['output_mode']=='adjustable' else '固定输出，无外部分压电阻。'));self.info.configure(state='disabled');self.status.set('已按当前输入完成四角点计算：'+STATE[r['state']]);return True
-        except Exception as e:messagebox.showerror('LDO 参数',str(e),parent=self.root);return False
+            result = calculate(self._config_dict())
+            self.spec, self.result = result['spec'], result
+            for tree in (self.corner, self.checks):
+                tree.delete(*tree.get_children())
+            for case in result['corners']:
+                efficiency = case['eta']*100 if case['eta'] is not None else None
+                endpoint, load = case['id'].split('_', 1)
+                caption = ('低线' if endpoint == 'Vinmin' else '高线') + f' · {load}'
+                self.corner.insert('', 'end', values=(caption, fmt(case['V_in']), fmt(case['I_out']),
+                    fmt(case['dropout_margin']), fmt(case['P_chip']), fmt(efficiency), fmt(case['T_j'])),
+                    tags=() if case['regulated'] else ('review',))
+            for check in result['checks']:
+                value = f"{fmt(check['value'])} {check['unit']}".rstrip() if check['value'] is not None else '—'
+                limit = f"{check['comparison']} {fmt(check['limit'])}" if check['limit'] is not None else '—'
+                self.checks.insert('', 'end', values=(check['name'], value, limit, STATE[check['state']], check['note']),
+                                   tags=() if check['state']=='pass' else ('review',))
+            divider = f"分压下臂 R2 = {fmt(result['divider']['R_bottom'])} Ω" if self.spec['output_mode']=='adjustable' else '固定输出型由芯片设定。'
+            self.info.configure(state='normal')
+            self.info.delete('1.0', 'end')
+            self.info.insert('end', '\n'.join((*result['notes'], divider)))
+            self.info.configure(state='disabled')
+            margin = min(case['dropout_margin'] for case in result['corners'])
+            key_result = f'最小压差裕量 {fmt(margin)} V'
+            if result['worst']['T_j'] is not None:
+                key_result += f" · 最高估算结温 {fmt(result['worst']['T_j'])} °C"
+            self.status.set(f"结论 · {STATE[result['state']]}（静态模型）\n关键结果 · {key_result}")
+            return True
+        except Exception as e:
+            self.status.set('待重新计算 · 请检查当前 LDO 参数。')
+            messagebox.showerror('LDO 参数', str(e), parent=self.root)
+            return False
 
     def report(self,kind):
         if not self.compute():return
@@ -309,7 +348,8 @@ class LdoDesigner:
         if path:
             try:
                 from ldo_report import export_report
-                export_report(self.result,path);self.status.set('已导出：'+path)
+                export_report(self.result, path)
+                self.status.set(self.status.get() + f'\n已导出 · {kind.upper()}')
             except Exception as e:messagebox.showerror('LDO 报告',str(e),parent=self.root)
 
     def export_report(self):

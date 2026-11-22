@@ -453,6 +453,11 @@ def design_inductor(op, p, I_rms=None, B_pk_ratio=1.0):
     dI = op.get('dI_L', op['I_L_pk'])
     dB = L * dI / (N * Ae)
     t_b, B_t = inductor_flux_waveform(op, L, N, Ae)
+    if op.get('periodic_flux') is not None:
+        t_b, linkage = op['periodic_flux']
+        B_t = np.asarray(linkage) / (N * Ae)
+        dB = float(np.ptp(B_t))
+        B_pk = float(np.max(np.abs(B_t)))
     P_core = core_loss_nse_waveform(k, a, b, t_b, B_t, Ve)
 
     P_total = P_cu + P_core
@@ -510,7 +515,11 @@ def transformer_conductors(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None, Ns=No
     if Np_u > 0:
         Np = Np_u
     elif Np is None:
-        Np = int(np.ceil(op['V_in'] * op['D'] * op['Ts'] / (Bmax * core['Ae'])))
+        if op.get('periodic_flux') is not None:
+            linkage = op['periodic_flux'][1]
+            Np = int(np.ceil(np.max(np.abs(linkage)) / (Bmax * core['Ae'])))
+        else:
+            Np = int(np.ceil(op['V_in'] * op['D'] * op['Ts'] / (Bmax * core['Ae'])))
     Np = max(1, Np)
     if Ns_u > 0:
         Ns = Ns_u
@@ -605,6 +614,11 @@ def design_transformer(op, p, I_p_rms, I_s_rms, n_ratio=None, Np=None, Ns=None):
             else op['L'] * op['I_L_pk'] / (Np * Ae))
     flux_op = dict(op, Dp=1-op['D']) if op['topology'] == 'ACF-FORWARD' else op
     t_b, B_t = flyback_flux_waveform(flux_op, Np, Ae)
+    if op.get('periodic_flux') is not None:
+        t_b, linkage = op['periodic_flux']
+        B_t = np.asarray(linkage) / (Np * Ae)
+        dB = float(np.ptp(B_t))
+        B_pk = float(np.max(np.abs(B_t)))
     P_core = core_loss_nse_waveform(k, a, b, t_b, B_t, Ve)
     P_total = P_cu + P_core
     from transformer_gap import estimate

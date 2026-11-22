@@ -9,7 +9,7 @@
   "f_sw": 50000.0,
   "L": 4.7e-05,
   "C_out": 0.00021999999999999998,
-  "Rc": 0.03,
+  "Rc": 0.013,
   "Rs": 0.05,
   "Vm": 5.0,
   "N": 0.5,
@@ -90,14 +90,14 @@
         "power_W": null
       },
       "C_O1": {
-        "manufacturer": "Panasonic",
-        "model": "EEUFR1H221",
-        "package": "Radial Ø10×16 mm; pitch 5 mm",
-        "conditions": "额定纹波：100 kHz / +105°C；阻抗上限：100 kHz / +20°C；容量±20%。",
-        "note": "软件ESR采用原厂100 kHz阻抗上限作为电阻代理，非独立测得ESR；5 nH ESL为工程占位，原厂未给该型号值。该官网型号页把0.030 Ω错误标为0.03 mΩ；此处按系列PDF第6页0.030 Ω。；额定纹波仅对应所列频温条件，跨条件需修正；ESL及阻抗代理见参数来源。；资料：https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1H221 https://industrial.panasonic.com/cdbs/www-data/pdf/RDF0000/ABA0000C1259.pdf",
+        "manufacturer": "Nippon Chemi-Con",
+        "model": "HHXF500ARA221MJH0G",
+        "package": "SMD Ø10×16.5 mm",
+        "conditions": "220 µF ±20%，50 V。ESR 最大 13 mΩ（20 °C、100 kHz）。额定纹波 3.8 Arms（135 °C、100 kHz）或 5.3 Arms（125 °C、100 kHz）。",
+        "note": "50 kHz 模型以原厂 30 kHz 频率系数 0.85 保守折算 135 °C 纹波额定为 3.23 Arms，ESL 5 nH 为工程占位。原厂资料：https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=HHXF500ARA221MJH0G",
         "capacitor_type": "electrolytic",
         "voltage_V": 50.0,
-        "ripple_A": 1.65,
+        "ripple_A": 3.23,
         "power_W": null
       },
       "C_O2": {
@@ -113,10 +113,10 @@
       },
       "L1": {
         "manufacturer": "Coilcraft",
-        "model": "XAL7070-473MEC",
-        "package": "XAL7070 屏蔽一体成型 / SMD",
-        "conditions": "Document856-2 Rev02/25/26 p2；47µH±20%，25°C DCR最大97.07mΩ，Irms=3.1A为20K温升参考，Isat=4.2A对应L下降30%典型值。",
-        "note": "按47µH常量计算，未建模L随电流变化、交流/磁芯附加损耗和实际PCB温升；Boost接近Isat时须复核L(I)与余量。；资料：https://www.coilcraft.com/getmedia/1ba55433-bcc8-4838-9b21-382f497e12e0/xal7070.pdf",
+        "model": "XGL1010-473MED",
+        "package": "XGL1010 屏蔽一体成型 / SMD",
+        "conditions": "47 µH ±20%。25 °C DCR 最大 46.9 mΩ；5.1 A 对应温升 20 K；3.7 / 6.1 / 8.4 A 分别对应电感下降 10% / 20% / 30%。",
+        "note": "按 47 µH 常量与 25 °C 最大 DCR 计算。电感下降 30% 的 8.4 A 为厂家 Isat 参考；另核 10% 下降点、实际板温和交流损耗。原厂资料：https://www.coilcraft.com/en-us/products/power/shielded-inductors/molded-inductor/xgl/xgl1010/xgl1010-473/",
         "capacitor_type": "unknown",
         "voltage_V": null,
         "ripple_A": null,
@@ -262,7 +262,7 @@
     "niso_ramp_ratio": 0.1,
     "niso_ith_gain": 0.05,
     "niso_lm_cs_resistor": 0.0,
-    "niso_inductor_dcr": 0.09707,
+    "niso_inductor_dcr": 0.0469,
     "niso_edge_model": 0.0
   },
   "parasitic_config": {},
@@ -308,10 +308,10 @@
   "Rc2": 0.03,
   "ESL2": 1e-08,
   "cout2_enable": true,
-  "KP": 348.4017733151054,
-  "fz1": 265.5289259640807,
+  "KP": 186.31242448054184,
+  "fz1": 139.42106743468185,
   "fz2": 2014559.0960359208,
-  "fp1": 3766.0680333383884,
+  "fp1": 7172.5171697490805,
   "fp2": 159154.9399087965,
   "d_in_enable": false,
   "Vf_din": 0.8,
@@ -362,7 +362,7 @@
   "output_capacitors": [
     {
       "C": 0.00021999999999999998,
-      "ESR": 0.03,
+      "ESR": 0.013,
       "ESL": 5e-09
     },
     {
@@ -373,9 +373,9 @@
   ],
   "inductor_design_enabled": false,
   "inductor_extra_loss": 0.0,
-  "inductor_dcr": 0.09707,
-  "inductor_rated_current": 3.1,
-  "inductor_saturation_current": 4.2,
+  "inductor_dcr": 0.0469,
+  "inductor_rated_current": 5.1,
+  "inductor_saturation_current": 8.4,
   "__real_parts": {
     "version": 1,
     "date": "2026-11-08",
@@ -394,7 +394,8 @@
       },
       "C_O1": {
         "catalog": "passive",
-        "key": "EEUFR1H221"
+        "key": "HHXF500ARA221MJH0G",
+        "url": "https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=HHXF500ARA221MJH0G"
       },
       "C_O2": {
         "catalog": "passive",
@@ -402,7 +403,8 @@
       },
       "L1": {
         "catalog": "support",
-        "key": "XAL7070-473MEC"
+        "key": "XGL1010-473MED",
+        "url": "https://www.coilcraft.com/en-us/products/power/shielded-inductors/molded-inductor/xgl/xgl1010/xgl1010-473/"
       },
       "U_CTRL": {
         "catalog": "controller",

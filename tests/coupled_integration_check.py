@@ -250,11 +250,11 @@ class OwnedTkCouplingChecks(unittest.TestCase):
         # Call the updater directly: the lazy-page wrapper intentionally
         # catches render errors, so update_all=True alone cannot prove this.
         self.app._update_topology(snapshot['op'],snapshot['p'])
-        refs=set(self.app.topology_tree.get_children())
+        refs=set(self.app.topology_rows)
         self.assertTrue({'T1','D_O1','D_O2','D_O3','R_SN1','C_SN1'} <= refs)
         rcd=rcd_components(snapshot['op'],snapshot['p'])
-        resistor=self.app.topology_tree.item('R_SN1','values')[2]
-        capacitor=self.app.topology_tree.item('C_SN1','values')[2]
+        resistor=self.app.topology_rows['R_SN1']['values']
+        capacitor=self.app.topology_rows['C_SN1']['values']
         self.assertIn(self.main.fmt_eng(rcd['R_snub'],'Ω'),resistor)
         self.assertIn(self.main.fmt_eng(rcd['C_snub'],'F'),capacitor)
 

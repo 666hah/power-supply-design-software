@@ -47,6 +47,8 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
     warnings.append('模型效率待补温度、辅助供电、整流桥及 EMI 滤波损耗。')
     if op.get('cot'):
         warnings.append('每相电流按同参数均流的同步功率级估计。效率按全相器件损耗汇总。')
+    elif op.get('llc'):
+        warnings.append('LLC 周期解显式计入谐振腔和整流压降。效率按各桥臂、磁件和电容损耗汇总。')
     else:
         warnings.append('耦合求解包含支路压降，以预设效率初始化。最终效率汇总器件损耗。' if op.get('coupled_model') else
                         '工作点按预设效率折算负载。最终效率根据器件损耗反算。')
@@ -120,6 +122,13 @@ def report_for_result(p, res, user_spec=None, range_snapshot=None):
     )
     if op.get('cot'):
         report['cot'] = copy.deepcopy(op['cot'])
+    if op.get('llc'):
+        x = op['llc']
+        keys = ('bridge','control_mode','fr_Hz','fm_Hz','zvs_ok','v_zvs','phase_deg',
+                'regulation_ok','setpoint_reached','hhc_threshold_V','residual','loss_W',
+                'cr_peak_V','zvs_available_charge_C','zvs_required_charge_C','switch_count')
+        report['llc'] = {key: x.get(key) for key in keys}
+        report['magnetics']['devices'] = {key:copy.deepcopy(md[key]) for key in ('inductor','transformer')}
     if op['topology'] == 'ACF-FORWARD':
         report['active_clamp'] = {k: float(op[k]) for k in (
             'Lm_forward','C_clamp','V_clamp','V_reset','V_clamp_hump',

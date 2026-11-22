@@ -33,16 +33,15 @@ class CrossRegulationUI:
         self._cross_case_by_id = {}
         self._cross_endpoint_corners = {}
         self._cross_summary_corners = {}
-        self.cross_note = tk.StringVar(master=parent, value='准备当前设计后，按需扫描各路轻载与满载组合。')
-        self.cross_detail = tk.StringVar(master=parent, value='选中角点可查看电压、负载及求解状态。')
+        self.cross_note = tk.StringVar(master=parent, value='待计算 · 点击「扫描负载角点」查看各路电压变化。')
+        self.cross_detail = tk.StringVar(master=parent, value='选择角点，查看端口电压、负载和求解状态。')
         self._cross_view = ttk.Frame(parent, padding=(12, 8))
         self._cross_view.pack(fill='both', expand=True)
         view = self._cross_view
-        title = ttk.Frame(view)
-        title.pack(fill='x', pady=(0, 6))
-        ttk.Label(title, text='交叉调整率', style='Result.TLabel').pack(side='left')
-        self.cross_progressbar = ttk.Progressbar(title, length=132, mode='determinate')
-        self.cross_progressbar.pack(side='right', padx=(12, 0), fill='x')
+        status = ttk.Label(view, textvariable=self.cross_note, style='ResultConclusion.TLabel',
+                           padding=(8, 4), justify='left', anchor='w')
+        status.pack(fill='x', pady=(0, 8))
+        status.bind('<Configure>', lambda e: status.configure(wraplength=max(1, e.width - 16)))
 
         actions = ttk.Frame(view)
         actions.pack(fill='x', pady=(0, 6))
@@ -54,10 +53,8 @@ class CrossRegulationUI:
         for i, button in enumerate((self.cross_button, self.cross_cancel, self.cross_load_button)):
             actions.columnconfigure(i, weight=1)
             button.grid(row=0, column=i, sticky='ew', padx=(0, 8 if i < 2 else 0))
-        status = ttk.Label(view, textvariable=self.cross_note, style='Guide.TLabel',
-                           padding=(8, 4), justify='left', anchor='w')
-        status.pack(fill='x', pady=(0, 8))
-        status.bind('<Configure>', lambda e: status.configure(wraplength=max(1, e.width - 16)))
+        self.cross_progressbar = ttk.Progressbar(view, mode='determinate')
+        self.cross_progressbar.pack(fill='x', pady=(0, 8))
 
         self._cross_summary_book = ttk.Notebook(view)
         summary = ttk.Frame(self._cross_summary_book)
@@ -67,19 +64,22 @@ class CrossRegulationUI:
         self.cross_tree = self._cross_table(summary, (
             ('rail', '输出', 104), ('ref', '参考 / V', 90), ('min_w', '轻载 / W', 90),
             ('max_w', '满载 / W', 90), ('range', '电压范围 / V', 135),
-            ('deviation', '标称偏差 / %', 130), ('span', '总跨度 / %', 115),
-            ('cross', '纯跨调 / %', 115), ('min', '最低角点', 96), ('max', '最高角点', 96),
+            ('deviation', '标称偏差 / %', 130), ('span', '电压总变化率 / %', 135),
+            ('cross', '纯交叉调整率 / %', 145), ('min', '最低电压工况', 112), ('max', '最高电压工况', 112),
         ), rows=3)
         self.cross_tree.bind('<ButtonRelease-1>', self._open_summary_corner)
         self.cross_tree.bind('<Return>', self._open_endpoint_for_selection)
 
         endpoint_actions = ttk.Frame(endpoints, padding=(6, 4))
         endpoint_actions.pack(fill='x')
-        ttk.Label(endpoint_actions, text='观察输出').pack(side='left', padx=(0, 6))
+        ttk.Label(endpoint_actions, text='选择输出').pack(side='left', padx=(0, 6))
         self._cross_rail_picker = ttk.Combobox(endpoint_actions, state='readonly', width=13)
         self._cross_rail_picker.pack(side='left')
         self._cross_rail_picker.bind('<<ComboboxSelected>>', lambda _: self._render_cross_endpoint())
-        ttk.Label(endpoint_actions, text='纯跨调固定本路功率和 Vin').pack(side='right')
+        scope = ttk.Label(endpoints, text='纯交叉调整率在本路负载和输入电压固定时计算。',
+                          style='Muted.TLabel', padding=(6, 0), justify='left')
+        scope.pack(fill='x')
+        scope.bind('<Configure>', lambda e: scope.configure(wraplength=max(1, e.width - 12)))
         self._cross_endpoint_tree = self._cross_table(endpoints, (
             ('metric', '指标', 135), ('vin1', 'Vin', 145), ('vin2', 'Vin max', 145),
         ), rows=5)
@@ -90,15 +90,15 @@ class CrossRegulationUI:
         self._cross_summary_book.add(corners, text='负载角点')
         filters = ttk.Frame(corners, padding=(0, 4))
         filters.pack(fill='x')
-        ttk.Label(filters, text='负载角点', style='Result.TLabel').pack(side='left')
+        ttk.Label(filters, text='按输入电压筛选').pack(side='left', padx=(0, 6))
         self._cross_filter = ttk.Combobox(filters, values=('全部输入端点',), state='readonly', width=15)
         self._cross_filter.current(0)
-        self._cross_filter.pack(side='right')
+        self._cross_filter.pack(side='left')
         self._cross_filter.bind('<<ComboboxSelected>>', lambda _: self._render_cross_cases())
         self._build_cross_detail(corners)
         self.cross_cases = self._cross_table(corners, (
             ('id', '角点', 84), ('vin', 'Vin / V', 92), ('loads', '各路负载 / W', 245),
-            ('voltages', '解算电压 / V', 245), ('frequency', '频率 / Hz', 112), ('state', '状态', 132),
+            ('voltages', '端口电压 / V', 245), ('frequency', '开关频率 / Hz', 122), ('state', '求解状态', 132),
         ), rows=5)
         self.cross_cases.bind('<<TreeviewSelect>>', self._select_cross_case)
         self._cross_summary_book.pack(fill='both', expand=True)
@@ -175,12 +175,12 @@ class CrossRegulationUI:
         self._cross_rail_picker.set('')
         self._update_cross_endpoint_choices()
         self._rendered_tabs.discard(self.nb.index(self.tab_cross))
-        self.cross_note.set('待扫描当前参数。')
-        self.cross_detail.set('角点电压为稳态直流平均值。选择角点可查看完整状态。')
+        self.cross_note.set('待计算 · 点击「扫描负载角点」查看各路电压变化。')
+        self.cross_detail.set('端口电压取稳态平均值。选择角点可查看测量位置和求解状态。')
 
     def _start_cross_regulation(self):
         if not self._snapshot_valid or not self._last:
-            self.cross_note.set('请等待当前设计计算完成。')
+            self.cross_note.set('待计算 · 请先完成当前设计的计算。')
             return
         from cross_regulation import scan_cross_regulation
 
@@ -199,7 +199,7 @@ class CrossRegulationUI:
             )
 
         self._calculation_worker.submit('cross_regulation', request, calculate, cache=True)
-        self.cross_note.set('正在后台计算各输入端点的负载组合。')
+        self.cross_note.set('计算中 · 正在复算各输入端点的负载组合。')
         self._ensure_calculation_poll()
 
     def _cancel_cross_regulation(self):
@@ -208,7 +208,7 @@ class CrossRegulationUI:
             self._mark_cross_regulation_stale()
             if self._snapshot_valid and self._last:
                 self._refresh_cross_inputs()
-            self.cross_note.set('扫描已取消。')
+            self.cross_note.set('已取消 · 可重新扫描负载角点。')
 
     def _drain_cross_progress(self):
         if not hasattr(self, '_cross_progress'):
@@ -221,7 +221,7 @@ class CrossRegulationUI:
         if last:
             done, total, case = last
             self.cross_progressbar.configure(maximum=total, value=done)
-            self.cross_note.set(f'已处理 {done} / {total} 个角点 · {case}')
+            self.cross_note.set(f'计算中 · 已处理 {done} / {total} 个角点 · {case}')
 
     def _finish_cross_regulation(self, job):
         if not self._snapshot_valid or not self._last or job.parameters['p'] != self._last['p']:
@@ -242,10 +242,18 @@ class CrossRegulationUI:
         self._cross_endpoint_data = {vin: for_input(data, vin) for vin in data['voltages']}
         self._cross_case_by_id = {case['id']: case for case in data['cases']}
         self.cross_progressbar.configure(maximum=data['total_cases'], value=data['total_cases'])
-        coverage = ' · 部分工况失败，当前仅列出已求解角点范围' if not data['complete'] else ''
-        if not data.get('varied_outputs'):
-            coverage += ' · 各路轻载功率等于满载功率，未覆盖负载变化'
-        self.cross_note.set(f"有效角点 {data['successful_cases']} / {data['total_cases']}" + coverage)
+        coverage = f"已求解 {data['successful_cases']} / {data['total_cases']} 个角点。"
+        peak = max((row for row in data['summary'] if row.get('cross_only_pct') is not None),
+                   key=lambda row: row['cross_only_pct'], default=None)
+        if peak is not None and data.get('varied_outputs'):
+            conclusion = f"已算角点中，OUT{peak['id']} 的纯交叉调整率最大，为 {peak['cross_only_pct']:.3g}%。"
+        elif not data.get('varied_outputs'):
+            conclusion = '各路轻载等于满载，负载变化待复核。'
+        else:
+            conclusion = '交叉调整率待补计算。'
+        if not data['complete']:
+            coverage += '未求解角点见「负载角点」。'
+        self.cross_note.set('结论 · ' + conclusion + '\n' + coverage)
         self._render_cross_summary(data['summary'], data['feedback_output'])
         self._update_cross_endpoint_choices()
         self._render_cross_endpoint()
@@ -257,8 +265,8 @@ class CrossRegulationUI:
         if row.get('V_min') is None:
             return ('—',) * 6
         return (
-            f"{row['V_min']:.5g} ~ {row['V_max']:.5g}",
-            f"{row['deviation_min_pct']:+.3g} ~ {row['deviation_max_pct']:+.3g}",
+            f"{row['V_min']:.5g} 至 {row['V_max']:.5g}",
+            f"{row['deviation_min_pct']:+.3g} 至 {row['deviation_max_pct']:+.3g}",
             f"{row['span_pct']:.3g}", f"{row['cross_only_pct']:.3g}",
             row['min_case'], row['max_case'],
         )
@@ -307,14 +315,15 @@ class CrossRegulationUI:
             return
         comparisons = tuple(self._cross_endpoint_data.values())
         values = [self._cross_result_values(data['summary'][i]) for data in comparisons]
-        for row, title in enumerate(('电压范围 / V', '标称偏差 / %', '总跨度 / %', '纯跨调 / %', '最低角点', '最高角点')):
+        for row, title in enumerate(('电压范围 / V', '标称偏差 / %', '电压总变化率 / %',
+                                     '纯交叉调整率 / %', '最低电压工况', '最高电压工况')):
             cells = tuple(column[row] for column in values)
             tree.insert('', 'end', iid=str(row), tags=('alternate',) if row % 2 else (), values=(title, *cells))
             if row in (4, 5):
                 for column, cell in enumerate(cells, start=2):
                     if cell in self._cross_case_by_id:
                         self._cross_endpoint_corners[(str(row), f'#{column}')] = cell
-        tree.insert('', 'end', values=('有效角点', *(f"{d['successful_cases']} / {d['total_cases']}" for d in comparisons)))
+        tree.insert('', 'end', values=('已求解角点', *(f"{d['successful_cases']} / {d['total_cases']}" for d in comparisons)))
 
     def _render_cross_cases(self):
         from cross_regulation import load_label
@@ -382,7 +391,11 @@ class CrossRegulationUI:
             return
 
         from cross_regulation import load_label
-        lines = [f'{case["id"]} · Vin {case["V_in"]:g} V · ' + load_label(case)]
+        model = case.get('qr_timing')
+        state = '求解失败' if case['status'] == 'failed' else '未计算' if case['status'] == 'unavailable' else '已求解'
+        if model and model.get('design_frequency_limit_exceeded'):
+            state = '开关频率超限'
+        lines = [f'{state} · {case["id"]} · 输入电压 {case["V_in"]:g} V · ' + load_label(case)]
         if case['error']:
             lines.append(case['error'])
         else:
@@ -392,7 +405,6 @@ class CrossRegulationUI:
                     for i, (voltage, power) in enumerate(zip(case['voltages'], case['actual_powers']), start=1)
                 ))
             lines.append(f'周期电流和电荷平衡归一化残差 {case["residual"]:.3g}。')
-        model = case.get('qr_timing')
         if model:
             timing = model.get('timing_policy', '矩阵退磁与离散谷底时序')
             if case.get('f_sw'):

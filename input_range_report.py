@@ -138,8 +138,12 @@ def export_input_range_docx(path, range_result, *, compensation_state=None,
     native blocks are captured in memory and aligned by module; no case is
     recalculated, retuned or substituted during report generation.
     """
+    if range_result['base_spec']['topology'] == 'LLC':
+        from llc_report import export_design
+        return export_design(path,range_result,document=document,save=save,chapter_level=chapter_level,
+                             include_acceptance=include_acceptance)
     from contextlib import nullcontext
-    from report_architecture import (add_acceptance_report, capture_document,
+    from report_architecture import (acceptance_group_line, add_acceptance_report, capture_document,
         comparison_charts, write_paired_modules, module_section, acceptance_snapshot,
         report_cases, case_heading, review_findings, conclusion_line)
     cases = report_cases(range_result)
@@ -169,12 +173,16 @@ def export_input_range_docx(path, range_result, *, compensation_state=None,
         if cross_incomplete:
             paragraph(doc, '交叉调整率部分角点待核对。', True)
         summary = acceptance['summary']
-        state = 'review' if findings else summary.get('state')
-        conclusion_line(doc, f"重点复核 {len(findings)} 项，待补数据 {pending} 项", state)
         if include_acceptance:
-            paragraph(doc, '工程验收 '+str(summary.get('label') or '待评估'), True)
+            text = '工程验收 ' + summary['label']
+            group_line = acceptance_group_line(acceptance)
+            if group_line:
+                text += '。' + group_line
+            conclusion_line(doc, text, summary['state'])
+        state = 'review' if findings else 'undefined' if pending else 'pass'
+        conclusion_line(doc, f"计算诊断 · 重点复核 {len(findings)} 项，待补数据 {pending} 项", state)
         if findings:
-            table(doc, ['优先复核', '当前值与要求'], findings[:5], [2.8, 4.3])
+            table(doc, ['计算复核项', '当前值与要求'], findings[:5], [2.8, 4.3])
         labels = [case_heading(case, len(cases)) for case in cases]
         table(doc,['关键指标',*labels,*(['较不利端'] if len(cases)==2 else [])],
               _metric_rows(cases,{'eta','I_L_pk','V_sw_max','ripple_pp','dT','min_pm'}),

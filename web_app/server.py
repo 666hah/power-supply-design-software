@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Literal
 
 from .jobs import JobManager
-from .metadata import bootstrap, preview, read_example, normalize_config
+from .metadata import bootstrap, example_file, preview, read_example, normalize_config
 
 
 class StrictModel(BaseModel):
@@ -195,9 +195,7 @@ def create_app(*, testing=False, pcs_root=None):
 
     @app.get('/api/examples/{name}/source')
     async def example_source(name: str):
-        from app_resources import resource_path
-        await asyncio.to_thread(read_example,name)  # Same example allowlist as the JSON API.
-        return FileResponse(resource_path('examples/'+name),media_type='application/json')
+        return FileResponse(example_file(name),media_type='application/json')
 
     @app.get('/api/manual')
     async def manual():

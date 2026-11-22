@@ -27,7 +27,8 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
                     diode_curves=self._diode_curves)
 
     def _validate_curve_requests(self):
-        validate_requests(self._curve_context())
+        if self._topo_key() != 'LLC':
+            validate_requests(self._curve_context())
 
     def _build_device_curve_controls(self, frame, row):
         frame.columnconfigure(0, weight=1)
@@ -40,15 +41,16 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         panel = ttk.Frame(frame)
         panel.grid(row=row+1, column=0, columnspan=4, sticky='ew')
         self._curve_global = tk.StringVar(value='fixed')
-        ttk.Label(panel, text='半导体计算方式 · MOS 与二极管', style='Param.TLabel').pack(anchor='w', pady=(0, 4))
+        ttk.Label(panel, text='半导体模型 · MOS 与二极管', style='Param.TLabel').pack(anchor='w', pady=(0, 4))
+        self._curve_summary = tk.StringVar()
+        self._curve_summary_label = ttk.Label(panel, textvariable=self._curve_summary, wraplength=310,
+                                              justify='left', style='ResultConclusion.TLabel')
+        self._curve_summary_label.pack(fill='x', pady=(0, 4))
         for value, text in (('fixed', '固定值模型'), ('curve', '曲线模型')):
             ttk.Radiobutton(panel, text=text, value=value, variable=self._curve_global,
                             style='CurveMode.TRadiobutton', command=self._choose_global_curve_mode).pack(anchor='w', pady=2)
         ttk.Label(panel, text='切换默认模型会重置半导体的逐项选择。',
                   style='Muted.TLabel', wraplength=310, justify='left').pack(fill='x', pady=4)
-        self._curve_summary = tk.StringVar()
-        self._curve_summary_label = ttk.Label(panel, textvariable=self._curve_summary, wraplength=310, justify='left')
-        self._curve_summary_label.pack(fill='x', pady=4)
         box = ttk.Frame(panel); box.pack(fill='x')
         self._curve_tree = ttk.Treeview(box, columns=('object', 'kind', 'state'), show='headings',
                                        height=5, selectmode='browse', takefocus=True)
@@ -75,9 +77,15 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
             for child in panel.winfo_children():
                 if isinstance(child, ttk.Label): child.configure(wraplength=width)
         panel.bind('<Configure>', fit)
-        self._register_param_extra(frame, [panel], text='模型 精度 固定值 曲线 MOS 二极管 Q1 Vgs Id Qg Vf If')
+        self._register_param_extra(frame, [panel], text='模型 精度 固定值 曲线 MOS 二极管 Q1 Vgs Id Qg Vf If',
+                                   predicate=lambda:self._topo_key() != 'LLC')
+        llc_note = ttk.Label(frame, text='LLC 以固定 Rds(on)、Coss 和整流 Vf／Rd／Cj 建模。电容阻抗曲线用于频域分流和损耗。',
+                             style='Muted.TLabel', wraplength=310, justify='left')
+        llc_note.grid(row=row+2, column=0, columnspan=4, sticky='ew')
+        self._register_param_extra(frame, [llc_note], text='LLC Rds Coss Vf Rd Cj 电容曲线',
+                                   predicate=lambda:self._topo_key() == 'LLC')
         self._curve_signature = None
-        return row + 2
+        return row + 3
 
     def _capacitor_model_banks(self):
         if 'input' not in self._cap_editors or 'output' not in self._cap_editors:
@@ -91,6 +99,8 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         return banks
 
     def _device_data_rows(self, kind, rail):
+        if self._topo_key() == 'LLC':
+            return []
         if rail is not None and not self._inline_output_visible(rail-1):
             return []
         if kind not in ('mos', 'input') and rail is None and self._multiple_active():
@@ -111,7 +121,8 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         if kind == 'mos':
             four = ttk.Button(frame, text='查看 MOS Vinmin / Vinmax 四工况…', command=self._show_mos_four)
             four.grid(row=row+1, column=0, columnspan=4, sticky='ew', pady=3)
-            self._register_param_extra(frame, [four], text='MOS Vinmin Vinmax 四工况')
+            self._register_param_extra(frame, [four], text='MOS Vinmin Vinmax 四工况',
+                                       predicate=lambda:self._topo_key() != 'LLC')
             return row+2
         return row+1
 
@@ -129,6 +140,9 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         dialog.transient(self.root)
         content = ttk.Frame(dialog, padding=12)
         content.pack(fill='both', expand=True)
+        state = tk.StringVar()
+        ttk.Label(content, textvariable=state, style='ResultConclusion.TLabel',
+                  wraplength=420, justify='left').pack(fill='x', pady=(0, 6))
         picker = ttk.Combobox(content, state='readonly', width=42,
                              values=[row['ref']+' · '+row['role'] for row in rows])
         picker.pack(fill='x')
@@ -144,7 +158,9 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
             p = self._curve_context()
             model = source_for(p, item['target'])
             curve = curve_for(p, item['target'])
-            detail.set(self._curve_data_note(item, p))
+            headline, _, body = self._curve_data_note(item, p).partition('\n')
+            state.set(headline)
+            detail.set(body)
             preview.state(['!disabled'] if curve else ['disabled'])
             unbind.state(['!disabled'] if curve and model != 'curve' else ['disabled'])
             if kind != 'mos':
@@ -267,8 +283,8 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
                 self._curve_tree.selection_set(target)
             self._curve_signature = signature
         text = source_summary(p)
-        if missing: text += f'\n待导入 {missing} 项，请在相应器件分组补齐数据。'
-        self._curve_summary.set(text)
+        self._curve_summary.set(f'待导入 {missing} 项 · 请在相应器件分组补齐数据。\n{text}'
+                                if missing else f'当前模型 · {text}')
         self._curve_summary_label.configure(foreground=COLORS['missing' if missing else 'warning' if '混合' in text else 'curve' if settings['mode']=='curve' else 'fixed'])
         self._param_summary_vars['curves'].set('电容按位号配置 · '+text.split('\n')[0])
         self._curve_selection_note()
@@ -287,29 +303,31 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         target = row['target']
         curve, source = curve_for(p, target), source_for(p, target)
         axes = row['axes']
-        if target == TRANSFER and curve.get('kind') == 'output_family': axes = '旧输出曲线族：X=Vds / V；Y=Id / A；按 Vgs 分组'
-        text = f"{row['ref']} · {row['role']}\n{axes}\n当前来源：{LABELS[source]}"
+        if target == TRANSFER and curve.get('kind') == 'output_family':
+            axes = '输出曲线族 · X=Vds / V，Y=Id / A，按 Vgs 分组'
+        state = '待导入曲线' if source == 'curve' and not curve else LABELS[source]
+        text = f"{state} · {row['ref']} · {row['role']}\n{axes}"
         if curve:
             points = curve.get('points', []) or [pt for trace in curve.get('traces', []) for pt in trace['points']]
-            text += f"\n{'使用' if source == 'curve' else '已存但不使用'}：{curve.get('name','未命名曲线')} · {len(points)} 点"
+            text += f"\n{'当前曲线' if source == 'curve' else '已存但不使用'} · {curve.get('name','未命名曲线')} · {len(points)} 点"
             if points:
-                text += f"\nX 范围 {min(pt[0] for pt in points):.5g}–{max(pt[0] for pt in points):.5g}；Y 范围 {min(pt[1] for pt in points):.5g}–{max(pt[1] for pt in points):.5g}（上述基本单位）"
+                text += f"\nX 范围 {min(pt[0] for pt in points):.5g} 至 {max(pt[0] for pt in points):.5g} · Y 范围 {min(pt[1] for pt in points):.5g} 至 {max(pt[1] for pt in points):.5g}"
             warning = self._curve_warning(row, curve)
             if warning and source == 'curve': text += '\n' + warning
             origin = curve.get('source', {}).get('filename') or curve.get('import_file', {}).get('filename')
-            if origin: text += '\n文件：' + str(origin)
-            if curve.get('conditions'): text += '\n条件：' + str(curve['conditions'])
-        elif source == 'curve': text += '\n尚未导入，不会自动改用固定值。'
+            if origin: text += '\n数据文件 · ' + str(origin)
+            if curve.get('conditions'): text += '\n测试条件 · ' + str(curve['conditions'])
+        elif source == 'curve': text += '\n导入曲线后可计算。若改用固定值，请切换模型。'
         else: text += '\n手动数值在下方 MOS / 对应输出路 / 防反器件参数组编辑。'
         if target == CHARGE:
-            text += '\n曲线读取 Qgs、Qgd、Qg(th) 与总 Qg；四事件复用所选参考曲线，并非按电流重建 Qgd。'
+            text += '\n曲线给出 Qgs、Qgd、Qg(th) 和总 Qg。四个开关事件共用所选参考曲线。'
         elif target == TRANSFER:
-            text += '\n由电流反查栅压，只是动态米勒平台的静态近似。'
+            text += '\n按电流反查栅压，作为动态米勒平台的静态近似。'
         else:
-            text += '\n正向特性只用于导通损耗；工作点/换流仍用固定 Vf，Qrr 仍单独输入。'
+            text += '\n曲线用于计算导通损耗。工作点和换流用固定 Vf，Qrr 单独输入。'
             model = getattr(self, '_diode_result_models', {}).get(target)
             if model and getattr(self, '_snapshot_valid', False):
-                text += f"\n当前 Pcond={model['P_cond']:.5g} W；If,pk={model['I_max']:.5g} A。"
+                text += f"\n关键结果 · 导通损耗 {model['P_cond']:.5g} W · 峰值电流 {model['I_max']:.5g} A"
         if source == 'curve' and curve:
             text += '\n要解除绑定，请先在「器件模型精度选择」切换为固定值。'
         return text
@@ -343,7 +361,8 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         dialog = tk.Toplevel(self.root); dialog.title(row['ref'] + ' · ' + curve.get('name', '曲线预览'))
         self._device_curve_preview=dialog
         dialog.transient(self.root); dialog.geometry('660x460')
-        ttk.Label(dialog, text=row['role']+'；'+row['axes']+'；数据已换算至基本单位', padding=8).pack(fill='x')
+        ttk.Label(dialog, text=f"{row['ref']} · {row['role']}\n数据按坐标轴所标单位显示。",
+                  padding=8, justify='left').pack(fill='x')
         figure = Figure(figsize=(6.3, 3.6), dpi=100, tight_layout=True); ax = figure.subplots()
         series = curve.get('traces') or [curve]
         for trace in series:
@@ -368,9 +387,9 @@ class DeviceCurveUI(MosCurveUI, DiodeCurveUI):
         curve = self._diode_curves.get(row['target'])
         if not curve: return
         from simple_curve_ui import _place_dialog
-        dialog = tk.Toplevel(self.root); dialog.title('显式选择曲线复用目标'); dialog.transient(self.root)
-        ttk.Label(dialog, text=f"来源 {row['ref']}：{curve['name']}\n请仅选择同型号、同温度/测试条件的二极管；已有绑定会被替换。",
-                  wraplength=400, padding=10).pack(fill='x')
+        dialog = tk.Toplevel(self.root); dialog.title('选择曲线复用目标'); dialog.transient(self.root)
+        ttk.Label(dialog, text=f"来源 · {row['ref']} · {curve['name']}\n选择型号和测试条件相同的二极管。确认后更新所选器件的曲线。",
+                  wraplength=400, justify='left', padding=10).pack(fill='x')
         choices = {}
         for other in self._curve_rows:
             target = other['target']

@@ -256,6 +256,7 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
                 candidate['spice_config'] = recommend_settings(decode_config(candidate),
                     candidate.get('spice_config') or {}, scope='full')
             record['circuit_plan'] = 'automatic_full' if auto_circuit_plan else 'design_settings'
+        prepared = None
         if environment is not None and not resume_field:
             from simulation_environment import check_environment
             environment = dict(environment, ltspice=str(executable))
@@ -281,6 +282,8 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
                                           output_directory=directory, cancelled=cancel)
             candidate, project_file = prepared['config'], prepared['project_file']
             record['reference_preparation'] = prepared['summary']
+        if prepared and prepared.get('connection_update'):
+            publish('prepare', prepared['connection_update'])
         # Seal physical CAD/gap metadata before exporting and hashing the field
         # input, so subsequent adoption does not itself change that geometry.
         if not resume_field:
@@ -393,19 +396,35 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
                 stage.update(status='skipped', error='前置阶段未完成')
     record['elapsed_s'] = time.monotonic()-started
     report_path = directory / REPORT_NAME
+    xlsx_path = report_path.with_suffix('.xlsx')
     try:
         # A cancellation stops solvers. It still gets an honest partial record.
         active = next(s for s in record['stages'] if s['name'] == 'report')
         active.update(status='running', started=time.monotonic())
-        publish('report', '汇总已经完成的证据及未完成原因，生成同一份联合报告')
+        publish('report', '从同一批证据生成 Word 和 Excel 联合报告')
         from joint_simulation_report import write_joint_report
-        record['report_path'] = str(report_path)
+        from joint_simulation_xlsx import write_joint_xlsx
         rendered = copy.deepcopy(record)
         report_stage = next(s for s in rendered['stages'] if s['name'] == 'report')
         report_stage.pop('started', None)
         report_stage['status'] = 'complete'
-        write_joint_report(report_path, rendered, design_run=design_run, spice_result=spice_result)
-        finish()
+        failures = {}
+        for path_key, target, writer in (('report_path',report_path,write_joint_report),
+                                         ('xlsx_path',xlsx_path,write_joint_xlsx)):
+            try:
+                writer(target, rendered, design_run=design_run, spice_result=spice_result)
+                record[path_key] = str(target)
+            except Exception as exc:
+                failures[target.suffix[1:].upper()] = str(exc) or type(exc).__name__
+        if len(failures) == 2:
+            raise RuntimeError('；'.join(f'{fmt}：{error}' for fmt,error in failures.items()))
+        if failures:
+            record['report_errors'] = failures
+            if record['status'] == 'complete':
+                record['status'] = 'partial'
+            finish('partial', error='；'.join(f'{fmt} 报告未生成：{error}' for fmt,error in failures.items()))
+        else:
+            finish()
     except Exception as exc:
         record.update(status='failed', report_error=str(exc))
         if active and active.get('status') == 'running':
@@ -416,6 +435,8 @@ def run_joint_simulation(config, *, tool_root='builtin', project_file=None, outp
         raise failure from exc
     record.update(elapsed_s=time.monotonic()-started, completed_at=datetime.now().astimezone().isoformat())
     _write(manifest, record)
-    return dict(directory=str(directory), report_path=str(report_path), manifest_path=str(manifest),
+    return dict(directory=str(directory), report_path=record.get('report_path'), xlsx_path=record.get('xlsx_path'),
+                manifest_path=str(manifest),
                 status=record['status'], proposed_config=proposed, input_id=record['input_id'],
-                record=record, summary=record.get('error') or ('部分工况未通过，请查看报告' if record['status']=='partial' else '联合流程已完成'))
+                record=record, summary=record.get('error') or ('部分工况或导出需复核，请查看报告和运行记录'
+                if record['status']=='partial' else '联合流程已完成'))

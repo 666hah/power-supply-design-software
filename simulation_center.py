@@ -39,11 +39,10 @@ class SimulationCenter:
         outer = ttk.Frame(win, padding=(10, 7))
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text='仿真配置中心', font=('Microsoft YaHei UI', -18, 'bold')).pack(anchor='w', pady=(0, 8))
+        self.note = ttk.Label(outer, style='ResultConclusion.TLabel', wraplength=900, justify='left')
         self.tabs = ttk.Notebook(outer, style=tab_style)
         self.tabs.pack(fill='both', expand=True)
         self.tabs.bind('<<NotebookTabChanged>>', self.refresh_page)
-        self.note = tk.StringVar(win)
-        ttk.Label(outer, textvariable=self.note, font=('Microsoft YaHei UI', -13)).pack(fill='x')
 
         config = {} if system else owner._config_dict()
         if system:
@@ -81,12 +80,20 @@ class SimulationCenter:
             try:
                 self._ensure(key)
             except (ValueError, OSError, tk.TclError) as exc:
-                self.note.set(str(exc))
+                self._show_note('待复核 · ' + str(exc))
+
+    def _show_note(self, text):
+        if text:
+            self.note.configure(text=text, wraplength=max(320, self.window.winfo_width()-35))
+            self.note.pack(fill='x', before=self.tabs, pady=(0, 7))
+        else:
+            self.note.pack_forget()
 
     def _replace_with_note(self, key, text):
         for widget in self.pages[key].winfo_children():
             widget.destroy()
-        ttk.Label(self.pages[key], text=text, wraplength=640, justify='left').pack(anchor='nw', padx=20, pady=18)
+        ttk.Label(self.pages[key], text=text, style='ResultConclusion.TLabel', wraplength=640,
+                  justify='left').pack(fill='x', padx=20, pady=18)
 
     def _clear_unit_panels(self):
         for panel in self.panels.values():
@@ -96,21 +103,22 @@ class SimulationCenter:
     def _ensure(self, key):
         if self.closed or self.close_pending:
             return None
-        self.note.set('')
+        self._show_note('')
         if self.system:
             return self._ensure_system(key)
         config = self.owner._config_dict()
         revision = getattr(self.owner, '_design_load_revision', 0)
         if revision != self.loaded_design:
             if self.running():
-                self.note.set('当前仿真沿用冻结输入。任务结束后可按新工程配置。')
+                self._show_note('运行中 · 任务结束后可按新工程配置。')
                 return None
             self._clear_unit_panels()
             self.loaded_design = revision
-        field_enabled = _topology(config) in ISOLATED
+        topology = _topology(config)
+        field_enabled = topology in ISOLATED
         if self.environment.field_enabled != field_enabled:
             if self.running():
-                self.note.set('当前仿真沿用冻结输入。任务结束后可按新拓扑配置。')
+                self._show_note('运行中 · 任务结束后可按新拓扑配置。')
                 return None
             container = self.environment.master
             ltspice = self.environment.executable.get()
@@ -130,8 +138,12 @@ class SimulationCenter:
             if existing and existing.job is not None:
                 return existing
             self.panels.pop(key, None)
-            reason = ('当前拓扑没有可提取的变压器。'
-                      if not field_enabled else '当前控制模式未接入闭环联合仿真。可单独运行变压器电磁仿真。')
+            if topology == 'LLC':
+                reason = '暂未接入 · LLC 当前支持电路仿真。'
+            elif not field_enabled:
+                reason = '不适用 · 当前拓扑没有可提取的变压器。'
+            else:
+                reason = '暂未接入 · 当前控制模式可单独运行变压器电磁仿真。'
             self._replace_with_note(key, reason)
             return None
         if existing:
@@ -164,7 +176,9 @@ class SimulationCenter:
 
         parameters = self._parameters()
         identity = (parameters.get('topology'), parameters.get('feedback_mode'),
-                    parameters.get('control_mode'), cot_active(parameters), id(self.environment))
+                    parameters.get('control_mode'),
+                    parameters.get('llc_bridge') if parameters.get('topology') == 'LLC' else None,
+                    cot_active(parameters), id(self.environment))
         existing = self.panels.get('circuit')
         if existing and (identity == self.circuit_key or existing.busy()):
             return existing
@@ -173,7 +187,7 @@ class SimulationCenter:
             widget.destroy()
         self.circuit_key = identity
         if not supports_design(parameters):
-            self._replace_with_note('circuit', '当前拓扑或反馈模式未接入 LTspice 闭环对比。')
+            self._replace_with_note('circuit', '暂未接入 · 当前拓扑或反馈模式暂无 LTspice 闭环对比。')
             return None
 
         def apply(data):
@@ -197,10 +211,11 @@ class SimulationCenter:
             return self.panels[key]
         if key == 'unit' and not self.pages[key].winfo_children():
             page = self.pages[key]
-            ttk.Label(page, text='选择电源单元后，进入它的电路仿真、变压器电磁或联合仿真。',
-                      wraplength=650).pack(anchor='nw', padx=18, pady=(18, 9))
             units = self.scope.get('units', [])
             names = {f"{row['id']} · {row['name']}": row['id'] for row in units}
+            ttk.Label(page, text='选择电源单元后，可打开该单元的仿真配置。' if names else
+                      '暂无电源单元 · 请先在系统架构中添加电源单元。',
+                      style='ResultConclusion.TLabel', wraplength=650).pack(fill='x', padx=18, pady=(18, 9))
             selected = tk.StringVar(page, next(iter(names), ''))
             ttk.Combobox(page, textvariable=selected, state='readonly', values=list(names),
                          width=30).pack(anchor='nw', padx=18, pady=8)
@@ -237,7 +252,7 @@ class SimulationCenter:
                 self.close_pending = True
                 for panel in self.panels.values():
                     panel.cancel()
-            self.note.set('正在停止当前仿真；运行日志会保留。')
+            self._show_note('正在取消 · 等待求解器停止。')
             self.pending_close = self.window.after(120, self.close)
             return
         self.window.destroy()
@@ -266,7 +281,7 @@ def show(owner, tab, *, system=False, comparison=False):
     try:
         return center.go(tab, comparison=comparison)
     except (ValueError, OSError, tk.TclError) as exc:
-        center.note.set(str(exc))
+        center._show_note('待复核 · ' + str(exc))
         center.window.deiconify()
         center.window.lift()
         return center.window

@@ -242,6 +242,8 @@ def run_transformer_simulation(config, *, tool_root='builtin', project_file=None
                                                   cancelled=cancelled)
             config, project_file = prepared['config'], prepared['project_file']
             preparation = prepared['summary']
+            if prepared.get('connection_update'):
+                stage(prepared['connection_update'])
             tool_root = 'builtin'
         elif not project_file:
             raise ValueError('请自动准备当前设计，或选择已有场解提取设置。')

@@ -132,6 +132,42 @@ class FrequencyRaw:
         if np.any(np.diff(self.frequency)<=0) or not np.all(np.isfinite(values)):raise ValueError('FRA 频点非递增或含无效数值')
 
 
+def minimum_phase_margin(metrics):
+    """Use the least favorable crossing when the sweep found a downward crossing."""
+    def finite(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    primary = finite(metrics.get('pm'))
+    if primary is None:
+        return None
+    margins = [primary]
+    margins.extend(margin for crossing in metrics.get('crossings') or ()
+                   if (margin := finite(crossing.get('pm'))) is not None)
+    return min(margins)
+
+
+def llc_fra_phase_margin(case):
+    """Extract an LLC FRA margin from a complete, half-amplitude-verified sweep."""
+    points = case.get('fra') or ()
+    if case.get('fra_status') != '完成' or len(points) < 2 or not all(p.get('valid') for p in points):
+        return None
+    try:
+        samples = sorted((float(point['frequency_Hz']), float(point['main']['gain_db']),
+                          float(point['main']['phase_deg'])) for point in points)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    frequency, amplitude, phase = (np.asarray(values) for values in zip(*samples))
+    if (not np.isfinite(samples).all() or frequency[0] <= 0 or np.any(np.diff(frequency) <= 0)
+            or np.any(np.abs(amplitude) > 600)):
+        return None
+    gain = 10 ** (amplitude / 20) * np.exp(1j * np.deg2rad(phase))
+    return minimum_phase_margin(loop_metrics(frequency, gain))
+
+
 def loop_metrics(frequency,gain):
     f=np.asarray(frequency);gain=np.asarray(gain)
     db=20*np.log10(np.maximum(np.abs(gain),1e-30));phase=np.degrees(np.unwrap(np.angle(gain)))

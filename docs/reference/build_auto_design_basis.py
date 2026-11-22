@@ -12,6 +12,7 @@ from docx.oxml.ns import qn
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx_layout import new_document, paragraph, table, section, equation
 from docs.apply_book_style_to_help import apply_book_style, register_basis_notation
+from docs.update_llc_auto_design_basis import append_llc_basis
 from design_engine.sizing_basis import DOCUMENT, REVISION, SCOPE, SOURCES
 
 
@@ -234,13 +235,15 @@ def build(vm, pcm, boost, flyback, dcm, multi, output):
     tab(['拓扑','接入状态与主要校核'],[(k,v) for k,v in SCOPE.items()],[1.52,5.58])
     h('原厂资料')
     for key in SOURCES:
-        if key in ('FLYBACK-DCM','MP6005','RCD','CROSS'): continue
+        if key in ('FLYBACK-DCM','MP6005','RCD','CROSS','LLC','HHC'): continue
         label, detail, _ = SOURCES[key]
         p = doc.add_paragraph()
         vendor_link(p,key)
         p.add_run('  ·  '+detail)
     note('反激补充资料见第 8–10 页。每个拓扑区分原厂规格、项目自定余量、实物料号及其测试条件。')
-    apply_book_style(doc, kind='basis').save(output)
+    apply_book_style(doc, kind='basis')
+    append_llc_basis(doc)
+    doc.save(output)
 
 
 if __name__=='__main__':

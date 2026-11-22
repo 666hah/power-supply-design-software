@@ -3,6 +3,23 @@ import math
 
 import numpy as np
 
+from loop_acceptance import MIN_PHASE_MARGIN_DEG, phase_margin_passes
+from spice_analysis import minimum_phase_margin
+
+
+def fra_phase_margin(probe):
+    """Return the measured minimum only after FRA verification."""
+    return minimum_phase_margin((probe.get('simulation') or {}).get('loop') or {}) if probe.get('available') else None
+
+
+def phase_margin_conclusion(margin):
+    if margin is None:
+        return '待补有效裕度'
+    return '通过' if phase_margin_passes(margin) else '未达标'
+
+
+PHASE_MARGIN_RULE = f'相位裕度验收要求严格大于 {MIN_PHASE_MARGIN_DEG:g}°，按原始数值判定。'
+
 
 def _number(value):
     try:
@@ -187,11 +204,14 @@ def black_box_sections(case, settings):
     loop = case.get('loop') or {}
     designed = (loop.get('design') or {}).get('loop') or {}
     simulated = (loop.get('simulation') or {}).get('loop') or {}
+    measured_pm = fra_phase_margin(loop)
+    loop_note = ('FRA 注入复核通过。' + PHASE_MARGIN_RULE if loop.get('available') else
+                 'FRA 未确认。' + str(loop.get('error') or ('未取得有效测量' if settings.get('fra_enabled') else '未选择该项')))
     section('额定负载环路',['指标','设计计算','开关闭环 FRA'],
-            [(label,_fmt(designed.get(key)),_fmt(simulated.get(key))) for key,label in
-             [('fc','穿越频率 / Hz'),('pm','相位裕度 / °'),('gm_db','增益裕度 / dB')]],
-            '原生 FRA 已通过复核。' if loop.get('available') else
-            'FRA 未确认。'+str(loop.get('error') or ('未取得有效测量' if settings.get('fra_enabled') else '未选择该项')))
+            [('穿越频率 / Hz',_fmt(designed.get('fc')),_fmt(simulated.get('fc'))),
+             ('最小相位裕度 / °',_fmt(minimum_phase_margin(designed)),_fmt(minimum_phase_margin(simulated))),
+             ('增益裕度 / dB',_fmt(designed.get('gm_db')),_fmt(simulated.get('gm_db'))),
+             ('FRA 相位裕度验收','—',phase_margin_conclusion(measured_pm))],loop_note)
     cross = case.get('cross') or {}
     envelopes = cross.get('summary') or {}
     reg_rows = []

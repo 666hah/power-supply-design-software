@@ -27,12 +27,27 @@ RULES = {
     'other_ripple': ('其他电容纹波 RMS', None, None, '需自定义限值及依据'),
 }
 TEXT_FIELDS = ('manufacturer', 'model', 'package', 'conditions', 'note')
-RATING_FIELDS = ('voltage_V', 'ripple_A', 'power_W')
+RATING_FIELDS = ('voltage_V', 'ripple_A', 'power_W', 'current_rms_A', 'current_avg_A', 'current_peak_A')
+RATINGS_BY_KIND = {
+    'mos': ('voltage_V', 'current_rms_A', 'current_peak_A'),
+    'diode': ('voltage_V', 'current_avg_A', 'current_peak_A'),
+    'capacitor': ('voltage_V', 'ripple_A'),
+    'resistor': ('power_W',),
+}
+# The current fields are application-adjusted allowable values entered per device.
+CURRENT_RULES = {
+    'mos_current_rms': 'MOS 电流 RMS',
+    'diode_current_avg': '二极管正向平均电流',
+    'mos_current_peak': 'MOS 重复峰值电流',
+    'diode_current_peak': '二极管正向重复峰值电流',
+}
 
 
 def primary_mos_role(p):
     """Identity projection only: polarity does not change the amplitude model."""
     from cot_settings import active
+    if p.get('topology') == 'LLC':
+        return '左桥臂高侧 N-MOS'
     if active(p):
         return '各相高侧 N-MOS'
     item = ((p.get('component_management') or {}).get('items') or {}).get('Q1') or {}
@@ -44,6 +59,9 @@ def primary_mos_role(p):
 
 def controller_reference(p):
     """A selected IC reference, never an invented pin-level circuit."""
+    if p.get('topology') == 'LLC':
+        from llc_ui import llc_controller_reference
+        return llc_controller_reference(p)
     from cot_settings import active
     if active(p):
         config=p.get('cot_config') or {}
@@ -118,6 +136,9 @@ def component_registry(p, res=None):
     Retired topology/output drafts are kept in saved items but not displayed or
     checked. Multi-output capacitors/rectifiers have independent identities.
     """
+    if p.get('topology') == 'LLC':
+        from llc_ui import llc_component_rows
+        return [row for row in llc_component_rows(p) if row['kind'] != 'load']
     rows = []
     from cot_settings import active
     cot = active(p)
@@ -191,6 +212,9 @@ def component_registry(p, res=None):
 
 
 def rule_for(config, key):
+    if key in CURRENT_RULES:
+        return dict(key=key, label=CURRENT_RULES[key], factor=1.,
+                    source='器件 BOM 填写的适用电流限值', custom=False)
     spec = RULES[key]
     custom = key in config['overrides']
     ratio = config['overrides'].get(key, spec[1 if config['zone'] == 'I' else 2])
@@ -216,21 +240,86 @@ def _input_cap_voltage(p, res):
     return abs(float(res['op'].get('V_in_bus',res['op']['V_in'])))+float(np.max(np.abs(np.fft.irfft(spectrum, n=len(x)))))
 
 
+def _clamp_diode_current(op):
+    """Cycle-average and peak current from the existing RCD diode models."""
+    import numpy as np
+    clamp = op.get('clamp') or {}
+    coupled = op.get('coupled_solution')
+    if coupled is not None and coupled.get('i_clamp') is not None:
+        current = np.maximum(coupled['i_clamp'], 0.)
+        return (float(np.trapezoid(current, coupled['t']) / op['Ts']), float(np.max(current)),
+                '耦合绕组周期解的理想定压钳位二极管电流，未含恢复与寄生振铃。')
+    if clamp.get('model') == 'nominal_leakage_envelope':
+        if clamp['t_pulse'] >= (1. - op['D']) * op['Ts']:
+            return None, None, '漏感复位超出关断区间，快速钳位模型不适用于该工况。'
+        peak = clamp['I_clamp_start']
+        return (.5 * peak * clamp['t_decay'] / op['Ts'], peak,
+                '快速钳位模型的三角形二极管脉冲，未含恢复与寄生振铃。')
+    return None, None, '该工况缺少钳位二极管电流模型。'
+
+
 def stress_map(p, res):
     """(designator,metric) -> model value/note, no fabricated missing stress."""
     import numpy as np
     from semiconductor import device_stress
     op = res['op']
-    s = device_stress(op)
-    edges = {edge['ref'].split('（', 1)[0]: edge
-             for edge in (op.get('parasitics') or {}).get('edges', [])}
     data = {}
     def put(ref, key, val, note=''):
         data[(ref, key)] = (_finite(val), note)
+
+    def mos_current(ref, stress, note):
+        put(ref, 'current_rms', stress.get('I_rms'), note)
+        put(ref, 'current_peak', stress.get('I_pk'), note)
+
+    def diode_current(ref, average, peak, note, peak_note=None):
+        put(ref, 'current_avg', average, note)
+        put(ref, 'current_peak', peak, peak_note or note)
+
+    def blocking_output_current(ref, rail_op):
+        diode_current(ref, rail_op.get('I_out'), None, '防反管后端口的稳态负载电流。',
+                      '防反管的瞬态正向峰值未单独求解。')
+
+    if p.get('d_in_enable'):
+        input_current = op.get('I_in_avg')
+        if input_current is None and 'i_in' in res['wf']:
+            input_current = float(np.mean(res['wf']['i_in']))
+        diode_current('D_IN', input_current, None, '稳态输入源平均电流，输入电容周期净电荷为零。',
+                      '输入电源、布线与输入电容间的峰值分流、上电浪涌未单独求解。')
+    if p.get('topology') == 'LLC':
+        llc = op.get('llc') or {}
+        s = device_stress(op)
+        for index in range(1, 5 if p.get('llc_bridge') == 'full' else 3):
+            put(f'Q{index}', 'voltage', llc.get('switch_peak_V', op.get('V_sw_max')),
+                'LLC 稳态阻断电压；布局引起的寄生尖峰须在开关仿真或样机核对。')
+            mos_current(f'Q{index}', s['switch'], 'LLC 半周对称周期解的单颗 MOS 沟道电流。')
+        for index in range(1, 5):
+            put(f'D{index}', 'voltage', llc.get('rectifier_reverse_peak_V', op.get('V_d_max')),
+                'LLC 全桥整流的稳态反压峰值。')
+            diode_current(f'D{index}', s['diode']['I_avg'], s['diode']['I_pk'],
+                          'LLC 全桥整流的单颗二极管正向电流，按完整开关周期统计。')
+        if p.get('d_out_enable'):
+            blocking_output_current('D_OUT', op)
+        put('C_R', 'voltage', llc.get('cr_peak_V'),
+            '谐振电容绝对峰值，包含半桥直流偏置。')
+        put('C_R', 'ripple', llc.get('ir_rms_A'),
+            '串联谐振电流有效值；额定电流须按实际频率和温度核对。')
+        for side, prefix in (('input', 'C_IN'), ('output', 'C_O')):
+            wf = res['wf']
+            voltage = (_input_cap_voltage(p, res) if side == 'input' else
+                       float(np.max(np.abs(wf['vcap'] if 'vcap' in wf else wf['vout']))))
+            for i, cap in enumerate(res.get('capacitors', {}).get(side, {}).get('caps', []), 1):
+                put(f'{prefix}{i}', 'voltage', voltage, '稳态端电压包络。')
+                put(f'{prefix}{i}', 'ripple', cap['total'], '本颗电容分流 RMS。')
+        return data
+    s = device_stress(op)
+    edges = {edge['ref'].split('（', 1)[0]: edge
+             for edge in (op.get('parasitics') or {}).get('edges', [])}
     c = op.get('clamp') or {}
     for ref, key in [('Q1', 'switch'), ('Q2', 'auxiliary')]:
         if key not in s:
             continue
+        mos_current(ref, s[key],
+                    'COT 各相单颗 MOS 中的最高模型电流。' if op.get('cot') else '功率级模型的单颗 MOS 稳态电流。')
         plateau = s[key].get('V_block', s[key]['V_max'])
         put(ref, 'voltage', plateau,
             s[key].get('blocking_voltage_note', '模型稳态阻断平台，不含未建模寄生振铃。'))
@@ -258,7 +347,9 @@ def stress_map(p, res):
         voltage = c.get('V_clamp')
         put('C_SN1', 'voltage', voltage*(1+p.get('dC', .1)/2) if voltage is not None else None,
             '钳位电容直流加半峰峰纹波估算。')
+        put('C_SN1', 'ripple', None, '钳位模型未求解电容支路的 RMS 电流，需用支路波形核对。')
         put('D_SN1', 'voltage', None, '钳位二极管反压未单独求解，不套用主整流二极管应力。')
+        diode_current('D_SN1', *_clamp_diode_current(op))
     if p.get('topology') == 'ACF-FORWARD':
         put('C_CL1', 'voltage', op['V_clamp'] + op['V_clamp_hump'], '钳位电容直流与纹波峰值之和。')
         put('C_CL1', 'ripple', op.get('I_clamp_rms'), '钳位电流 RMS，未含未建模振铃。')
@@ -277,11 +368,17 @@ def stress_map(p, res):
         if 'diode' in rs:
             put(rect, 'voltage', rs['diode']['V_max'],
                 reverse_basis + '，样机复测。')
+            diode_current(rect, rs['diode']['I_avg'], rs['diode']['I_pk'], '本路整流/续流二极管的稳态正向电流。')
         if 'freewheel' in rs:
-            put(f'D_F{i}' if multi else 'D2', 'voltage', rs['freewheel']['V_max'],
+            freewheel = f'D_F{i}' if multi else 'D2'
+            put(freewheel, 'voltage', rs['freewheel']['V_max'],
                 ('周期模型峰值' if op.get('acf_solution') else '未考虑寄生尖峰') + '，样机复测。')
+            diode_current(freewheel, rs['freewheel']['I_avg'], rs['freewheel']['I_pk'],
+                          '本路续流二极管的稳态正向电流。')
         # Blocking reverse voltage depends on external back-feed conditions.
-        put(f'D_B{i}' if multi else 'D_OUT', 'voltage', None, '防反二极管需外部反接/回灌最大电压，不能用正向输出电压代替。')
+        blocking = f'D_B{i}' if multi else 'D_OUT'
+        put(blocking, 'voltage', None, '防反二极管需外部反接/回灌最大电压，不能用正向输出电压代替。')
+        blocking_output_current(blocking, rop)
         wf = res['wf']['outputs'][i-1] if res.get('outputs') else res['wf']
         peak = float(np.max(np.abs(np.asarray(wf.get('vcap',wf['vout']))+np.asarray(wf.get('v_esl', 0.)))))
         for j, cap in enumerate(rail['capacitors']['output']['caps']):
@@ -323,8 +420,12 @@ def evaluate_components(p, res=None):
             check('voltage', 'mos_voltage', 'voltage_V', 'V')
             regular = (ref, 'peak_regular') in data
             check('peak', 'mos_voltage' if regular else 'mos_spike', 'voltage_V', 'V', 'peak_regular' if regular else 'spike')
+            check('current_rms', 'mos_current_rms', 'current_rms_A', 'A',
+                  note='填写实际散热与结温条件下允许的 RMS 电流。')
         elif kind == 'diode':
             check('voltage', 'diode_voltage', 'voltage_V', 'V')
+            check('current_avg', 'diode_current_avg', 'current_avg_A', 'A',
+                  note='填写实际散热、温度和波形条件下允许的正向平均电流。')
             # Explicit open item: a steady-state pass is not a spike sign-off.
             row_checks.append(dict(id='bom_'+ref+'_spike',ref=ref,name=ref+' 尖峰反压',metric='spike',
                 value=None,rating=item.get('voltage_V'),factor=None,limit=None,unit='V',utilization=None,margin=None,
@@ -337,6 +438,9 @@ def evaluate_components(p, res=None):
             check('ripple', ctype+'_ripple', 'ripple_A', 'A')
         elif kind == 'resistor':
             check('power', 'resistor_power', 'power_W', 'W')
+        if kind in ('mos', 'diode') and item.get('current_peak_A') is not None:
+            check('current_peak', kind+'_current_peak', 'current_peak_A', 'A',
+                  note='填写适用温度、脉宽、占空比和重复频率的峰值限值。单次浪涌额定不适用于此项。')
         missing = [label for key,label in [('manufacturer','厂家'),('model','型号'),('package','封装')] if not item.get(key)]
         row['identity_missing'] = missing
         row['checks'] = row_checks
@@ -370,6 +474,8 @@ def stress_groups(data):
 def rating_text(row):
     parts = []
     for key, label, unit in [('voltage_V', 'Vds' if row['kind']=='mos' else 'Vrrm' if row['kind']=='diode' else '耐压', 'V'),
+                             ('current_rms_A','允许 RMS','A'),('current_avg_A','允许正向平均','A'),
+                             ('current_peak_A','允许重复峰值','A'),
                              ('ripple_A','纹波能力','A'),('power_W','额定功率','W')]:
         if row.get(key) is not None:
             parts.append(f'{label}={row[key]:g}{unit}')

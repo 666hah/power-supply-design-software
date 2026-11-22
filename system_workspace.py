@@ -95,9 +95,10 @@ def sync_input(project, identity):
     if row['source_min'] is None or row['source_min'] <= 0:
         raise ValueError('没有有效的正电压输入，请先检查连线、节点启用与二极管压降。')
     lo, hi = row['source_min'], row['source_max']
-    spec = copy.deepcopy(unit_by_id(project, identity)['spec'])
-    spec.update(V_in_min=lo, V_in_max=hi, V_in=lo, input_voltage_case='min')
-    set_unit_config(project, identity, spec)
+    spec = unit_by_id(project, identity)['spec']
+    upstream = dict(V_in_min=lo, V_in_max=hi, V_in=lo, input_voltage_case='min')
+    if any(spec.get(name) != value for name, value in upstream.items()):
+        set_unit_config(project, identity, dict(spec, **upstream))
     return lo, hi
 
 

@@ -5,8 +5,11 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from threading import Barrier
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -176,6 +179,48 @@ class PlanningChecks(unittest.TestCase):
             self.assertEqual(step.call_count,2)
             self.assertTrue(result['incomplete']);self.assertEqual(result['cross_total'],2)
             self.assertEqual(result['cross_successful'],0)
+
+    def test_parallel_report_keeps_endpoint_order_and_waits_before_line_load(self):
+        bundle = self.design_run.runtime_bundle()
+        bundle['base_spec']['spice_config'] = dict(bundle['base_spec']['spice_config'],
+            short_test=0, fra_enabled=0, cross_enabled=0, line_load_enabled=1, simulation_reuse=0)
+        run = SimpleNamespace(runtime_bundle=lambda: bundle)
+        overlap = Barrier(2, timeout=8)
+        step_complete = []
+        progress = []
+
+        def nominal(exe, folder, case, meta, settings, record, cancelled, progress=None):
+            overlap.wait()
+            (folder/'Flyback.log').write_text(str(case['voltage']), encoding='utf-8')
+            record.update(complete=True, nominal_comparable=True, periodicity=dict(stable=True))
+
+        def step(files, case, settings, folder, execute, **kwargs):
+            step_complete.append(case['voltage'])
+            return dict(complete=True)
+
+        def line(files, rails, voltages, settings, frequency, folder, execute):
+            self.assertCountEqual(step_complete, voltages)
+            self.assertIn(b'.param VIN=30', files['design_params.inc'])
+            return dict(complete=True)
+
+        with tempfile.TemporaryDirectory(dir=ROOT/'artifacts') as td, \
+             patch('spice_runtime.endpoint_workers', return_value=2), \
+             patch('spice_runtime._simulate_nominal', new=nominal), \
+             patch('flyback_cap_boundary.attach_comparison'), \
+             patch('spice_boundary.run_load_transient', new=step), \
+             patch('spice_line_load.run_line_load', new=line), \
+             patch('spice_comparison_report.write_report', side_effect=lambda p,e:Path(p).write_bytes(b'report')):
+            result = compare_design(run, Path(td)/'test.docx', executable=sys.executable,
+                                    progress=lambda i,t,label:progress.append((i,t,label)))
+            with ZipFile(result['path']) as archive:
+                evidence = json.loads(archive.read('comparison.json'))
+                cases = evidence['cases']
+                self.assertEqual([case['voltage'] for case in cases], [20, 30])
+                self.assertEqual([float(archive.read(case['id']+'/Flyback.log')) for case in cases], [20, 30])
+                self.assertEqual(evidence['execution']['endpoint_workers'], 2)
+            self.assertFalse(result['incomplete'])
+            self.assertEqual([i for i,_,_ in progress], sorted(i for i,_,_ in progress))
+            self.assertEqual(progress[-1][:2], (5, 5))
 
 
 if __name__=='__main__':unittest.main()

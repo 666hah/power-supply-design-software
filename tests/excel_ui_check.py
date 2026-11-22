@@ -10,9 +10,11 @@ def run():
     root=tk.Tk();root.withdraw();app=main.PowerSupplyAnalyzer(root)
     try:
         menu=root.nametowidget(root.cget('menu'))
-        helpmenu=root.nametowidget(menu.entrycget('Help (帮助)','menu'))
-        assert [helpmenu.entrycget(i,'label') for i in range(helpmenu.index('end')+1)] == [
-            '计算方法与公式说明','多路反激电源设计入门教程','自动计算参数依据']
+        helpmenu=root.nametowidget(menu.entrycget('帮助','menu'))
+        labels = [helpmenu.entrycget(i, 'label') for i in range(helpmenu.index('end')+1)
+                  if helpmenu.type(i) == 'command']
+        assert labels[:4] == ['计算方法与公式说明', '开关电源介绍与计算方法',
+                              '多路反激电源设计入门教程', '自动计算参数依据']
         app.set_param('V_in_min',27.);app.set_param('V_in_max',33.)
         app.update_all()
         snapshot=main._calculate_input_report(dict(p=app._last['p']),lambda:False)
@@ -26,7 +28,7 @@ def run():
             assert ('Excel 模块对照报告','*.xlsx') in dialog.call_args.kwargs['filetypes']
             assert not error.called,error.call_args
             assert info.call_args.args[0]=='Excel 设计报告'
-            assert 'Sheet' in info.call_args.args[1]
+            assert '工作表' in info.call_args.args[1]
             assert out.is_file() and not root.cget('cursor')
             assert exporter.call_args.kwargs['compensation_state']==app._comp_state()
             assert exporter.call_args.kwargs['mos_real_time']==app.mos_real_time.get()

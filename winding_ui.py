@@ -34,6 +34,7 @@ class WindingUI:
         self._winding_row_signature=None
         self._winding_assessment=None
         self._geometry_profile=None
+        self._winding_preview_core_reference=None
         self._winding_selected=tk.StringVar(value='P')
         self._winding_selected.trace_add('write',self._select_winding_details)
         self._winding_binding_details=False
@@ -62,6 +63,8 @@ class WindingUI:
                       turn_positions=copy.deepcopy(self._winding_positions))
         if self._geometry_profile is not None:
             values['model_3d']=self._geometry_profile
+        if self._winding_preview_core_reference is not None:
+            values['preview_core_reference']=self._winding_preview_core_reference
         for key,variables in self._winding_overrides.items():
             try:
                 entry={name:(variable.get() if name in WIRE_CHOICES else float(variable.get() or 0))
@@ -98,6 +101,7 @@ class WindingUI:
                 self._winding_vars[key].set('' if key in ('window_width','window_height') and not value else f'{value:.10g}')
             self._winding_order=list(candidate['order'])
             self._geometry_profile=candidate.get('model_3d')
+            self._winding_preview_core_reference=candidate.get('preview_core_reference')
             self._winding_positions=copy.deepcopy(candidate.get('turn_positions',{}))
             self._winding_position_history=[]
             self._winding_layer_plan=[dict(entry,turns=str(entry['turns'])) for entry in candidate.get('layer_plan',[])]
@@ -138,7 +142,18 @@ class WindingUI:
             widget=ttk.Label(body,wraplength=850,justify='left',**options)
             self._winding_labels.append(widget)
             return widget
-        label(text='骨架净窗口的单侧轴向 × 径向截面；每束多股线画一个等效截面，所有尺寸按同一比例绘制。不能用磁芯 Wa 直接代替窗口宽高。',
+        self.winding_summary = tk.StringVar(value='待填写骨架净窗口的宽度和高度')
+        self._winding_conclusion = tk.StringVar()
+        self._winding_evidence = tk.StringVar()
+        def project_summary(*_args):
+            conclusion, _, evidence = self.winding_summary.get().partition('\n')
+            self._winding_conclusion.set(conclusion)
+            self._winding_evidence.set(evidence)
+        self.winding_summary.trace_add('write', project_summary)
+        project_summary()
+        label(textvariable=self._winding_conclusion, style='ResultConclusion.TLabel').pack(
+            fill='x', padx=10, pady=(8, 4))
+        label(text='填写骨架的净窗口尺寸。截面图按同一比例绘制，每个线束显示一个等效截面。',
                   style='Muted.TLabel').pack(fill='x',padx=10,pady=(9,5))
         from geometry_ui import edit_profile,export_package
         model_bar=ttk.Frame(body);model_bar.pack(fill='x',padx=9,pady=(0,4))
@@ -146,9 +161,9 @@ class WindingUI:
         ttk.Button(model_bar,text='3D 结构预览…',command=lambda:open_preview(self)).pack(side='left',padx=(0,6))
         ttk.Button(model_bar,text='三维建模设置…',command=lambda:edit_profile(self)).pack(side='left')
         ttk.Button(model_bar,text='导出三维建模数据…',command=lambda:export_package(self)).pack(side='left',padx=6)
-        ttk.Button(model_bar,text='仿真与报告中心…',
-                   command=self._export_joint_ui).pack(side='left')
-        inputs=ttk.LabelFrame(body,text='窗口与绝缘设置（长度均为 mm）',padding=7)
+        if hasattr(self, '_export_joint_ui'):
+            ttk.Button(model_bar, text='仿真与报告中心…', command=self._export_joint_ui).pack(side='left')
+        inputs=ttk.LabelFrame(body,text='净窗口与绝缘 / mm',padding=7)
         inputs.pack(fill='x',padx=8,pady=4)
         self._winding_geometry_frame=inputs
         self._winding_geometry_widgets=[]
@@ -164,19 +179,18 @@ class WindingUI:
             inputs.columnconfigure(column,weight=1)
         self._winding_insulation_note=tk.StringVar()
         label(textvariable=self._winding_insulation_note,style='Muted.TLabel').pack(fill='x',padx=10,pady=4)
-        label(text='左侧“线圈并绕数”是相同整根线的并联根数：2 根、6 匝共 12 个线束截面，电气匝数仍为 6。股数表示单根线内股数；下方分束只分配已有股数。自动模式将多股视为利兹线，单股铜线不压扁。',
+        label(text='并绕数是每匝并联的完整线数。2 根线并绕 6 匝时，截面显示 12 束，电气匝数为 6。分束仅分配单根线内已有股数。自动模式按多股利兹线、单股不压扁处理。',
                   style='Muted.TLabel').pack(fill='x',padx=10,pady=5)
-        self._winding_rows_frame=ttk.LabelFrame(body,text='绕组顺序（由骨架向外）· 点选绕组后编辑下方设置',padding=5)
+        self._winding_rows_frame=ttk.LabelFrame(body,text='绕组顺序（由骨架向外）',padding=5)
         self._winding_rows_frame.pack(fill='x',padx=8,pady=4)
         controls=ttk.Frame(body,padding=(8,3))
         controls.pack(fill='x')
         ttk.Button(controls,text='所选绕组上移',command=lambda:self._move_winding(-1)).pack(side='left',padx=3)
         ttk.Button(controls,text='下移',command=lambda:self._move_winding(1)).pack(side='left',padx=3)
-        ttk.Button(controls,text='重新评估 / 重画',command=self._refresh_winding).pack(side='right',padx=3)
+        ttk.Button(controls,text='重新评估绕组',command=self._refresh_winding).pack(side='right',padx=3)
         self._build_winding_details(body,label)
         self._build_winding_plan(body,label)
-        self.winding_summary=tk.StringVar(value='请先填写骨架窗口净宽与净高。')
-        label(textvariable=self.winding_summary,style='Result.TLabel').pack(fill='x',padx=10,pady=6)
+        label(textvariable=self._winding_evidence,style='Result.TLabel').pack(fill='x',padx=10,pady=6)
         self._winding_length_note=tk.StringVar(value='绕组长度和平均匝长 MLT 待计算。')
         label(textvariable=self._winding_length_note,style='Result.TLabel').pack(fill='x',padx=10,pady=(0,6))
         editbar=ttk.Frame(body,padding=(8,4));editbar.pack(fill='x')
@@ -198,7 +212,7 @@ class WindingUI:
         from winding_drag_ui import WindingDragController
         self._winding_drag=WindingDragController(self.canvas_winding,self.ax_winding,self._commit_winding_position,
             self._winding_position_note,self._winding_move_step,self._undo_winding_position)
-        label(text='截面用于检查绕组、留边和绝缘。图中挡墙为示意。默认利兹线压扁宽 ×1.5、高 ÷1.5，外径与绝缘按实物填写。调整绕组后会更新平均匝长及铜阻。漏感和耦合系数仍由其模型配置或场解给出。',
+        label(text='挡墙为示意。利兹线默认按宽度 ×1.5、高度 ÷1.5 估算，外径和绝缘按实物填写。绕组位置会影响平均匝长和铜阻。漏感和耦合系数来自模型设置或场解。',
                   style='Muted.TLabel').pack(fill='x',padx=10,pady=(6,12))
         body.bind('<Configure>',self._resize_winding_text,add='+')
         parent.bind('<Destroy>',lambda event:self._cancel_winding_redraw() if event.widget is parent else None,add='+')
@@ -609,7 +623,7 @@ class WindingUI:
 
     def _mark_winding_stale(self):
         if self._winding_source is not None and hasattr(self,'winding_summary'):
-            note='电气参数已变化，以下仅对应上一有效计算；新计算完成后自动更新。'
+            note='电气参数有修改。当前显示上一有效计算，结果待更新。'
             text=self.winding_summary.get()
             if not text.startswith(note):
                 self.winding_summary.set(note+'\n'+text)
@@ -632,24 +646,25 @@ class WindingUI:
             artists=draw_winding_cross_section(self.ax_winding,assessment)
             if hasattr(self,'_winding_drag'):self._winding_drag.scene(assessment,artists)
             if not assessment['configured']:
-                text='请填写骨架净窗口宽和高。默认留边及绝缘值仅供预估，须按实际材料和工艺修改。'
+                text='待填写骨架净窗口的宽度和高度\n留边和绝缘尺寸请按材料与工艺填写。'
             elif not assessment['windings']:
-                text='尚无有效变压器参数；请先完成电气计算。'
+                text='待完成变压器电气计算'
             else:
-                prefix='当前手动逐层方案：' if cfg.get('layer_plan') else '当前指定层绕方案：'
-                text=prefix+('可放下' if assessment['fits'] else '超出窗口')
-                text+=f" · 所需总高 {assessment['required_height']*1e3:.4g} mm / 净窗高 {cfg['window_height']*1e3:g} mm"
-                text+=f" · 高度余量 {assessment['height_margin']*1e3:+.4g} mm · 裸铜面积占比 {assessment['copper_fill']*100:.1f}%"
+                plan = '手动逐层方案' if cfg.get('layer_plan') else '指定层绕方案'
+                text = ('可装入窗口' if assessment['fits'] else '超出窗口') + f" · {plan}"
+                text += f" · 高度余量 {assessment['height_margin']*1e3:+.4g} mm"
+                text += f"\n所需高度 {assessment['required_height']*1e3:.4g} mm · 净窗口高度 {cfg['window_height']*1e3:g} mm"
+                text += f" · 裸铜面积占比 {assessment['copper_fill']*100:.1f}%"
                 def layer_summary(row):
                     indices=row.get('physical_layer_indices')
                     location='（实体层 '+ '、'.join(map(str,indices))+'）' if cfg.get('layer_plan') and indices else ''
                     per_layer='各层 '+ ' / '.join(map(str,row['layer_turns']))+' 匝' if cfg.get('layer_plan') and row.get('layer_turns') else f"{row['turns_per_layer']} 匝/层"
                     return f"{row['id']}：{row['layers']} 层{location}，{per_layer}，单束 {row['bundle_width']*1e3:.3g} × {row['bundle_height']*1e3:.3g} mm"
-                text+='\n'+'；'.join(layer_summary(row) for row in assessment['windings'])
+                text+='\n'+'\n'.join(layer_summary(row) for row in assessment['windings'])
                 if not assessment['fits']:
                     text+='\n'+'；'.join(assessment['warnings'][:-1])
             if self._winding_source is not None and hasattr(self,'_snapshot_valid') and not self._snapshot_valid:
-                text='电气参数已变化，以下仅对应上一有效计算；新计算完成后自动更新。\n'+text
+                text='电气参数有修改。当前显示上一有效计算，结果待更新。\n'+text
             self.winding_summary.set(text)
         except (ValueError,TypeError) as exc:
             if hasattr(self,'_winding_drag'):self._winding_drag.scene(None,None)

@@ -4,6 +4,7 @@ import { nominal } from "../web_app/frontend/src/native_engine/power";
 import { solveCoupled } from "../web_app/frontend/src/native_engine/coupled";
 import { normalize } from "../web_app/frontend/src/native_engine/spec";
 import { design } from "../web_app/frontend/src/native_engine/engine";
+import { reviewCatalog } from "../web_app/frontend/src/native_engine/checks";
 import { plant } from "../web_app/frontend/src/native_engine/loop";
 import { solveNonisolated } from "../web_app/frontend/src/native_engine/nonisolated";
 import {
@@ -102,6 +103,15 @@ const a = [
 assert.ok(Math.abs(reconstructed[0][1] - 0.5) < 1e-12);
 if (failed) process.exitCode = 1;
 const p = normalize(fixtures[0].spec) as any;
+const phaseDesign = design(p, false);
+for (const [min_pm, state] of [[44.99, "review"], [45, "review"], [45.01, "pass"], [null, "undefined"]] as const) {
+  const loop = { fc: 3000, pm: 80, min_pm, gm_db: 9, gm_infinite: false, all_crosses: [{ fc: 3000 }, { fc: 4300 }] };
+  const catalog = reviewCatalog({ ...p, pm_target: 85 }, { ...phaseDesign, loop }, { checks: [] });
+  const row = catalog.find((check) => check.id === "phase_margin")!;
+  assert.deepEqual([row.value, row.limit, row.comparison, row.state], [min_pm, 45, ">", state]);
+  assert.equal(catalog.find((check) => check.id === "phase-margin")?.state, "info");
+}
+console.log("PASS native phase margin: weakest crossover must exceed 45 degrees");
 const q = {
   ...p,
   device_curve_settings: { mode: "curve" },

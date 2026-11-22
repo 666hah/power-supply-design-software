@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import numpy as np
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
-from spice_analysis import cycle_quality,statistics,FrequencyRaw,loop_metrics
+from spice_analysis import cycle_quality,statistics,FrequencyRaw,loop_metrics,minimum_phase_margin,llc_fra_phase_margin
 from spice_studies import corner_plan,prepare_fra
 
 
@@ -37,6 +37,17 @@ class AnalysisChecks(unittest.TestCase):
         self.assertLess(abs(result['fc']/(1000*math.sqrt(99))-1),1e-4)
         self.assertAlmostEqual(result['pm'],180-math.degrees(math.atan(math.sqrt(99))),places=3)
         self.assertIsNone(result['gm_db'])
+
+    def test_fra_minimum_requires_downward_crossing_and_verified_llc_points(self):
+        self.assertEqual(minimum_phase_margin({'pm': 62., 'crossings': [{'pm': 45.}, {'pm': float('nan')}]}), 45.)
+        self.assertEqual(minimum_phase_margin({'pm': 53.}), 53.)
+        self.assertIsNone(minimum_phase_margin({'pm': None, 'crossings': [{'pm': 70.}]}))
+        points = [dict(frequency_Hz=f, valid=True, main=dict(gain_db=db, phase_deg=-130.))
+                  for f, db in [(1000., 6.), (2000., -6.)]]
+        case = dict(fra_status='完成', fra=points)
+        self.assertAlmostEqual(llc_fra_phase_margin(case), 50.)
+        points[-1]['valid'] = False
+        self.assertIsNone(llc_fra_phase_margin(case))
 
     def test_complex_reader_refuses_partial_or_decreasing_frequency(self):
         with tempfile.TemporaryDirectory() as td:

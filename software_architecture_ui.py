@@ -64,7 +64,7 @@ class ArchitectureViewer(tk.Toplevel):
         self.zoom = None
         self._draw_job = None
         self._card_items = {}
-        self.title('开关电源设计 · 功能架构')
+        self.title('软件功能架构')
         self.configure(bg=_BG)
         screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
         width = min(round(screen_width * .94), screen_width - 24)
@@ -98,7 +98,7 @@ class ArchitectureViewer(tk.Toplevel):
                             style='ArchitectureTab.Toolbutton',
                             command=lambda selected=key: self.show_page(selected)).pack(side='left', padx=(0, 4))
 
-        self.intro = tk.Label(self, bg=_BG, fg=_MUTED, font=(_FONT, -14),
+        self.intro = tk.Label(self, bg=_BG, fg=_INK, font=(_FONT, -14, 'bold'),
                               anchor='w', justify='left')
         self.intro.grid(row=2, column=0, sticky='ew', padx=24, pady=(1, 5))
         self.intro.bind('<Configure>', self._wrap_description)
@@ -154,7 +154,7 @@ class ArchitectureViewer(tk.Toplevel):
         self.lesson.pack(side='left', padx=(0, 8))
         self.lesson.bind('<Return>', self._open_selected)
         self.lesson.bind('<KP_Enter>', self._open_selected)
-        ttk.Button(access, text='打开所选教程', command=self._open_selected,
+        ttk.Button(access, text='打开教程', command=self._open_selected,
                    style='Architecture.TButton').pack(side='left', padx=(0, 8))
         ttk.Button(access, text='教程目录', command=lambda: _open_tutorial('index', self),
                    style='Architecture.TButton').pack(side='left')

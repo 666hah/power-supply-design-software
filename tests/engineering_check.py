@@ -1,9 +1,11 @@
 """Shared-engine, snapshot, fixed-hardware and real GUI workflow regressions."""
 import copy
+import csv
 import json
 import math
 from pathlib import Path
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -152,12 +154,7 @@ class GUIChecks(unittest.TestCase):
         self.app._control_ready=True; self.assertTrue(self.app.update_all())
 
     def tearDown(self):
-        self.app._closing=True; self.app._work_cancel.set()
-        for key in ('update_timer','_font_timer','_initial_update_job','_control_warmup_job','_control_poll_job','_work_poll'):
-            job=getattr(self.app,key,None)
-            if job:
-                try:self.root.after_cancel(job)
-                except tk.TclError:pass
+        self.app.dispose()
         self.root.destroy()
 
     def wait(self):
@@ -166,7 +163,7 @@ class GUIChecks(unittest.TestCase):
             self.root.update(); time.sleep(.02)
         self.assertFalse(self.app._work_running,'worker did not complete')
 
-    def test_search_fold_and_catalog(self):
+    def test_search_and_fold(self):
         a=self.app
         self.assertTrue(a._param_widgets['eta_guess'][1].grid_info())
         self.assertEqual(a.get_params()['eta_guess'], .93)
@@ -187,60 +184,217 @@ class GUIChecks(unittest.TestCase):
         a._fold_section(frame); self.assertFalse(a._param_widgets['V_in_min'][1].grid_info())
         a._fold_section(frame); self.assertTrue(a._param_widgets['V_in_min'][1].grid_info())
         self.assertFalse(a._param_widgets['V_in'][1].grid_info())
-        # Loop checks are now completed on demand. Compare the full API
-        # catalogue after entering review, not the topology's pending summary.
-        a.nb.select(a.tab_review)
+
+    def test_acceptance_uses_current_endpoint_evidence(self):
+        a = self.app
+        a.restore_result_page('review')
         a._refresh_visible_tab()
-        self.assertEqual(len(a.review_tree.get_children()),len(a._last['checks']))
-        r=run_design(a._current_spec()); self.assertEqual(r['checks'],a._last['checks'])
-        a.params['L'].set(-1)
+        panel = a.acceptance_panel
+        self.assertTrue(panel.trees['components'].get_children())
+        self.assertEqual(panel.trees['performance'].get_children(), ('out1_ripple', 'phase_margin', 'eta'))
+        eta = panel.rows['eta']
+        self.assertEqual(eta['limit'], a._last['p']['target_eta'])
+        self.assertEqual(eta['cases']['Vinmin']['calculation'], a._last['res']['eta'])
+        self.assertEqual(eta['cases']['Vinmax']['pending_reason'], '缺结果')
+
+        a.set_param('L', -1)
         self.assertFalse(a.update_all())
-        self.assertFalse(a._snapshot_valid); self.assertFalse(a.review_tree.get_children())
+        panel.refresh()
+        self.assertIsNone(panel.rows['eta']['cases']['Vinmin']['calculation'])
 
-    def test_real_background_workflows(self):
-        a=self.app
-        with patch.object(self.main.messagebox,'showerror') as error:
-            a._run_corners_ui(); self.wait()
-            self.assertFalse(error.called,error.call_args)
-            self.assertEqual(len(a.corner_tree.get_children()),5)  # legacy scalar -> equal min/max
-            a.schedule_update()  # unchanged UI resize must not discard analysis
-            self.assertIsNotNone(a._corner_result)
-            a.corner_lo.set(26); self.assertIsNone(a._corner_result)
-            a._capture_baseline(); self.wait()
-            self.assertIsNotNone(a._baseline)
-            a.set_param('C_out',a.get_param('C_out')*2)
-            a._compare_ui(False); self.wait()
-            self.assertIsNotNone(a._comparison)
-            self.assertFalse(error.called,error.call_args)
-            self.assertEqual(len(a.fig_compare.axes),2)
-            a.set_param('P_out',39)
-            self.assertIsNone(a._comparison); self.assertIsNotNone(a._baseline)
+    def test_acceptance_uses_per_output_ripple_and_exact_phase_target(self):
+        a = self.app
+        path = Path(__file__).resolve().parents[1] / 'examples' / '40W_CCM_3OUT_FLYBACK.json'
+        a._apply_config(json.loads(path.read_text(encoding='utf-8-sig')))
+        a.restore_result_page('review')
+        self.assertTrue(a.update_all())
+        panel = a.acceptance_panel
+        self.assertEqual(panel.trees['performance'].get_children(),
+                         ('out1_ripple', 'out2_ripple', 'out3_ripple', 'phase_margin', 'eta'))
+        last = a._last
+        for index, rail in enumerate(last['res']['outputs'], 1):
+            row = panel.rows[f'out{index}_ripple']['cases']['Vinmin']
+            self.assertEqual(row['calculation'], rail['ripple_pp'])
+            self.assertEqual(row['limit'], rail['spec']['ripple_target'] * rail['spec']['V_out'])
 
-    def test_export_valid_and_stale_workflow_data(self):
-        a=self.app
-        with patch.object(self.main.messagebox,'showerror') as error:
-            a._capture_baseline(); self.wait()
-            a._compare_ui(False); self.wait()
-            a._run_corners_ui(); self.wait()
-            self.assertFalse(error.called,error.call_args)
-            expected_corners=a._corner_result; expected_compare=a._comparison
-            with patch.object(self.main.filedialog,'asksaveasfilename',return_value='_tmp_upgrade_qa/export_contract.docx'), \
-                    patch.object(self.main.messagebox,'showinfo'), \
-                    patch('input_range_report.export_input_range_docx',return_value={
-                        'figure_count':22,'check_count':26,'successful_cases':2,
-                        'failed_cases':[],'incomplete':False}) as exporter:
-                a.export_report()
-                self.assertIs(exporter.call_args.kwargs['corners'],expected_corners)
-                self.assertIs(exporter.call_args.kwargs['comparison'],expected_compare)
-                a.corner_lo.set(26)
-                a.export_report()
-                self.assertIsNone(exporter.call_args.kwargs['corners'])
-                self.assertIs(exporter.call_args.kwargs['comparison'],expected_compare)
-                a.set_param('P_out',39)
-                a.export_report()
-                self.assertIsNone(exporter.call_args.kwargs['corners'])
-                self.assertIsNone(exporter.call_args.kwargs['comparison'])
-            self.assertFalse(error.called,error.call_args)
+        target = last['p']['pm_target']
+        near_target = target - 0.5
+        diagnostics = [{'id': 'phase_margin', 'value': near_target, 'state': 'pass', 'limit': target - 1}]
+        with patch.dict(last, res=dict(last['res'], loop=dict(min_pm=near_target)), checks=diagnostics):
+            panel.refresh()
+            row = panel.rows['phase_margin']['cases']['Vinmin']
+            self.assertEqual(row['calculation'], near_target)
+            self.assertEqual(row['limit'], target)
+            self.assertEqual(row['status'], 'review')
+
+        with patch.dict(last, res=dict(last['res'], loop=None)):
+            panel.refresh()
+            row = panel.rows['phase_margin']['cases']['Vinmin']
+            self.assertIsNone(row['calculation'])
+            self.assertEqual(row['pending_reason'], '缺结果')
+
+    def run_tolerance(self, profile_path, *, samples=0):
+        from tolerance_ui import PROFILE_SCHEMA
+
+        a = self.app
+        a.restore_result_page('tolerance')
+        panel = a._tolerance_panel
+        nominal = a.get_param('Rds_on')
+        profile = dict(schema=PROFILE_SCHEMA, variables=[dict(path='Rds_on', low=.9 * nominal,
+                       high=1.1 * nominal, distribution='uniform', source='回归样例')],
+                       external_limits={'outputs': {'1': {'ripple_pp': 1e-6}}},
+                       samples=samples, seed=4, load_fracs=[1.], max_evaluations=100)
+        profile_path.write_text(json.dumps(profile, ensure_ascii=False), encoding='utf-8')
+        with patch.object(self.main.messagebox, 'showerror') as error:
+            with patch.object(self.main.filedialog, 'askopenfilename', return_value=str(profile_path)):
+                panel.import_profile()
+            self.assertEqual(panel.param_tree.get_children(), ('Rds_on',))
+            self.assertTrue(panel.mc_button.instate(('disabled',)))
+            panel.run_button.invoke()
+            self.assertTrue(panel.running, panel.status.get())
+            self.wait()
+            self.assertEqual(panel.result['samples'], 0)
+            self.assertEqual(panel.result['monte_carlo']['status'], 'required_not_run')
+            self.assertTrue(panel.mc_button.instate(('!disabled',)))
+            if samples:
+                boundary = panel.result['boundary']
+                panel.mc_button.invoke()
+                self.assertTrue(panel.running, panel.status.get())
+                self.wait()
+                self.assertEqual(panel.result['boundary'], boundary)
+            error.assert_not_called()
+        self.assertFalse(panel.running)
+        self.assertIsNotNone(panel.result, panel.status.get())
+        return panel.result
+
+    def test_tolerance_units_switch_and_save_in_si(self):
+        from tolerance_ui import normalize_profile
+
+        a = self.app
+        a.set_param('L', 40e-6)
+        self.assertTrue(a.update_all())
+        a.restore_result_page('tolerance')
+        panel = a._tolerance_panel
+        old_row = dict(path='L', low=36e-6, high=44e-6, distribution='normal', sigma=1.25e-6)
+        panel.load_project_profile(normalize_profile({'variables': [old_row]}))
+        panel._refresh_catalog()
+        panel.param_tree.selection_set('L')
+        self.root.attributes('-alpha', 0)
+        self.root.deiconify()
+        panel.edit_variable()
+        self.root.update()
+        dialog = next(child for child in panel.winfo_children() if isinstance(child, tk.Toplevel))
+
+        def field(label):
+            caption = next(w for w in dialog.grid_slaves(column=0)
+                           if isinstance(w, self.main.ttk.Label) and w.cget('text') == label)
+            return dialog.grid_slaves(row=caption.grid_info()['row'], column=1)[0]
+
+        unit = field('输入单位')
+        low, high, sigma = (field(label) for label in ('容差下限', '容差上限', '正态分布 σ'))
+        nominal = dialog.grid_slaves(row=1)[0]
+        self.assertEqual(unit.get(), 'µH')
+        self.assertEqual((low.get(), high.get(), sigma.get()), ('36', '44', '1.25'))
+        unit.set('mH')
+        unit.event_generate('<<ComboboxSelected>>')
+        self.assertEqual((low.get(), high.get(), sigma.get()), ('0.036', '0.044', '0.00125'))
+        self.assertEqual(nominal.cget('text'), '标称值 0.04 mH')
+        sigma_row = dialog.grid_slaves(row=sigma.grid_info()['row'])
+        next(w for w in sigma_row if isinstance(w, self.main.ttk.Button)).invoke()
+        self.assertAlmostEqual(float(sigma.get()), .008 / 6)
+        sigma.delete(0, 'end')
+        sigma.insert(0, '0.00125')
+
+        low.delete(0, 'end')
+        low.insert(0, '1e')
+        with patch.object(self.main.messagebox, 'showerror') as error:
+            unit.set('µH')
+            unit.event_generate('<<ComboboxSelected>>')
+            error.assert_called_once()
+        self.assertEqual((unit.get(), low.get(), high.get()), ('mH', '1e', '0.044'))
+        low.delete(0, 'end')
+        low.insert(0, '0.036')
+
+        buttons = [w for frame in dialog.grid_slaves() if isinstance(frame, self.main.ttk.Frame)
+                   for w in frame.winfo_children()]
+        next(w for w in buttons if w.cget('text') == '应用').invoke()
+        self.assertEqual(panel.project_profile()['variables'], [old_row])
+
+    def test_tolerance_background_runs_and_exports_from_its_page(self):
+        a = self.app
+        vin_min = a.get_param('V_in_min')
+        a.set_param('V_in_max', vin_min + 2.)
+        self.assertTrue(a.update_all())
+        panel = a._tolerance_panel
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            result = self.run_tolerance(directory / 'profile.json', samples=4)
+            self.assertEqual(result['failure_count'], 0, result['failures'])
+            corners = len(result['conditions'])
+            self.assertEqual(result['boundary']['search'], 'theory_guided')
+            self.assertLess(result['deterministic_cases'], corners*3)
+            self.assertEqual(result['evaluations'], result['deterministic_cases'] + corners*4)
+            self.assertEqual(sorted({case['voltage'] for case in result['conditions']}),
+                             [vin_min, vin_min + 1., vin_min + 2.])
+            self.assertEqual(len(panel.result_tree.get_children()), len(result['rows']))
+            ripple = next(row for row in result['rows'] if row['id'] == 'out1_ripple')
+            self.assertEqual(ripple['evaluated_cases'], result['deterministic_cases'])
+            self.assertEqual(ripple['statistics']['count'], 4)
+            self.assertEqual(result['monte_carlo']['status'], 'completed')
+            self.assertEqual(result['monte_carlo']['groups']['external']['exceedances'], 4)
+            self.assertIsNone(next((row for row in result['rows'] if row['id'] == 'efficiency'), None))
+            a.schedule_update()
+            self.assertIs(panel.result, result)
+
+            json_path, csv_path = directory / 'result.json', directory / 'result.csv'
+            with patch.object(self.main.messagebox, 'showerror') as error, \
+                    patch.object(self.main.filedialog, 'asksaveasfilename', side_effect=[str(json_path), str(csv_path)]):
+                panel.json_button.invoke()
+                panel.csv_button.invoke()
+                error.assert_not_called()
+            exported = json.loads(json_path.read_text(encoding='utf-8'))
+            self.assertEqual(exported['input_fingerprint'], result['input_fingerprint'])
+            self.assertEqual(exported['rows'], result['rows'])
+            with csv_path.open(encoding='utf-8-sig', newline='') as stream:
+                csv_rows = list(csv.DictReader(stream))
+            self.assertEqual([row['指标'] for row in csv_rows], [row['name'] for row in result['rows']])
+            self.assertEqual({row['证据'] for row in csv_rows}, {'设计计算'})
+
+            panel.seed.set('5')
+            self.assertEqual(panel.result['samples'], 0)
+            self.assertEqual(panel.result['boundary'], result['boundary'])
+            self.assertTrue(panel.mc_button.instate(('!disabled',)))
+            panel.load_percents.set('50, 100')
+            self.assertIsNone(panel.result)
+            self.assertFalse(panel.result_tree.get_children())
+            self.assertTrue(all(button.instate(('disabled',)) for button in
+                                (panel.mc_button, panel.csv_button, panel.json_button)))
+
+    def test_design_report_uses_only_current_tolerance_result(self):
+        a = self.app
+        report_summary = dict(figure_count=0, check_count=0, sheet_count=1,
+                              failed_cases=[], incomplete=False)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(self.main.messagebox, 'showerror') as error, \
+                patch.object(self.main.messagebox, 'showinfo'), \
+                patch('input_range_report.export_input_range_docx', return_value=report_summary) as word, \
+                patch('report_xlsx.export_input_range_xlsx', return_value=report_summary) as excel:
+            directory = Path(folder)
+            expected = self.run_tolerance(directory / 'profile.json')
+            for stale in (False, True):
+                if stale:
+                    a.set_param('P_out', a.get_param('P_out') * .95)
+                    self.assertIsNone(a._tolerance_panel.result)
+                for suffix, exporter in (('docx', word), ('xlsx', excel)):
+                    with self.subTest(stale=stale, suffix=suffix), \
+                            patch.object(self.main.filedialog, 'asksaveasfilename',
+                                         return_value=str(directory / f'design.{suffix}')):
+                        a.export_report()
+                        error.assert_not_called()
+                        if stale:
+                            self.assertIsNone(exporter.call_args.kwargs.get('tolerance_result'))
+                        else:
+                            self.assertIs(exporter.call_args.kwargs['tolerance_result'], expected)
 
     def test_thermal_label_uses_shared_threshold(self):
         a=self.app; a.params['temp_rise_limit'].set(20)

@@ -27,7 +27,7 @@ class DiodeCurveUI:
         if not target:
             return
         caption=target['ref']+' · '+target['role']
-        path=filedialog.askopenfilename(parent=self.root,title=caption+'：导入 X=Vf、Y=If 正向曲线',
+        path=filedialog.askopenfilename(parent=self.root,title=caption+' · 导入正向伏安曲线（X=Vf，Y=If）',
             filetypes=[('XY 曲线 CSV / JSON','*.csv *.json')])
         if not path:return
         try:

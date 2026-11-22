@@ -1,15 +1,45 @@
-"""TkAgg with small hidden buffers and one owner-cancelled idle redraw.
+"""TkAgg with bounded hidden buffers and one owner-cancelled idle redraw.
 
-Figure artists and their numerical data remain intact. Only the disposable
-Agg raster and Tk image shrink when the notebook page/window is hidden.
-Explicit draw()/savefig() keep their normal diagnostic/export semantics.
+Hidden charts discard the Agg renderer. The main result pages share a
+small cache of their last Tk images so unchanged charts can remap directly.
 """
+from collections import OrderedDict
 import tkinter as tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
+class HiddenRasterCache:
+    """One LRU budget per workspace, shared across its result views."""
+    def __init__(self, *, max_entries=3, max_bytes=16 * 1024 * 1024):
+        self._entries = OrderedDict()
+        self._bytes = 0
+        self._max_entries = max_entries
+        self._max_bytes = max_bytes
+
+    def retain(self, canvas, width, height):
+        self.discard(canvas)
+        size = width * height * 4  # RGBA Tk photo pixels
+        if self._max_entries < 1 or size > self._max_bytes:
+            return False
+        while (len(self._entries) >= self._max_entries or
+               self._bytes + size > self._max_bytes):
+            oldest = next(iter(self._entries))
+            oldest.release_buffers()
+        self._entries[canvas] = size
+        self._bytes += size
+        return True
+
+    def discard(self, canvas):
+        self._bytes -= self._entries.pop(canvas, 0)
+
+    def invalidate(self, owner):
+        for canvas in tuple(self._entries):
+            if canvas._resource_owner is owner:
+                canvas.release_buffers()
+
+
 class EfficientFigureCanvasTkAgg(FigureCanvasTkAgg):
-    def __init__(self,figure=None,master=None):
+    def __init__(self,figure=None,master=None,*,hidden_rasters=None,owner=None):
         from matplotlib.figure import Figure
         figure=Figure() if figure is None else figure
         # This application uses native pixel geometry and explicit UI type
@@ -25,6 +55,8 @@ class EfficientFigureCanvasTkAgg(FigureCanvasTkAgg):
         self._resource_dirty=True
         self._resource_drawing=False
         self._resource_draw_count=0
+        self._resource_cache=hidden_rasters
+        self._resource_owner=owner
         # Native TkAgg normally allocates a full-resolution PhotoImage for
         # every unvisited page. Keep the requested widget size, not that RAM.
         figure.set_size_inches(1/figure.dpi,1/figure.dpi,forward=False)
@@ -64,7 +96,12 @@ class EfficientFigureCanvasTkAgg(FigureCanvasTkAgg):
 
     def draw_idle(self):
         self._resource_dirty=True
-        if not self._can_render() or self._idle_draw_id:
+        if not self._can_render():
+            if self._resource_cache is not None:
+                # A hidden image cannot represent the updated artists.
+                self.release_buffers()
+            return
+        if self._idle_draw_id:
             return
         def redraw():
             self._idle_draw_id=None
@@ -101,33 +138,49 @@ class EfficientFigureCanvasTkAgg(FigureCanvasTkAgg):
         # Preserve useful figure dimensions on never-mapped notebooks. Tk's
         # sentinel width=1 is not a real viewport or an export figure size.
         if not self._can_render() or event.width<=1 or event.height<=1:
-            self._resource_dirty=True
             return
         current=self.get_width_height(physical=True)
         if current==(event.width,event.height):
-            self.draw_idle()
+            if self._resource_dirty or self.figure.stale:
+                self.draw_idle()
             return
         super().resize(event)
 
     def _resource_mapped(self,_event=None):
         if self._can_render():
+            if self._resource_cache is not None:
+                self._resource_cache.discard(self)
             width,height=self._tkcanvas.winfo_width(),self._tkcanvas.winfo_height()
             if width>1 and height>1:
                 self.resize(type('Viewport',(),dict(width=width,height=height))())
-            self.draw_idle()
+            elif self._resource_dirty or self.figure.stale:
+                self.draw_idle()
 
     def _resource_unmapped(self,_event=None):
+        if (self._resource_cache is not None and self._resource_active and
+                not self._resource_dirty and not self.figure.stale and
+                not self._resource_drawing):
+            width, height = self._tkphoto.width(), self._tkphoto.height()
+            if min(width, height) > 1 and self._resource_cache.retain(self, width, height):
+                self._cancel_idle_draw()
+                self._release_renderer()
+                return
         self.release_buffers()
+
+    def _release_renderer(self):
+        if hasattr(self,'renderer'):
+            del self.renderer
+        self._lastKey=None
 
     def release_buffers(self):
         """Release only render buffers; retain plots, axes and source values."""
         self._cancel_idle_draw()
         self._resource_dirty=True
+        if self._resource_cache is not None:
+            self._resource_cache.discard(self)
         if self._resource_drawing:
             return
-        if hasattr(self,'renderer'):
-            del self.renderer
-        self._lastKey=None
+        self._release_renderer()
         try:
             self._tkphoto.configure(width=1,height=1)
         except tk.TclError:

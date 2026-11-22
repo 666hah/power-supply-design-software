@@ -34,6 +34,8 @@ class SpiceUICheck(unittest.TestCase):
             applied=[]
             open_export_dialog(root,p,applied.append)
             dialog=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
+            self.assertTrue(any('CPU 分配' in w.cget('text') and '最多 2 线程' in w.cget('text')
+                                for w in descendants(dialog) if isinstance(w,ttk.Label)))
             buttons=[w for w in descendants(dialog) if isinstance(w,ttk.Button)]
             next(w for w in buttons if w.cget('text')=='快速预检（推荐）').invoke()
             next(w for w in buttons if w.cget('text')=='应用到计算器').invoke()

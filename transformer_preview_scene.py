@@ -116,6 +116,78 @@ def _gap(profile, estimate, notes):
     return 'none', 0.
 
 
+def _section_connections(sections, declarations, port):
+    """Walk an unbranched series winding from its declared start, if known."""
+    order = port.get('section_order') or [s['id'] for s in sections]
+    if len(order) != len(sections) or set(order) != {s['id'] for s in sections}:
+        return None
+    ends = [(declarations[sid].get('start_node'), declarations[sid].get('end_node')) for sid in order]
+    if not any(node for pair in ends for node in pair):
+        return order, [False] * len(order), [None] * (len(order) - 1)
+    if not all(a and b for a, b in ends):
+        return None
+
+    starts = [port['dot_node']] if port.get('dot_node') else ends[0]
+    for node in starts:
+        visited, reversed_sections = [node], []
+        for a, b in ends:
+            if node not in (a, b):
+                break
+            reversed_sections.append(node == b)
+            node = a if node == b else b
+            visited.append(node)
+        else:
+            if len(set(visited)) == len(visited) and node == (port.get('other_node') or node):
+                return order, reversed_sections, visited[1:-1]
+    return None
+
+
+def _route_series_winding(winding, profile, declarations, leads_by_node, notes):
+    sections = winding['sections']
+    for section in sections:
+        section['axial_start'] = 'lower'
+    winding['crossovers'] = []
+    if len(sections) < 2:
+        return set()
+    port = (profile.get('ports') or {}).get(winding['id'], {})
+    if port.get('connection') == 'parallel':
+        notes.append(f"{winding['id']} 的各段声明为并联，按独立支路显示。")
+        return set()
+
+    connections = _section_connections(sections, declarations, port)
+    external = {item['node'] for item in profile.get('terminals', []) if item.get('external_connection') == 'net'}
+    other = {data.get(key) for data in declarations.values() if data.get('winding_id') != winding['id']
+             for key in ('start_node', 'end_node')}
+    other.update(data.get(key) for name, data in (profile.get('ports') or {}).items() if name != winding['id']
+                 for key in ('dot_node', 'other_node'))
+    if connections is None or any(node and (node in external or node in other or len(leads_by_node.get(node, ())) > 1)
+                                  for node in connections[2]):
+        notes.append(f"{winding['id']} 的段连接包含分支或端点待核对，预览保留独立线段。")
+        return set()
+
+    order, reversed_sections, nodes = connections
+    by_id = {s['id']: s for s in sections}
+    path = [by_id[sid] for sid in order]
+    for section, reverse in zip(path, reversed_sections):
+        if reverse:
+            section['direction'] = 'cw' if section['direction'] == 'ccw' else 'ccw'
+    used_leads = set()
+    for source, target, node in zip(path, path[1:], nodes):
+        adjacent = abs(target['layer_index'] - source['layer_index']) == 1
+        kind = 'adjacent' if adjacent else 'pin_return'
+        target['axial_start'] = 'upper' if adjacent and source['axial_start'] == 'lower' else 'lower'
+        crossover = dict(from_section=source['id'], to_section=target['id'], kind=kind, node=node)
+        lead = leads_by_node.get(node)
+        if lead:
+            index, points = lead[0]
+            crossover.update(kind='declared', path_xyz_mm=points)
+            used_leads.add(index)
+        winding['crossovers'].append(crossover)
+    if port.get('connection') != 'series' or not all(nodes):
+        notes.append(f"{winding['id']} 的预览按绕组段顺序示意连续绕制，接线以工程声明为准。")
+    return used_leads
+
+
 def build_scene(core_name, windings, winding_config, *, profile=None, title=None,
                 gap=None, stale=False):
     """Build an isolated JSON payload without running any electrical solver.
@@ -126,11 +198,6 @@ def build_scene(core_name, windings, winding_config, *, profile=None, title=None
     """
     from core_shape_catalog import get_core_shape, list_core_shapes
     core = get_core_shape(str(core_name))
-    if core is None:
-        core = dict(model=str(core_name), family='CUSTOM', template=None,
-                    status='dimensions_pending', dimensions_mm=None,
-                    manufacturer=None, reference_model=None, source_url=None,
-                    source_page=None, notes=['自定义磁芯尚无规格书外形尺寸。'])
     assessment = assess_winding_window(copy.deepcopy(windings), copy.deepcopy(winding_config))
     config = assessment['config']
     profile = copy.deepcopy(profile if profile is not None else config.get('model_3d') or {})
@@ -138,6 +205,16 @@ def build_scene(core_name, windings, winding_config, *, profile=None, title=None
         from transformer_geometry_contract import validate_profile
         validate_profile(profile)
     notes = []
+    if core is None and config.get('preview_core_reference'):
+        core = get_core_shape(config['preview_core_reference'])
+        if core:
+            core['status'] = 'reference_variant'
+            notes.append(f"磁芯外形仅以 {core['manufacturer']} {core['model']} 为参照。电气计算使用工程中的有效磁芯参数。")
+    if core is None:
+        core = dict(model=str(core_name), family='CUSTOM', template=None,
+                    status='dimensions_pending', dimensions_mm=None,
+                    manufacturer=None, reference_model=None, source_url=None,
+                    source_page=None, notes=['自定义磁芯尚无规格书外形尺寸。'])
     if stale:
         notes.append('电气参数已修改：匝数和线材来自上一有效计算；重新计算后刷新预览。')
     if core.get('status') == 'dimensions_pending':
@@ -162,13 +239,25 @@ def build_scene(core_name, windings, winding_config, *, profile=None, title=None
                                fits=assessment['fits'], window_width_mm=_mm(config['window_width']),
                                window_height_mm=_mm(config['window_height']),
                                status='core_only'),
-                  # Existing lead polylines are explicit evidence, unlike
-                  # inferred layer crossovers or vendor-specific terminals.
+                  # Declared paths are kept verbatim and used by a crossover
+                  # when they belong to its intermediate node.
                   leads=[dict(node=x['node'], path_xyz_mm=[[_mm(v) for v in p] for p in x['path_xyz_m']])
                          for x in profile.get('leads', [])])
     render_windings = assessment['configured'] and not too_large and placement['route_type']
     if render_windings:
         layers = {entry['section_id']: entry for entry in assessment['physical_layers']}
+        declarations = {}
+        for sid, layer in layers.items():
+            declaration = (profile.get('sections') or {}).get(sid, {})
+            if declaration and (declaration.get('winding_id') != layer['winding_id'] or
+                                declaration.get('turns') != layer['turns']):
+                notes.append(f'{sid} 的接线声明与当前层匝数或绕组归属不一致。')
+                declaration = {}
+            declarations[sid] = declaration
+        leads_by_node = {}
+        for index, lead in enumerate(result['leads']):
+            leads_by_node.setdefault(lead['node'], []).append((index, lead['path_xyz_mm']))
+        used_leads = set()
         for row in assessment['windings']:
             winding = dict(id=row['id'], name=row['name'], color=COLORS.get(row['id'], '#7a4330'),
                            turns=int(row['turns']), parallel_wires=row['parallel_wires'],
@@ -178,11 +267,7 @@ def build_scene(core_name, windings, winding_config, *, profile=None, title=None
                 sid = record['section_id']
                 if sid not in grouped:
                     layer = layers[sid]
-                    declaration = (profile.get('sections') or {}).get(sid, {})
-                    if declaration and (declaration.get('winding_id') != row['id'] or
-                                        declaration.get('turns') != layer['turns']):
-                        notes.append(f'{sid} 的接线声明与当前层匝数不一致；预览绕向按未确认处理。')
-                        declaration = {}
+                    declaration = declarations[sid]
                     grouped[sid] = dict(id=sid, layer_index=layer['layer_index'],
                         direction=declaration.get('direction') or 'ccw',
                         direction_assumed=declaration.get('status') != 'confirmed' or not declaration.get('direction'),
@@ -197,10 +282,14 @@ def build_scene(core_name, windings, winding_config, *, profile=None, title=None
                     sub_bundle_index=(record['bundle'] - 1) % row['bundles_per_wire'] + 1,
                     profile_type=record['profile_type'], edited=record['edited'],
                     conflict=bool(record.get('conflict', False))))
+            used_leads.update(_route_series_winding(winding, profile, declarations, leads_by_node, notes))
             result['windings'].append(winding)
+        result['leads'] = [lead for i, lead in enumerate(result['leads']) if i not in used_leads]
         result['summary']['displayed_bundles'] = sum(len(s['turns']) for w in result['windings'] for s in w['sections'])
         result['summary']['status'] = 'assembled' if result['windings'] else 'core_only'
-        notes.append('螺旋轨迹按逐匝截面连续推进；绕向未确认时用逆时针显示。层间跨线及针脚只按已填写的路径显示。')
+        notes.append('螺旋轨迹按逐匝截面连续推进。缺少绕向声明时，沿逆时针绘制。')
+        if any(w['crossovers'] for w in result['windings']):
+            notes.append('串联相邻层在同侧直接换层，跨过其他绕组时沿轴向折返到窗口下端。未声明的跨线和局部隆起按工艺示意显示。')
         if any(w['strands'] > 1 for w in result['windings']):
             notes.append('利兹线显示为深色等效线束，宽高沿用绕制设置；不展开每根细股的绞合。')
         # Bound the winding against the nominal axial core window. A collision

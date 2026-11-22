@@ -200,6 +200,7 @@ class ParameterLayoutChecks(unittest.TestCase):
         cls.root.unbind('<Configure>')
         for job in pending_jobs(cls.root):
             cls.root.after_cancel(job)
+        cls.app._param_layout_job = None
         cls.root.geometry('1360x850')
         cls.root.update()
         cls.original_toplevel = tk.Toplevel
@@ -263,6 +264,42 @@ class ParameterLayoutChecks(unittest.TestCase):
         pump(self.root)
         self.assertEqual(self.shell('spec').winfo_reqheight(), before)
         self.assertTrue(frame.winfo_ismapped())
+
+    def test_fold_keeps_unrelated_sections_mapped_and_skips_full_refresh(self):
+        frame = self.app._param_sections['spec']
+        other = self.app._param_sections['stage']
+        unaffected = (frame._section_container, frame._section_header,
+                      other._section_container, other._section_header, other)
+        events = []
+        bindings = [(widget, event, widget.bind(event, events.append, add='+'))
+                    for widget in unaffected for event in ('<Map>', '<Unmap>')]
+        try:
+            with patch.object(self.app, '_refresh_param_rows') as refresh:
+                frame._section_header.event_generate('<Button-1>', x=8, y=8)
+                pump(self.root, .04)
+                self.assertFalse(frame.winfo_ismapped())
+                frame._section_header.event_generate('<Button-1>', x=8, y=8)
+                pump(self.root, .04)
+                self.assertTrue(frame.winfo_ismapped())
+                refresh.assert_not_called()
+            self.assertEqual(events, [])
+        finally:
+            for widget, event, binding in bindings:
+                widget.unbind(event, binding)
+
+    def test_search_restores_section_order_without_losing_folds(self):
+        frame = self.app._param_sections['spec']
+        input_field = self.app._param_widgets['V_in_min'][1]
+        original_order = self.visible_order()
+        self.app._fold_section(frame)
+        self.app.param_search.set('V_in_min')
+        pump(self.root)
+        self.assertTrue(input_field.winfo_ismapped())
+        self.assertLess(len(self.visible_order()), len(original_order))
+        self.app.param_search.set('')
+        pump(self.root)
+        self.assertEqual(self.visible_order(), original_order)
+        self.assertFalse(input_field.winfo_ismapped())
 
     def test_folding_all_sections_reduces_the_scrollable_form_height(self):
         before = self.app.left_inner.winfo_reqheight()

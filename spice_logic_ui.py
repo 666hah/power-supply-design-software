@@ -46,7 +46,7 @@ class ControllerLogicPanel(ttk.Frame):
         self._timer_root = self._root()
 
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(4, weight=1)
         ui_font = tkfont.nametofont('TkDefaultFont', root=self)
         family = ui_font.cget('family')
         font_size = max(12, min(16, abs(int(ui_font.cget('size')))))
@@ -63,7 +63,7 @@ class ControllerLogicPanel(ttk.Frame):
         self.zoom_label.pack(side='right', padx=(0, 5))
 
         view = ttk.Frame(self)
-        view.grid(row=1, column=0, sticky='nsew')
+        view.grid(row=4, column=0, sticky='nsew', pady=(7, 0))
         view.columnconfigure(0, weight=1)
         view.rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(view, background='white', width=430, height=210,
@@ -84,12 +84,13 @@ class ControllerLogicPanel(ttk.Frame):
         self.canvas.bind('<Button-1>', self._click)
         self.canvas.bind('<Motion>', self._set_cursor)
 
-        self.heading = ttk.Label(self, foreground=ACTIVE, font=(family, -max(13, font_size), 'bold'))
-        self.heading.grid(row=2, column=0, sticky='ew', pady=(8, 3))
+        self.heading = ttk.Label(self, style='ResultConclusion.TLabel', foreground=ACTIVE,
+                                 font=(family, -max(13, font_size), 'bold'))
+        self.heading.grid(row=1, column=0, sticky='ew', pady=(2, 3))
         self.description = ttk.Label(self, justify='left', wraplength=500, font=caption)
-        self.description.grid(row=3, column=0, sticky='ew')
+        self.description.grid(row=2, column=0, sticky='ew')
         self.condition = ttk.Label(self, foreground='#8d530a', justify='left', wraplength=500, font=caption)
-        self.condition.grid(row=4, column=0, sticky='ew', pady=(3, 0))
+        self.condition.grid(row=3, column=0, sticky='ew', pady=(3, 0))
         self.bind('<Configure>', self._wrap)
         self.bind('<Destroy>', self._destroy, add='+')
         self._schedule()
@@ -185,12 +186,12 @@ class ControllerLogicPanel(ttk.Frame):
             title = parameter.get('label', key)
             number = display_value(key, values, self.design) if key in SETTINGS else ''
             summary = f'{title}  ·  {number}' if number else title
-            description = purpose + ' ' + meaning
+            description = '\n'.join(dict.fromkeys(text for text in (purpose, meaning) if text))
             note = state_note(key, values)
         else:
             node = next((row for row in self.nodes if row['id'] == self.active_node), None)
             summary = node['title'] if node else ''
-            description = '；'.join(node['body']) if node else ''
+            description = '\n'.join(node['body']) if node else ''
             note = ''
         self.heading.configure(text=summary)
         self.description.configure(text=description)

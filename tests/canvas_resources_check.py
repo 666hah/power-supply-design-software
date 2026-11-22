@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from matplotlib.figure import Figure
-from resource_canvas import EfficientFigureCanvasTkAgg
+from resource_canvas import EfficientFigureCanvasTkAgg, HiddenRasterCache
 from runtime_resources import configure_numeric_threads
 
 
@@ -65,6 +65,78 @@ class CanvasResourcesChecks(unittest.TestCase):
             self.assertEqual(self.canvas.get_width_height(),original)
             self.nb.select(self.other);self.root.update()
         self.assertEqual(list(self.line.get_ydata()),[2,3,1])
+
+    def test_bounded_hidden_raster_reuses_clean_pixels_and_refreshes_changes(self):
+        self.canvas.get_tk_widget().destroy()
+        cache = HiddenRasterCache(max_entries=2)
+        owner = object()
+        self.canvas = EfficientFigureCanvasTkAgg(self.figure, self.page,
+                                                  hidden_rasters=cache, owner=owner)
+        self.canvas.get_tk_widget().pack(fill='both', expand=True)
+        self.root.update()
+        count = self.canvas._resource_draw_count
+        width = self.canvas._tkphoto.width()
+        self.assertGreater(width, 1)
+
+        self.nb.select(self.other)
+        self.root.update()
+        self.assertEqual(self.canvas._tkphoto.width(), width)
+        self.assertFalse(hasattr(self.canvas, 'renderer'))
+        self.nb.select(self.page)
+        self.root.update()
+        self.assertEqual(self.canvas._resource_draw_count, count)
+
+        self.nb.select(self.other)
+        self.root.update()
+        self.line.set_ydata([3, 4, 5])
+        self.canvas.request_draw()
+        self.assertEqual(self.canvas._tkphoto.width(), 1)
+        self.nb.select(self.page)
+        self.root.update()
+        self.assertEqual(self.canvas._resource_draw_count, count + 1)
+
+        self.nb.select(self.other)
+        self.root.update()
+        self.root.geometry('700x480')
+        self.root.update()
+        self.nb.select(self.page)
+        self.root.update()
+        self.assertGreater(self.canvas._tkphoto.width(), width)
+        self.assertEqual(self.canvas._resource_draw_count, count + 2)
+
+        other_owner = object()
+        other_chart = EfficientFigureCanvasTkAgg(Figure(), self.other,
+                                                 hidden_rasters=cache, owner=other_owner)
+        other_chart.get_tk_widget().pack(fill='both', expand=True)
+        self.nb.select(self.other)
+        self.root.update()
+        self.nb.select(self.page)
+        self.root.update()
+        self.assertEqual(self.canvas._resource_draw_count, count + 2)
+        self.assertGreater(other_chart._tkphoto.width(), 1)
+        cache.invalidate(other_owner)
+        self.assertEqual(other_chart._tkphoto.width(), 1)
+
+    def test_hidden_raster_budget_evicts_across_owners(self):
+        self.canvas.get_tk_widget().destroy()
+        cache = HiddenRasterCache(max_entries=1)
+        self.canvas = EfficientFigureCanvasTkAgg(self.figure, self.page,
+                                                  hidden_rasters=cache, owner=object())
+        self.canvas.get_tk_widget().pack(fill='both', expand=True)
+        other_chart = EfficientFigureCanvasTkAgg(Figure(), self.other,
+                                                 hidden_rasters=cache, owner=object())
+        other_chart.get_tk_widget().pack(fill='both', expand=True)
+        self.root.update()
+        self.nb.select(self.other)
+        self.root.update()
+        # Mapping the cached chart frees its slot. For a third, blank page there
+        # is no cached chart to consume, so the least-recently hidden chart evicts.
+        blank = ttk.Frame(self.nb)
+        self.nb.add(blank, text='Blank')
+        self.nb.select(blank)
+        self.root.update()
+        self.assertEqual(self.canvas._tkphoto.width(), 1)
+        self.assertGreater(other_chart._tkphoto.width(), 1)
 
     def test_explicit_hidden_draw_and_png_export_are_not_suppressed(self):
         self.canvas.draw()

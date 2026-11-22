@@ -189,6 +189,13 @@ class WorkflowChecks(unittest.TestCase):
                 self.assertIs(adopted,mocks[2].return_value)
                 self.assertTrue(Path(result['report_path']).is_file())
                 self.assertEqual(Path(result['report_path']).name,'电磁仿真，电路仿真，设计计算联合报告.docx')
+                self.assertEqual(Path(result['xlsx_path']),Path(result['report_path']).with_suffix('.xlsx'))
+                with ZipFile(result['xlsx_path']) as workbook:
+                    names = workbook.read('xl/workbook.xml').decode('utf-8')
+                    self.assertIn('联合结论',names)
+                    self.assertIn('磁件·场解与回填',names)
+                    self.assertIn('设计·设计计算',names)
+                    self.assertIn('电路·仿真对照',names)
                 adopted_metadata=result['proposed_config']['__transformer_simulation']
                 self.assertEqual(adopted_metadata['after'],result['record']['calculation']['endpoint_metrics'])
                 self.assertEqual(adopted_metadata['comparison_path'],result['report_path'])
@@ -229,6 +236,10 @@ class WorkflowChecks(unittest.TestCase):
                 self.assertEqual(states['field'],'failed');self.assertEqual(states['spice'],'skipped')
                 self.assertIn('field mesh failed',result['summary'])
                 self.assertTrue(Path(result['report_path']).is_file())
+                with ZipFile(result['xlsx_path']) as workbook:
+                    page = workbook.read('xl/worksheets/sheet1.xml').decode('utf-8')
+                    self.assertIn('field mesh failed',page)
+                    self.assertIn('未取得的主要证据',page)
 
     def test_cancellation_stops_before_next_solver_and_keeps_record(self):
         from contextlib import ExitStack

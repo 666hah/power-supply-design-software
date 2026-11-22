@@ -92,6 +92,19 @@ class ReviewSummary(unittest.TestCase):
   self.assertIn('Vinmax',summary['pending'][0][0])
   self.assertIn('50 V',summary['pending'][0][1])
 
+ def test_fra_acceptance_uses_unrounded_minimum_and_valid_evidence(self):
+  settings = {'fra_enabled': True}
+  metrics = dict(pm=65., crossings=[dict(pm=65.), dict(pm=45.)])
+  loop = dict(available=True, simulation={'loop': metrics})
+  evidence = dict(cases=[self.nominal(loop=loop)], settings=settings)
+  summary = simulation_summary(evidence)
+  self.assertEqual(summary['state'], 'review')
+  self.assertIn('45 ° 未达标', summary['findings'][0][1])
+  metrics['crossings'][-1]['pm'] = 45.0001
+  self.assertEqual(simulation_summary(evidence)['state'], 'pass')
+  loop['available'] = False
+  self.assertEqual(simulation_summary(evidence)['state'], 'undefined')
+
  def test_nominal_steady_check_and_priority_deviation_survive_on_cover(self):
   rows=[dict(metric='原边电流 RMS',status='偏差待复核',delta_percent=-7.0),
         dict(metric='输出电压',status='偏差在提示阈值内',delta_percent=2.0)]

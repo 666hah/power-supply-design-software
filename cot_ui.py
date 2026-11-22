@@ -21,7 +21,11 @@ class CotEditor:
         self.window.minsize(840,560)
         self.window.columnconfigure(0,weight=1)
         self.window.rowconfigure(1,weight=1)
-        ttk.Label(self.window,text='COT 工程配置',font=('',16,'bold'),padding=(16,12)).grid(sticky='w')
+        header = ttk.Frame(self.window, padding=(12, 8))
+        header.grid(row=0, column=0, sticky='ew')
+        ttk.Label(header, text='多相 Buck · COT 工程配置', style='WorkspaceHeading.TLabel').pack(anchor='w')
+        self.status = tk.StringVar(value='就绪 · 应用配置后，在主窗口保存工程。')
+        ttk.Label(header, textvariable=self.status, style='ResultConclusion.TLabel').pack(fill='x', pady=(4, 0))
         self.tabs=ttk.Notebook(self.window)
         self.tabs.grid(row=1,column=0,sticky='nsew',padx=12)
         self.variables={}
@@ -29,7 +33,10 @@ class CotEditor:
         for group in self.meta['groups']:
             frame=self._page(group['name'])
             frame.columnconfigure(2,weight=1)
-            for row,field in enumerate(group['fields']):
+            note = group.get('note')
+            if note:
+                ttk.Label(frame,text=note,style='ResultConclusion.TLabel').grid(row=0,column=0,columnspan=3,sticky='w',padx=8,pady=8)
+            for row,field in enumerate(group['fields'], start=int(bool(note))):
                 label=field['label']+(' / '+field['unit'] if field['unit'] else '')
                 ttk.Label(frame,text=label,wraplength=310).grid(row=row,column=0,sticky='w',padx=8,pady=8)
                 var=tk.StringVar()
@@ -41,14 +48,12 @@ class CotEditor:
                 widget.grid(row=row,column=1,sticky='ew',padx=8,pady=8)
                 ttk.Label(frame,text=field['note'],wraplength=440,foreground='#526579').grid(row=row,column=2,sticky='w',padx=8,pady=8)
         self._phase_page()
-        self.status=tk.StringVar(value='修改后点击“应用到当前设计”；保存工程时会一起保存。')
         bar=ttk.Frame(self.window,padding=12)
         bar.grid(row=2,column=0,sticky='ew')
         bar.columnconfigure(0,weight=1)
-        ttk.Label(bar,textvariable=self.status,wraplength=550).grid(row=0,column=0,sticky='w')
         ttk.Button(bar,text='导入配置…',command=self.import_config).grid(row=0,column=1,padx=4)
         ttk.Button(bar,text='导出配置…',command=self.export_config).grid(row=0,column=2,padx=4)
-        ttk.Button(bar,text='应用到当前设计',command=self.apply).grid(row=0,column=3,padx=4)
+        ttk.Button(bar,text='应用到当前设计',style='Accent.TButton',command=self.apply).grid(row=0,column=3,padx=4)
         ttk.Button(bar,text='关闭',command=self.window.destroy).grid(row=0,column=4,padx=4)
         self.reload()
 
@@ -75,7 +80,7 @@ class CotEditor:
         frame=self._page('逐相器件与采样')
         frame.columnconfigure(0,weight=1)
         self.phase_note=tk.StringVar()
-        ttk.Label(frame,textvariable=self.phase_note,wraplength=1000).grid(sticky='w',pady=8)
+        ttk.Label(frame,textvariable=self.phase_note,style='ResultConclusion.TLabel').grid(sticky='ew',pady=8)
         fields=self.meta['phase_fields']
         self.phase_table=ttk.Treeview(frame,columns=[x['key'] for x in fields],show='tree headings',height=16,selectmode='browse')
         self.phase_table.heading('#0',text='相');self.phase_table.column('#0',width=50,stretch=False)
@@ -98,7 +103,8 @@ class CotEditor:
         ttk.Button(buttons,text='更新选中相',command=self.update_phase).pack(side='left',padx=5)
         ttk.Button(buttons,text='增加一相参数',command=self.add_phase).pack(side='left',padx=5)
         ttk.Button(buttons,text='删除选中相参数',command=self.delete_phase).pack(side='left',padx=5)
-        ttk.Label(frame,text='倍率作用于主界面的单相标称参数；偏置单位为 A。相数改变后需明确增加或删除参数行。',wraplength=1000).grid(row=5,column=0,sticky='w',pady=8)
+        ttk.Label(frame, text='倍率以单相标称值为基准。修改相数后，增加或删除相参数行，使行数与相数一致。',
+                  style='Muted.TLabel', wraplength=750).grid(row=5, column=0, sticky='w', pady=8)
 
     def reload(self):
         for key,(var,field) in self.variables.items():
@@ -114,7 +120,9 @@ class CotEditor:
         for i,row in enumerate(self.rows):
             values=[f"{row.get(x['key'],self.meta['phase_defaults'][x['key']]):.8g}" for x in self.meta['phase_fields']]
             self.phase_table.insert('', 'end',iid=str(i),text=f'PH{i+1}',values=values)
-        self.phase_note.set(f"当前 Buck 为 {int(self.parameters['buck_phases'])} 相，已配置 {len(self.rows)} 行。各相可以独立修改。")
+        phases, rows = int(self.parameters['buck_phases']), len(self.rows)
+        state = '行数与相数一致' if phases == rows else '待复核 · 行数与相数不一致'
+        self.phase_note.set(f'{state} · 当前 {phases} 相 · 已配置 {rows} 行')
 
     def select_phase(self,_event=None):
         selection=self.phase_table.selection()
@@ -160,7 +168,7 @@ class CotEditor:
             data=self.collect()
             self.apply_callback(data)
             self.data=data
-            self.status.set('已应用到当前设计。点击主界面“保存工程”可永久保存。')
+            self.status.set('已应用到当前设计。请在主窗口保存工程。')
         except Exception as exc:
             messagebox.showerror('请检查 COT 配置',str(exc),parent=self.window)
 
@@ -178,7 +186,8 @@ class CotEditor:
         try:
             with open(path,encoding='utf-8') as stream:data=json.load(stream)
             self.data=configuration(dict(self.parameters,cot_config=data))
-            self.reload();self.status.set('已载入，点击“应用到当前设计”后生效。')
+            self.reload()
+            self.status.set('配置已载入 · 待应用到当前设计')
         except Exception as exc:messagebox.showerror('导入配置',str(exc),parent=self.window)
 
 

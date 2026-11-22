@@ -84,6 +84,7 @@ const f = (v: any) =>
                 pass: "模型内满足",
                 review: "需核对",
                 undefined: "待数据 / 未定义",
+                info: "说明",
                 not_configured: "尚未配置",
                 reference: "初选参考",
                 na: "不适用",
@@ -402,7 +403,10 @@ const modules: Module[] = [
   {
     name: "环路与补偿",
     rows: (c) => [
-      ...entries(c.summary.loop || {}, ["fc", "pm", "min_pm", "gm_db"]),
+      ...c.checks.filter((row: Spec) => row.id === "phase_margin").map((row: Spec) => [
+        row.name, row.value, "°", `验收 ${row.comparison} ${f(row.limit)}° · ${f(row.state)}`,
+      ] as Row),
+      ...entries(c.summary.loop || {}, ["fc", "pm", "gm_db"]),
       ...entries(c.parameters, ["KP", "fz1", "fz2", "fp1", "fp2"]),
       [
         "闭环极点验证",
@@ -461,7 +465,9 @@ const modules: Module[] = [
             r.name,
             r.value,
             r.unit,
-            `${r.comparison || ""} 限值 ${f(r.limit)}；${f(r.state)}；${r.note || ""}`,
+            r.limit == null
+              ? `${f(r.state)}；${r.note || ""}`
+              : `${r.comparison || ""} 限值 ${f(r.limit)}；${f(r.state)}；${r.note || ""}`,
           ] as Row,
       ),
       ...c.summary.warnings.map((v: string) => ["模型说明", v, ""] as Row),

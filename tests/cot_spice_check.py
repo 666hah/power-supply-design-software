@@ -2,7 +2,11 @@
 import json
 from pathlib import Path
 import sys
+import tempfile
+from threading import Barrier
 import unittest
+from unittest.mock import patch
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -91,6 +95,70 @@ class CotSpiceTests(unittest.TestCase):
             self.assertNotIn('\n'+fixture,text)
         self.assertEqual(unit['output_count'],1)
         self.assertIn('phase4',unit['probes']['cot_phase_limits'])
+
+    def test_comparison_parallel_endpoints_keep_decks_and_stages_isolated(self):
+        from cot_spice_comparison import compare_design
+
+        self.design['spice_config'] = dict(fra_enabled=1, line_load_enabled=1, simulation_threads=2)
+        bundle = calculate(self.design, analysis='endpoints', include_loop=False,
+                           include_cross_regulation=False).runtime_bundle()
+        started = Barrier(2, timeout=5)
+        stages = {'Vinmin_COT': [], 'Vinmax_COT': []}
+
+        def simulate(_executable, folder, _timeout, cancelled, **_):
+            self.assertFalse(cancelled())
+            if folder.name in stages:
+                vin = 10 if folder.name == 'Vinmin_COT' else 14
+                config = (folder/'design_params.inc').read_text('ascii')
+                self.assertIn(f'.param VIN={vin}\n', config)
+                started.wait()
+                stages[folder.name].append('nominal')
+            else:
+                endpoint = next(p.name for p in folder.parents if p.name in stages)
+                stages[endpoint].append(folder.name)
+            return 0.01
+
+        def step(_files, _case, settings, folder, execute, **_):
+            execute(folder, settings['simulation_timeout_s'])
+            return dict(complete=True)
+
+        def fra(_files, _case, settings, _measured, folder, execute, *, progress):
+            for name in ('primary', 'half_amplitude'):
+                progress(name)
+                execute(folder/name, settings['fra_timeout_s'])
+            return dict(available=True)
+
+        def line_load(files, _rails, voltages, *_args, **_):
+            self.assertEqual(voltages, [10., 14.])
+            self.assertIn(b'.param VIN=14\n', files['design_params.inc'])
+            self.assertTrue(all(trace == ['nominal', 'load_step', 'primary', 'half_amplitude']
+                                for trace in stages.values()))
+            return dict(complete=True)
+
+        nominal = dict(complete=True, nominal_comparable=True, measurements=dict(frequency_actual=400e3))
+        progress = []
+        with tempfile.TemporaryDirectory(dir=ROOT/'artifacts') as temporary, \
+                patch('spice_runtime.endpoint_workers', return_value=2), \
+                patch('spice_runtime._run', new=simulate), \
+                patch('spice_runtime.read_log', return_value=({}, '', [], [])), \
+                patch('spice_runtime.TransientRaw'), \
+                patch('cot_spice_comparison._summarize_case', side_effect=lambda *_args, **_kwargs: dict(nominal)), \
+                patch('spice_boundary.run_load_transient', new=step), \
+                patch('cot_spice_fra.run_fra', new=fra), \
+                patch('spice_line_load.run_line_load', side_effect=line_load) as line, \
+                patch('cot_spice_comparison._write_report', side_effect=lambda path, _: path.write_bytes(b'report')):
+            result = compare_design(bundle, Path(temporary)/'test.docx', executable='test',
+                                    cancelled=lambda:False, progress=lambda done,total,_:progress.append((done,total)))
+            line.assert_called_once()
+            with ZipFile(result['path']) as archive:
+                evidence = json.loads(archive.read('comparison.json'))
+                self.assertEqual(evidence['execution'], dict(endpoint_workers=2, threads_per_case=2))
+                self.assertEqual([case['id'] for case in evidence['cases']], list(stages))
+                self.assertTrue(all(f'{name}/Flyback.cir' in archive.namelist() for name in stages))
+        self.assertEqual(result['successful'], 2)
+        self.assertEqual(result['fra_successful'], 2)
+        self.assertEqual(progress, sorted(progress))
+        self.assertEqual(progress[-1], (9, 9))
 
 
 if __name__ == '__main__':

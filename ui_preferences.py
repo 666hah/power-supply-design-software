@@ -8,6 +8,11 @@ FONT_MIN,FONT_MAX,FONT_STEP = 12,40,2
 FONT_SIZES = tuple(range(FONT_MIN,FONT_MAX+1,FONT_STEP))
 
 
+def style_conclusion(style, pixels, name='ResultConclusion.TLabel'):
+    style.configure(name, background='#e8f1fc', foreground='#173e6b',
+                    font=('Microsoft YaHei UI', -abs(pixels), 'bold'), padding=(8, 6), anchor='w')
+
+
 def normalize_font_size(value):
     return max(FONT_MIN,min(FONT_MAX,FONT_MIN+FONT_STEP*round((float(value)-FONT_MIN)/FONT_STEP)))
 
@@ -52,6 +57,7 @@ def apply_studio_fonts(root,size):
     k=size/14;style=ttk.Style(root)
     for name,base,bold in [('System.TLabel',14,False),('System.TButton',13,False),('SystemToolbar.TButton',14,False),('SystemPrimary.TButton',13,True),('SystemMini.TButton',12,False),('System.TCheckbutton',13,False)]:
         style.configure(name,font=('Microsoft YaHei UI',-round(base*k),'bold' if bold else 'normal'))
+    style_conclusion(style, size, 'SystemConclusion.TLabel')
     def walk(w):
         if 'font' in w.keys() and str(w.cget('font')):
             if not hasattr(w,'_studio_base_font'):

@@ -175,6 +175,10 @@ class ProcessAndReportChecks(unittest.TestCase):
         self.assertEqual(self.result['hardware'],expected['hardware'])
         for actual,reference in zip(self.result['cases'],expected['cases']):
             self.assertEqual(actual['summary'],reference['summary'])
+            margin = next(row for row in actual['checks'] if row['id'] == 'phase_margin')
+            self.assertEqual((margin['comparison'], margin['limit']), ('>', 45.0))
+            self.assertEqual(margin['value'], actual['summary']['loop']['min_pm'])
+            self.assertEqual(margin['pass_'], margin['value'] > 45.0)
         self.assertNotEqual(self.result['cases'][0]['summary']['operating_point']['D'],
                             self.result['cases'][1]['summary']['operating_point']['D'])
 

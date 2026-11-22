@@ -248,7 +248,7 @@ class MultiOutputResultsUI:
         host = ttk.Frame(parent)
         host.pack(fill='x', padx=6, pady=(4, 8))
         note = tk.StringVar()
-        label = ttk.Label(host, textvariable=note, style='Margin.TLabel',
+        label = ttk.Label(host, textvariable=note, style='ResultConclusion.TLabel',
                           wraplength=900, justify='left', padding=(6, 6))
         label.pack(fill='x')
         label.bind('<Configure>', lambda event: label.configure(wraplength=max(180, event.width-16)))
@@ -428,9 +428,9 @@ class MultiOutputResultsUI:
             raise ValueError('各路结果与波形数量不一致，不能显示上一设计的数据')
         feedback_id = op['feedback_output']
         notes = {
-            'power': f'全部 {len(rows)} 路输出波形 · ★ OUT{feedback_id} 为主反馈/PSR基准 · 上方仅展示共享原边/MOS，向下滚动查看每路。',
-            'cap': f'全部 {len(rows)} 路输出电容 · ★ OUT{feedback_id} 为主反馈/PSR基准 · 输入电容仅在上方计一次；各路 RMS 不直接相加。',
-            'stress': f'全部 {len(rows)} 路功率器件 · ★ OUT{feedback_id} 为主反馈/PSR基准 · 逐路仅含整流/续流和输出防反，不重复计主MOS/钳位MOS。',
+            'power': f'{len(rows)} 路输出波形 · 反馈基准 OUT{feedback_id} · 共享原边见上方',
+            'cap': f'{len(rows)} 路输出电容 · 反馈基准 OUT{feedback_id} · 共享输入电容见上方',
+            'stress': f'{len(rows)} 路器件应力 · 反馈基准 OUT{feedback_id} · 共享主开关与钳位开关见上方',
         }
         self._output_result_notes[kind].set(notes[kind])
         for row, wf in zip(rows, waveforms):
@@ -443,22 +443,22 @@ class MultiOutputResultsUI:
             card['dirty'] = True
             feedback = rail_id == feedback_id
             card['feedback'] = feedback
-            card['frame'].configure(text=f"OUT{rail_id} · {row['name']}"+(' ★ 主反馈/PSR基准' if feedback else ''))
+            card['frame'].configure(text=f"OUT{rail_id} · {row['name']}"+('（反馈基准）' if feedback else ''))
             if kind == 'power':
                 solved = row['op']
                 ripple = (f"按导入阻抗纹波 {wf['ripple_pp_total']*1000:.4g} mVpp" if wf.get('ripple_impedance_model') == 'curve'
                           else f"低频纹波 {wf['ripple_pp']*1000:.4g} mVpp")
                 demand = (f"反馈设定/匝比估算 {row['spec']['V_out']:g} V / {row['spec']['P_out']:g} W；解算 {solved['V_out']:.4g} V / {solved['P_out']:.4g} W"
                           if op.get('coupled_model') else f"{row['spec']['V_out']:g} V / {row['spec']['P_out']:g} W")
-                card['detail'].set(demand+f" · {solved.get('branch_mode',solved['mode'])} · "
-                                   f"副边电流 {row['op']['I_d_rms']:.4g} A rms · {ripple}。"
+                card['detail'].set(f"{ripple} · 副边电流 {row['op']['I_d_rms']:.4g} A RMS · "
+                                   f"{solved.get('branch_mode',solved['mode'])}\n{demand}。"
                                    +('输出电感电流为本路独立 Lout。' if op['topology'] == 'ACF-FORWARD' else '本路为副边波形，原边励磁电感与主开关由所有输出共享。'))
                 card['draw'] = draw_output_power
             elif kind == 'cap':
                 caps = row['capacitors']['output']['caps']
                 full_label = '按导入阻抗' if wf.get('ripple_impedance_model') == 'curve' else '含 ESL'
-                card['detail'].set(f"输出银行 {row['capacitors']['total_out']:.4g} A rms · "
-                                   f"{len(caps)} 只电容 · 耗散合计 {row['P_cap']:.5g} W · "
+                card['detail'].set(f"输出电容组 {row['capacitors']['total_out']:.4g} A RMS · "
+                                   f"损耗合计 {row['P_cap']:.5g} W · {len(caps)} 颗电容\n"
                                    f"标称不含 ESL {wf['ripple_pp']*1000:.4g} mVpp / {full_label} {wf['ripple_pp_total']*1000:.4g} mVpp。")
                 card['draw'] = draw_output_capacitors
             else:

@@ -27,7 +27,7 @@ class MagneticReportUI(unittest.TestCase):
         try:
             bar=root.nametowidget(root.cget('menu'))
             labels=[bar.entrycget(i,'label') for i in range(1,bar.index('end')+1)]
-            self.assertEqual(labels[:3],['File (文件)','示例','自动设计'])
+            self.assertEqual(labels[:3],['文件','示例','自动设计'])
             files=root.nametowidget(bar.entrycget(1,'menu'))
             self.assertFalse(any('示例' in files.entrycget(i,'label') or '初版' in files.entrycget(i,'label')
                 for i in range(files.index('end')+1) if files.type(i)=='command'))

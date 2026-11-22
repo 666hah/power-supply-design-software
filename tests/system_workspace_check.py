@@ -94,6 +94,7 @@ class DesktopLifecycle(unittest.TestCase):
             root.update()
             shell.canvas.xview_moveto(.27)
             view = shell.canvas.xview()
+            visited = {}
             for identity in ('PSU-01','PSU-02','PSU-01'):
                 shell.open_unit(identity)
                 app = shell.calculator
@@ -104,6 +105,7 @@ class DesktopLifecycle(unittest.TestCase):
                 self.assertEqual(app.container.winfo_manager(), 'grid')
                 self.assertEqual(shell._github_button.winfo_manager(), 'grid')
                 self.assertEqual(app._topo_key(), 'BUCK' if identity=='PSU-02' else 'FLYBACK')
+                self.assertIs(app, visited.setdefault(identity, app))
                 if identity=='PSU-01':
                     app.set_param('P_out', 42)
                     app.restore_result_page('mag')
@@ -135,6 +137,21 @@ class DesktopLifecycle(unittest.TestCase):
             self.assertIs(shell.calculator, app)
             self.assertEqual(w.unit_by_id(shell.project, 'PSU-01')['spec']['P_out'], 43)
             app.set_param('P_out', 43)
+            self.assertTrue(shell.back_to_architecture())
+            # A read-only revisit preserves canvas widget IDs, even when selection changes.
+            canvas_items = shell.canvas.find_all()
+            with patch.object(w, 'set_unit_config', wraps=w.set_unit_config) as apply_config:
+                shell.schedule_open_unit('PSU-02')
+                self.assertIs(shell.calculator, visited['PSU-02'])
+                self.assertTrue(shell.back_to_architecture())
+                apply_config.assert_not_called()
+            self.assertEqual(shell.canvas.find_all(), canvas_items)
+            self.assertEqual(shell.selected, ('unit', 'PSU-02'))
+            shell.add_ldo()
+            ldo = shell.selected[1]
+            self.assertIsNotNone(shell.open_unit(ldo))
+            self.assertEqual(len(shell._editors), 2)
+            self.assertFalse(visited['PSU-01'].container.winfo_exists())
             self.assertTrue(shell.back_to_architecture())
             root.update()
             # No dangling bind_all handlers referring to destroyed Toplevels.

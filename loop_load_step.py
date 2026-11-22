@@ -4,39 +4,48 @@ import numpy as np
 from calculation_scheduler import check_calculation_cancelled
 
 
-def _closed_loop(plant, compensator):
-    """Connect the shared plant states once, with u = -Gc(s) * v."""
+def closed_loop_load_ports(plant, compensator, feedback_index=0):
+    """Close one feedback rail while exposing all modeled load inputs and outputs."""
     command, load = plant.B[:, :1], plant.B[:, 1:]
-    direct_command, direct_load = plant.D[0]
+    control_out, load_out = plant.D[:, :1], plant.D[:, 1:]
+    direct_command, direct_load = control_out[feedback_index, 0], load_out[[feedback_index]]
     direct_comp = compensator.D.item()
     denominator = 1.0 + direct_command * direct_comp
     if abs(denominator) < 1e-12:
         raise ValueError('补偿器与功率级的直通项形成奇异闭环。')
 
-    u_plant = -direct_comp * plant.C / denominator
+    u_plant = -direct_comp * plant.C[[feedback_index]] / denominator
     u_comp = -compensator.C / denominator
     u_load = -direct_comp * direct_load / denominator
-    y_plant = plant.C / denominator
-    y_comp = direct_command * u_comp
-    y_load = direct_load / denominator
+    y_plant = plant.C + control_out @ u_plant
+    y_comp = control_out @ u_comp
+    y_load = load_out + control_out @ u_load
     a = np.block([
         [plant.A + command @ u_plant, command @ u_comp],
-        [compensator.B @ y_plant, compensator.A + compensator.B @ y_comp],
+        [compensator.B @ y_plant[[feedback_index]], compensator.A + compensator.B @ y_comp[[feedback_index]]],
     ])
-    b = np.vstack((load + command * u_load, compensator.B * y_load))
-    return a, b[:, 0], np.hstack((y_plant, y_comp))[0], y_load
+    b = np.vstack((load + command @ u_load, compensator.B @ y_load[[feedback_index]]))
+    return a, b, np.hstack((y_plant, y_comp)), y_load
+
+
+def _closed_loop(plant, compensator):
+    a, b, c, d = closed_loop_load_ports(plant, compensator)
+    return a, b[:, 0], c[0], d[0, 0]
 
 
 def _step_samples(a, b, c, d, frequency):
     """Sample exact constant-input transitions on progressively coarser grids."""
     from scipy.linalg import expm, matrix_balance
 
+    scalar = b.ndim == 1
+    if scalar:
+        b, c, d = b[:, None], c[None, :], np.asarray([[d]])
     if a.size:
         # State equations mix currents, voltages and compensator states with
         # different units. Balance before finding poles and propagating.
         a, scale = matrix_balance(a, permute=False, separate=True)
         weights = scale[0]
-        b, c = b / weights, c * weights
+        b, c = b / weights[:, None], c * weights
         poles = np.linalg.eigvals(a)
         slowest = np.max(poles.real)
         if slowest >= 0:
@@ -45,13 +54,13 @@ def _step_samples(a, b, c, d, frequency):
         end = min(max(10 / -slowest, 12 / frequency), 2.0)
         interval = min(end/200, 1/(8*np.max(np.abs(poles))))
     else:
-        steady_state = np.zeros(0)
+        steady_state = np.zeros_like(b)
         end, interval = 12/frequency, 1/frequency
-    dc = float(c @ steady_state + d)
+    dc = c @ steady_state + d
     # Early samples capture the edge and fast poles. The final segment shows
     # the slow envelope without forcing a uniform sample at the fastest pole.
     segment_ends = np.unique(np.minimum(end, [32*interval, 512*interval, end/8, end]))
-    time, response = [0.0], [float(d)]
+    time, response = [0.0], [d]
     state = -steady_state
     for segment_end in segment_ends:
         check_calculation_cancelled()
@@ -60,10 +69,12 @@ def _step_samples(a, b, c, d, frequency):
         for sample in segment[1:]:
             state = propagator @ state
             time.append(float(sample))
-            response.append(float(c @ state + dc))
+            response.append(c @ state + dc)
     time, response = np.asarray(time), np.asarray(response)
-    if not np.isfinite(dc) or not np.all(np.isfinite(response)):
+    if not np.all(np.isfinite(dc)) or not np.all(np.isfinite(response)):
         raise ValueError('负载响应发生数值溢出。')
+    if scalar:
+        return time, response[:, 0, 0], float(dc[0, 0])
     return time, response, dc
 
 

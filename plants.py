@@ -42,6 +42,10 @@ def build_loop_models(p, op):
 
 
 def _build_loop_models(p, op):
+    if op.get('llc'):
+        from llc_model import build_loop as build_llc_loop
+        from llc_settings import effective
+        return build_llc_loop(effective(p), op['llc'])
     if op.get('cot'):
         from cot_loop import build_loop
         return build_loop(p, op)

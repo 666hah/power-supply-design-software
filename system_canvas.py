@@ -11,6 +11,8 @@ def draw_network(ui):
     c=ui.canvas;z=ui.zoom;c.delete('all');ui.hits={}
     current_tag='grid'
     ui._edge_items={};ui._incident_edges={};ui._drawn_positions={}
+    ui._selection_frames = {}
+    ui._wire_colors = {}
     def tagged(item,hit):
         c.addtag_withtag(current_tag,item)
         ui.hits[item]=hit
@@ -43,7 +45,9 @@ def draw_network(ui):
         target=next(key for key,(kind,node,point) in ui.nodes.items() if node['id']==edge['target'])
         ui._incident_edges.setdefault(target,[]).append(edge)
         a,b=endpoints(ui.project,edge)
-        color='#d29132' if ui.selected==('edge',edge['id']) else '#4b7ec7' if edge['enabled'] else '#b5bfcd'
+        base_color = '#4b7ec7' if edge['enabled'] else '#b5bfcd'
+        ui._wire_colors[edge['id']] = base_color
+        color = '#d29132' if ui.selected == ('edge', edge['id']) else base_color
         hit=('edge',edge['id'])
         if edge['mode']=='diode':
             p=diode_point(ui.project,edge)
@@ -57,15 +61,16 @@ def draw_network(ui):
         x,y=p['x'],p['y'];h=158+26*max(0,len(n.get('rails',[]))-1)
         hit=(kind,n['id']);dark=kind=='bus';accent=PALETTE[kind]
         rounded(x,y+5,288,h,'#e5ebf4',r=14)
-        rounded(x,y,288,h,'#10243b' if dark else '#ffffff',accent if ui.selected==hit else '#d9e3ef',2 if ui.selected==hit else 1,hit,r=14)
+        frame = rounded(x,y,288,h,'#10243b' if dark else '#ffffff',accent if ui.selected==hit else '#d9e3ef',2 if ui.selected==hit else 1,hit,r=14)
+        ui._selection_frames[hit] = (frame, '#d9e3ef', accent)
         rounded(x,y+18,4,32,accent,r=2)
-        text(x+18,y+23,n['id']+'  ·  '+{'bus':'INPUT SOURCE','unit':'CONVERTER','junction':'DIODE OR BUS','load':'LOAD'}[kind],10,'#66c7dc' if dark else accent,bold=True,hit=hit)
+        text(x+18,y+23,n['id']+' · '+{'bus':'输入源','unit':'电源模块','junction':'OR 汇流','load':'负载'}[kind],10,'#66c7dc' if dark else accent,bold=True,hit=hit)
         name=n['name'][:12]+('…' if len(n['name'])>12 else '')
         text(x+18,y+54,name,18,'#ffffff' if dark else '#1c334f',bold=True,hit=hit)
         tagged(c.create_oval(x+249,y+17,x+255,y+23,fill='#24ae91' if n['enabled'] else '#d29338',outline=''),hit)
         text(x+271,y+20,'×',20,'#8b9fb5',anchor='center',hit=('delete',key))
         if kind=='bus':value=f"{n['min']:g}–{n['max']:g} V  ·  {n['capacity']:g} W"
-        elif kind=='unit':value=(f"LDO · {n['spec']['V_out']:g}V / {n['spec']['I_out_max']*1000:g}mA" if n['spec']['topology']=='LDO' else f"{n['spec']['topology']}  ·  {sum(r['P_out'] for r in n['rails']):g} W")
+        elif kind=='unit':value=(f"LDO · {n['spec']['V_out']:g} V / {n['spec']['I_out_max']*1000:g} mA" if n['spec']['topology']=='LDO' else f"{n['spec']['topology']} · {sum(r['P_out'] for r in n['rails']):g} W")
         elif kind=='junction':value=f"二极管竞争母线  ·  {n['capacity']:g} W"
         else:value=f"{n['power']:g} W  ·  "+(f"{n['min']:g}–{n['max']:g} V" if n['max'] else '允许电压未限定')
         text(x+18,y+79,value,12,'#acc4d9' if dark else '#7b8da3',hit=hit)
@@ -76,14 +81,14 @@ def draw_network(ui):
         rails=n.get('rails',[]) if kind=='unit' else ([{}] if kind in ('bus','junction') else [])
         for i,r in enumerate(rails,1):
             yy=y+(102 if dark else 119+26*(i-1))
-            label='DC OUTPUT' if dark else 'OR BUS' if kind=='junction' else f"OUT{i}  {r['V_out']:.4g} V"
+            label='直流输出' if dark else 'OR 母线' if kind=='junction' else f"OUT{i} · {r['V_out']:.4g} V"
             text(x+270,yy,label,11,'#69cbdf' if dark else accent,anchor='e',hit=hit)
             tagged(c.create_oval(x+280,yy-8,x+296,yy+8,fill=accent,outline='white',width=2*z),('output',dict(kind=kind,id=n['id'],output=i)))
         if kind=='unit':
             if n['spec']['topology']=='LDO':
                 if ui._review is None:ui._review=model_review(ui.project)
                 r=next((r for r in ui._review.get('ldo',[]) if r['unit']==n['id']),None)
-                if r:text(x+158,y+h-19,('Pd '+f"{r['max_loss']:.3g}"+'W' if r['max_loss'] is not None else '压差需核对'),11,MUTED_COLOR,hit=hit)
+                if r:text(x+158,y+h-19,(f"耗散 {r['max_loss']:.3g} W" if r['max_loss'] is not None else '压差待复核'),11,MUTED_COLOR,hit=hit)
             rounded(x+14,y+h-31,126,23,'#eef4ff',hit=('open',n['id']),r=6)
             text(x+24,y+h-19,'进入单元设计  →',11,accent,bold=True,hit=('open',n['id']))
         else:text(x+18,y+h-18,'终端负载' if kind=='load' else '可向多个后级分配',11,'#91a6bc' if dark else '#94a2b5',hit=hit)
@@ -94,16 +99,34 @@ def draw_network(ui):
         ui._drawn_positions[current_tag]=dict(p)
         selected=ui.selected==('edge',edge['id'])
         rounded(x-44,y-21,88,50,'#e5ebf4',r=10)
-        rounded(x-44,y-25,88,50,'white','#d29132' if selected else '#a9bcd6',2 if selected else 1,hit,r=10)
+        frame = rounded(x-44,y-25,88,50,'white','#d29132' if selected else '#a9bcd6',2 if selected else 1,hit,r=10)
+        ui._selection_frames['edge', edge['id']] = (frame, '#a9bcd6', '#d29132')
         text(x,y-14,edge['id'],8,'#7a8da5',anchor='center',hit=hit)
         tagged(c.create_polygon(x-23,y-5,x-10,y+2,x-23,y+9,fill='#eaf0ff',outline='#3f6bad',width=1.7*z),hit)
         tagged(c.create_line(x-8,y-7,x-8,y+11,fill='#3f6bad',width=1.7*z),hit)
         text(x+17,y+2,f"{edge['vf']:g} V",11,'#2d4562',anchor='center',bold=True,hit=hit)
-        text(x,y+19,'OR-ING' if edge['enabled'] else '停用',8,'#96a4b7',anchor='center',hit=hit)
+        text(x,y+19,'OR 支路' if edge['enabled'] else '已停用',8,'#96a4b7',anchor='center',hit=hit)
     if not ui.nodes:text(60,100,'从上方增加输入源、电源模块、汇流节点或负载',17)
     if z!=1:c.scale('all',0,0,z,z)
     a,b,right,bottom=scene_bounds(ui.project)
     c.configure(scrollregion=(0,0,max(right+70,ui.canvas.winfo_width()/z)*z,max(bottom+70,ui.canvas.winfo_height()/z)*z))
+
+
+def update_selection(ui, previous):
+    """Restyle the old and new selection without rebuilding the scene."""
+    for selection in (previous, ui.selected):
+        if selection is None:
+            continue
+        active = selection == ui.selected
+        frame = ui._selection_frames.get(selection)
+        if frame:
+            item, normal_color, selected_color = frame
+            ui.canvas.itemconfigure(item, outline=selected_color if active else normal_color,
+                                    width=(2 if active else 1) * ui.zoom)
+        kind, identity = selection
+        if kind == 'edge' and identity in ui._wire_colors:
+            for item in ui._edge_items[identity]:
+                ui.canvas.itemconfigure(item, fill='#d29132' if active else ui._wire_colors[identity])
 
 
 def update_drag(ui,key,kind):

@@ -18,9 +18,12 @@ def edit_profile(app):
     win.transient(app.root)
     win.grab_set()
     win.columnconfigure(0,weight=1);win.rowconfigure(2,weight=1)
-    ttk.Label(win,text='本设置随工程保存。JSON 长度为 m，针脚、同名端与绕向按实物或绕线图填写；未知值保留 null。',
-              wraplength=670,padding=8).grid(row=0,columnspan=2,sticky='ew')
-    quick=ttk.LabelFrame(win,text='圆形骨架基准（快速填写）',padding=6)
+    overview = ttk.Frame(win, padding=8)
+    overview.grid(row=0, columnspan=2, sticky='ew')
+    ttk.Label(overview, text='正在编辑工程的三维几何', style='ResultConclusion.TLabel').pack(fill='x')
+    ttk.Label(overview, text='按实物或绕线图填写针脚、同名端和绕向。JSON 的长度单位为 m，未知值填 null。',
+              wraplength=670).pack(fill='x', pady=(3, 0))
+    quick=ttk.LabelFrame(win,text='圆形骨架基准',padding=6)
     quick.grid(row=1,columnspan=2,sticky='ew',padx=8)
     inputs={}
     for i,(k,label) in enumerate((('z0_m','净窗口起点 Z / mm'),('r0_m_if_circular','内侧半径 / mm'),('source','尺寸来源'))):
@@ -62,7 +65,7 @@ def edit_profile(app):
         except ValueError as exc:
             messagebox.showerror('请检查建模设置',str(exc),parent=win);return
         app._schedule_winding_redraw()
-        app.status_var.set('三维建模设置已应用，绕组长度将随电气结果更新。');win.destroy()
+        app.status_var.set('已应用三维建模设置。绕组长度将在重新计算后更新。');win.destroy()
     buttons=ttk.Frame(win,padding=8);buttons.grid(row=3,columnspan=2,sticky='ew')
     ttk.Button(buttons,text='导入设置 JSON…',command=load).pack(side='left')
     ttk.Button(buttons,text='应用到当前工程',command=apply).pack(side='right')
@@ -85,7 +88,7 @@ def start_export(app,dest,config,source):
     from calculation_scheduler import CalculationCancelled
     win=tk.Toplevel(app.root);win.title('导出三维建模数据');win.transient(app.root);win.grab_set()
     cancel=threading.Event();messages=queue.Queue()
-    progress=ttk.Label(win,text='正在冻结输入端点、解析绕组并绘制截面…',padding=20)
+    progress=ttk.Label(win,text='正在导出三维建模数据…',style='ResultConclusion.TLabel',padding=20)
     progress.pack()
     ttk.Button(win,text='取消',command=cancel.set).pack(pady=(0,12))
     win.protocol('WM_DELETE_WINDOW',cancel.set)
@@ -109,8 +112,9 @@ def start_export(app,dest,config,source):
         if status=='cancel': app.status_var.set('三维建模数据导出已取消。');return
         if status=='error':
             messagebox.showerror('三维建模导出失败',result,parent=app.root);return
-        msg=f"已导出 {result['sections']} 个物理段、{result['bundles']} 个线束截面。"
-        msg+=('已具备名义三维绕组路径。' if result['ready']['geometry_3d'] else '当前为部分数据，待补项见 missing_fields。')
+        summary = ('已导出三维绕组路径' if result['ready']['geometry_3d']
+                   else '已导出部分建模数据，待补项见 missing_fields')
+        msg=f"{summary}。\n{result['sections']} 个物理段 · {result['bundles']} 个线束截面"
         app.status_var.set(msg)
         messagebox.showinfo('三维建模数据',msg+'\n'+str(dest),parent=app.root)
     threading.Thread(target=run,daemon=True).start()

@@ -3,8 +3,11 @@ import math
 
 import numpy as np
 
+from loop_acceptance import MIN_PHASE_MARGIN_DEG
+from spice_analysis import minimum_phase_margin
 
-DEFAULT_LIMITS = dict(pm_min_deg=45., gm_min_db=6., fc_error_pct=20., pm_error_deg=10.,
+
+DEFAULT_LIMITS = dict(pm_min_deg=MIN_PHASE_MARGIN_DEG, gm_min_db=6., fc_error_pct=20., pm_error_deg=10.,
                       gain_error_db=3., phase_error_deg=15., overshoot_pct=5., undershoot_pct=5.,
                       settling_band_pct=2., recovery_s=.002, imbalance_pct=10., input_peak_A=0.)
 LABELS = {'pass':'满足', 'fail':'超限', 'review':'待复核', 'not_covered':'未覆盖', 'observe':'供观察'}
@@ -14,6 +17,7 @@ def limits(parameters):
     config = parameters.get('cot_config') or {}
     configured = config.get('acceptance') or {}
     result = DEFAULT_LIMITS | {'imbalance_pct':config.get('phase_imbalance_limit_pct',10.)} | configured
+    result['pm_min_deg'] = MIN_PHASE_MARGIN_DEG
     dynamic = config.get('dynamic') or {}
     voltage = parameters.get('V_out',0.)
     if voltage > 0:
@@ -36,7 +40,9 @@ def _row(key, label, value, limit, unit='', comparison='<=', *, missing='未取�
     elif limit is None:
         status = 'observe'
     else:
-        status = 'pass' if (value <= limit if comparison == '<=' else value >= limit) else 'fail'
+        passes = {'<=': lambda: value <= limit, '>=': lambda: value >= limit,
+                  '>': lambda: value > limit}[comparison]()
+        status = 'pass' if passes else 'fail'
     return dict(id=key, label=label, value=value, limit=limit, comparison=comparison, unit=unit,
                 status=status, note=note)
 
@@ -54,7 +60,8 @@ def assess_fra(probe, parameters):
         return summarize([_row('fra_valid', 'FRA 测量有效性', None, 1., missing=probe.get('error') or '未运行 FRA')])
     sim = (probe.get('simulation') or {}).get('loop') or {}
     design = (probe.get('design') or {}).get('loop') or {}
-    rows = [_row('pm', '实测相位裕度', sim.get('pm'), thresholds['pm_min_deg'], '°', '>=', missing='频带内未测得有效相位裕度'),
+    rows = [_row('pm', 'FRA 最小相位裕度', minimum_phase_margin(sim), thresholds['pm_min_deg'], '°', '>',
+                 missing='频带内未测得有效相位裕度'),
             _row('gm', '实测增益裕度', sim.get('gm_db'), thresholds['gm_min_db'], 'dB', '>=', missing='频带内未检出相位交越，增益裕度未覆盖')]
     fc, ref = sim.get('fc'), design.get('fc')
     fc_error = abs(fc/ref-1)*100 if fc is not None and ref and fc > 0 else None

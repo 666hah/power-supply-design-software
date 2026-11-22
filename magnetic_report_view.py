@@ -31,7 +31,8 @@ def build_report(p, result):
     if inductors:
         devices.extend((f'OUT{i} · 输出电感', d, False) for i, d in enumerate(inductors, 1))
     elif md.get('inductor'):
-        devices.append(('L1 · 电感', md['inductor'], False))
+        devices.append(('L_R · 谐振电感' if p.get('topology')=='LLC' else 'L1 · 电感',
+                        md['inductor'], False))
     sections, conclusions = [], []
 
     def section(title, rows, note=''):
@@ -94,7 +95,8 @@ def build_report(p, result):
                     row('绕组铜损', w['P_cu'], 'W'),
                 ])
         else:
-            windings = [('电感绕组', d['N'], d['d_wire'], 1, d['I_rms'], d['J_actual'], d['R_dc'], d['Fr'],1)]
+            windings = [('电感绕组',d['N'],d['d_wire'],d.get('n_strand',1),
+                         d['I_rms'],d['J_actual'],d['R_dc'],d['Fr'],1)]
         for name, turns, diameter, strands, rms, density, resistance, ac, copies in windings:
             section(title + ' / ' + name, [
                 row('匝数', turns, '匝'), row('单股线径', diameter, 'mm', 1e3), row('单根线股数', strands, '股'),
@@ -112,7 +114,8 @@ def build_report(p, result):
             ], lengths.get('source', ''))
 
         section(title + ' / 损耗与温升', [
-            row('峰值磁密 Bpk', d.get('B_pk'), 'mT', 1e3), row('磁通摆幅 ΔB', d.get('dB'), 'mT', 1e3),
+            row('最窄磁路稳态峰值磁密' if 'design_peak_A' in d else '峰值磁密 Bpk',d.get('B_pk'),'mT',1e3),
+            row('有效截面磁通摆幅' if 'design_peak_A' in d else '磁通摆幅 ΔB',d.get('dB'),'mT',1e3),
             row('裸铜窗口占比', d.get('fill'), '%', 100),
             *([] if length_rows else [row('平均匝长 MLT', d.get('MLT'), 'mm', 1e3)]),
             row('磁芯损耗', d.get('P_core'), 'W'), row('绕组铜损', d.get('P_cu'), 'W'),
@@ -131,6 +134,31 @@ def build_report(p, result):
                    f"ΔT {_number(dt)} K / 上限 {_number(limit)} K")
         if d.get('fill', 0.) > 1.:
             conclusion(title, '铜窗口超限', 'danger', f"裸铜占比 {_number(d['fill'], 100)}%，大于可用窗口。")
+        if 'design_peak_A' in d:
+            window=d['winding_window']
+            layers=' / '.join(str(layer['turns']) for layer in window['physical_layers'])
+            section(title+' / 净窗口与启动峰值',[
+                row('总谐振电感',d['L_total'],'µH',1e6),
+                row('计入总 Lr 的原边漏感',d['L_leakage'],'µH',1e6),
+                row('独立电感目标',d['L'],'µH',1e6),
+                text('各层匝数',layers or '未配置绕线窗口'),
+                row('用于 DCR 的等效线长',d['copper_length_m'],'m'),
+                row('磁路最小截面积 Amin',d['min_Ae'],'mm²',1e6),
+                row('校核峰值电流',d['design_peak_A'],'A'),
+                row('校核峰值对应磁密',d['B_design_peak_T'],'mT',1e3),
+                row('设计磁密对应峰值电流',d['I_at_design_B_A'],'A'),
+                row('饱和磁密对应峰值电流',d['I_at_saturation_A'],'A'),
+            ],d['winding_notes']+('原边漏感待实测。' if not d['L_leakage'] else ''))
+            if window['fits'] is True:
+                conclusion(title,'绕线窗口','success',f"共 {window['total_layer_count']} 层，按净窗口和线束外径核算。")
+            elif window['fits'] is False:
+                conclusion(title,'绕线窗口','danger','绕组超出设定净窗口。')
+            else:
+                conclusion(title,'绕线窗口','warning','补充骨架净窗口后校核。')
+            current_limit=max(d['design_peak_A'],p.get('llc_ocp',0.))
+            conclusion(title,'设计磁密电流裕量',
+                       'success' if current_limit<=d['I_at_design_B_A'] else 'danger',
+                       f"校核 {_number(current_limit)} A / 设计磁密对应 {_number(d['I_at_design_B_A'])} A。")
         gap = d.get('gap_design')
         if is_transformer and gap:
             section(title + ' / 磁导率与气隙', [
@@ -145,6 +173,11 @@ def build_report(p, result):
             conclusion(title, '气隙可实现性', 'danger' if gap['status'] == 'infeasible' else 'warning',
                        f"lg ≈ {_number(gap['gap_m'], 1e3)} mm；线性估算可实现，加工按 AL 实测调整。"
                        if gap['status'] == 'estimated' else gap['note'])
+        elif gap and 'design_peak_A' in d:
+            section(title+' / 等效气隙与 AL',[
+                row('估算等效总气隙',gap['gap_m'],'mm',1e3),
+                row('目标 AL',gap['AL_target_H'],'nH/匝²',1e9),
+            ],gap['note'])
         elif not is_transformer:
             section(title + ' / 气隙', [row('忽略磁芯磁阻的气隙初值', d.get('gap'), 'mm', 1e3)],
                     '电感沿用既有高磁导率近似；实体气隙和边缘磁通需按实物复核。')

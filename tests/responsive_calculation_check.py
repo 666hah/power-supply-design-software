@@ -289,8 +289,7 @@ class GUIIntegrationChecks(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.app._closing = True
-        cls.app._calculation_worker.close()
+        cls.app.dispose()
         for job in cls.root.tk.splitlist(cls.root.tk.call('after', 'info')):
             cls.root.after_cancel(job)
         cls.root.destroy()
@@ -443,11 +442,14 @@ class GUIIntegrationChecks(unittest.TestCase):
     def test_component_refresh_reuses_snapshot_and_invalidates_old_verdicts(self):
         app = self.app
         with patch.object(app, 'get_params', side_effect=AssertionError('view reread every Tk input')):
+            app.nb.select(app.tab_bom)
+            app._refresh_visible_tab()
+            editor = app._bom_editor
             app._refresh_components()
-            self.assertIn('Q1', app.component_manager.rows)
+            self.assertIn('Q1', editor.rows)
             app._snapshot_valid = False
             app._refresh_components()
-        self.assertEqual(app.component_manager.tree.set('Q1', 'status'), '待重新计算')
+        self.assertEqual(editor.tree.set('Q1', 'status'), '待重新计算')
 
     def test_cancel_while_waiting_for_layout_never_starts_numerical_work(self):
         app = self.app

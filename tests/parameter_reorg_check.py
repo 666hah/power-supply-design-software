@@ -109,6 +109,77 @@ class ParameterReorganisationChecks(unittest.TestCase):
         self.assertEqual(self.app.params['Qg_th_unit'].get(), 'n')
         self.assertEqual(self.app._config_dict()['L']['u'], 'u')
 
+    def test_numeric_entry_limits_typing_and_preserves_selected_value_on_bad_paste(self):
+        entry = self.app._param_widgets['V_in_min'][1]
+        entry.delete(0, 'end')
+        for character in '1.25e-3':
+            entry.insert('end', character)
+        self.assertEqual(entry.get(), '1.25e-3')
+        self.assertAlmostEqual(self.app.get_param('V_in_min'), 0.00125)
+        for rejected in ('V', '中文', ' ', '.', '001'):
+            entry.insert('end', rejected)
+            self.assertEqual(entry.get(), '1.25e-3')
+
+        entry.delete(0, 'end')
+        entry.insert(0, '12345678901234567')
+        entry.insert('end', '8')
+        self.assertEqual(entry.get(), '12345678901234567')
+        entry.selection_range(0, 'end')
+
+        # Simulate the clipboard inside this Tcl interpreter only.
+        clipboard = ['32 V']
+        tcl = self.root.tk
+        tcl.call('rename', '::tk::GetSelection', '::tk::NumericInputTestGetSelection')
+        tcl.createcommand('::tk::GetSelection', lambda *_: clipboard[0])
+        try:
+            with patch.object(entry, 'clipboard_get', side_effect=lambda: clipboard[0]):
+                for value in ('32 V', '1e309'):
+                    clipboard[0] = value
+                    entry.event_generate('<<Paste>>')
+                    self.assertEqual(entry.get(), '12345678901234567')
+                    self.assertTrue(entry.selection_present())
+                clipboard[0] = '32.5'
+                entry.event_generate('<<Paste>>')
+                self.assertEqual(entry.get(), '32.5')
+        finally:
+            tcl.deletecommand('::tk::GetSelection')
+            tcl.call('rename', '::tk::NumericInputTestGetSelection', '::tk::GetSelection')
+
+    def test_winding_count_accepts_integers_and_wire_diameter_accepts_leading_zero(self):
+        self.app.set_param('Np', 60)
+        turns = self.app._param_widgets['Np'][1]
+        turns.insert('end', '.5')
+        turns.insert('end', 'e1')
+        self.assertEqual(turns.get(), '60')
+
+        key = 'd_wire_p'
+        self.app.params[key+'_unit'].set('m')
+        self.app.params[key].set(0.2)
+        wire = self.app._param_widgets[key][1]
+        wire.delete(0, 'end')
+        for character in '0.15':
+            wire.insert('end', character)
+        self.assertEqual(wire.get(), '0.15')
+        self.assertAlmostEqual(self.app.get_param(key), 0.00015)
+        self.app.set_param(key, 0)
+        self.assertEqual(wire.get(), '自动')
+        self.assertTrue(wire.instate(['readonly']))
+
+    def test_capacitor_and_output_counts_enforce_field_limits(self):
+        outputs = self.app._inline_count_picker
+        outputs.delete(0, 'end')
+        outputs.insert(0, '22')
+        self.assertEqual(outputs.get(), '')
+        outputs.insert(0, '2')
+        self.assertEqual(outputs.get(), '2')
+
+        editor = self.app._cap_editors['input']
+        original_count = len(editor.values)
+        editor.count.set('1001')
+        editor.resize()
+        self.assertEqual(len(editor.values), original_count)
+        self.assertIn('1000', editor.note.get())
+
     def test_each_parameter_has_one_editor_in_its_device_or_design_group(self):
         expected = {'V_in': 'spec', 'ripple_target': 'spec', 'L': 'stage',
                     'N': 'stage', 'Rds_on': 'device', 'Vth': 'device',

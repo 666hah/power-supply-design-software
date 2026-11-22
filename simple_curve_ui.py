@@ -22,16 +22,23 @@ def _place_dialog(dialog,owner):
 
 def import_simple(parent,data,kind,target=''):
     owner=parent.winfo_toplevel()
-    dialog=tk.Toplevel(owner);dialog.title('简洁曲线导入 选择数量级');dialog.transient(owner)
+    dialog=tk.Toplevel(owner);dialog.title('导入曲线与数量级');dialog.transient(owner)
     dialog.geometry('620x470');dialog.minsize(560,440)
     body=ttk.Frame(dialog,padding=14);body.pack(fill='both',expand=True)
     gate=kind=='gate_charge'
     diode=kind=='diode'
-    guide='X=Vf 正向压降（V）；Y=If 正向电流（A）。用此曲线计算所选二极管的导通损耗。' if diode else 'X=Qg（C）；Y=Vgs（V）。' if gate else 'X=Vgs（V）；Y=Id（A）。'
-    ttk.Label(body,text=(('绑定目标：'+target+'\n') if target else '')+guide+
-        '\nV1.3 提取文件已乘数量级，X/Y 均选 1；旧原图数值文件才选 n/u/m 等倍率。\nCSV 只需 x,y；JSON 只需点数组。端点范围外按趋势外推并提示。',wraplength=580).pack(fill='x')
+    guide = ('横轴为正向压降 Vf / V，纵轴为正向电流 If / A。用于计算导通损耗。' if diode else
+             '横轴为栅电荷 Qg / C，纵轴为栅源电压 Vgs / V。' if gate else
+             '横轴为栅源电压 Vgs / V，纵轴为漏极电流 Id / A。')
+    intro = f'绑定目标 · {target}' if target else '选择曲线并核对坐标单位'
+    ttk.Label(body, text=intro, style='ResultConclusion.TLabel', wraplength=540,
+              justify='left').pack(fill='x', pady=(0, 4))
+    ttk.Label(body, text=guide + '\n已换算至基本单位的数据，倍率选 1。沿用原图单位的数据，按横纵轴选择 m、µ、n 等倍率。'
+              '\nCSV 用 x,y 两列，JSON 用点数组。超出数据范围时显示外推提示。',
+              wraplength=530, justify='left').pack(fill='x')
     if diode:
-        ttk.Label(body,text='允许小幅描点回退：不超过 Vf 跨度 3% 时自动单调整理，并记录修正量；明显倒退仍需校核。',wraplength=580).pack(fill='x',pady=(4,0))
+        ttk.Label(body, text='描点回退不超过 Vf 跨度的 3% 时自动整理，并记录修正量。回退更大时需要校核。',
+                  wraplength=530, justify='left').pack(fill='x', pady=(4, 0))
     box=tk.Listbox(body,height=min(5,len(data['curves'])),exportselection=False)
     for c in data['curves']:box.insert('end',c['name']+f"  {len(c['points'])} 点")
     box.pack(fill='x',pady=10);box.selection_set(0)
@@ -41,8 +48,8 @@ def import_simple(parent,data,kind,target=''):
         selected=box.curselection()
         if not selected:return
         points=data['curves'][selected[0]]['points']
-        limits.set(f"文件原数值范围：X {min(p[0] for p in points):.5g}–{max(p[0] for p in points):.5g}；"
-                   f"Y {min(p[1] for p in points):.5g}–{max(p[1] for p in points):.5g}")
+        limits.set(f"文件数值 · X {min(p[0] for p in points):.5g} 至 {max(p[0] for p in points):.5g} · "
+                   f"Y {min(p[1] for p in points):.5g} 至 {max(p[1] for p in points):.5g}")
     box.bind('<<ListboxSelect>>',show_limits);show_limits()
     form=ttk.Frame(body);form.pack(fill='x')
     x=tk.StringVar(value='1（原数值）');y=tk.StringVar(value='1（原数值）')
@@ -63,7 +70,8 @@ def import_simple(parent,data,kind,target=''):
                 a,b=suggest_plateau(cleaned_points(c['points'])[0]);start.set(f'{a:.9g}');end.set(f'{b:.9g}')
             except (ValueError,IndexError):start.set('');end.set('')
         box.bind('<<ListboxSelect>>',suggest);suggest()
-        ttk.Label(body,text='平台位置为建议值，可直接修改；仅填原图横轴数值，不用写单位。',wraplength=560).pack(fill='x',pady=8)
+        ttk.Label(body, text='平台位置可直接修改。填写原图横轴上的数值。',
+                  wraplength=530, justify='left').pack(fill='x', pady=8)
     result=[]
     def accept():
         try:

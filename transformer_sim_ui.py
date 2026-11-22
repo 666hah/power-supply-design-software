@@ -91,6 +91,7 @@ class _SimulationDialog:
         self.settings = _read_settings()
         self.core = _core_name(config)
         self.job = None
+        self.closed = False
         previous = config.get('__transformer_simulation')
         self.result = previous if isinstance(previous, dict) else {}
         self.directory = self.result.get('directory')
@@ -102,24 +103,30 @@ class _SimulationDialog:
         self.frame = frame = ttk.Frame(container if self.embedded else win, padding=12)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
-        self.title = ttk.Label(frame, text=f'当前变压器 · {self.core}', font='TkHeadingFont')
+        frame.rowconfigure(7, weight=1)
+        self.title = ttk.Label(frame, text=f'变压器电磁仿真 · {self.core or "自动选磁芯"}', font='TkHeadingFont')
         self.title.grid(
             row=0, columnspan=3, sticky='w', pady=(0, 6))
+        self.status = tk.StringVar(win, '历史结果 · 可打开报告查看当时的磁件参数。' if self.result else
+                                   '未运行 · 确认输入后可开始电磁仿真。')
+        status = ttk.Label(frame, textvariable=self.status, style='ResultConclusion.TLabel',
+                           wraplength=750, justify='left')
+        status.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 7))
+        frame.bind('<Configure>', lambda event:status.configure(wraplength=max(250, event.width-30))
+                   if event.widget is frame else None, add='+')
         self.output = tk.StringVar(win, self.settings.get('output_directory') or str(Path.home() / '变压器仿真报告'))
         if self.embedded:
             self._build_automatic_inputs(frame)
-            rows = [(4, '报告保存目录', self.output, self.pick_output)]
+            rows = [(5, '报告保存目录', self.output, self.pick_output)]
         else:
-            ttk.Label(frame, text='以当前匝数和排线导出几何。提取设置提供磁芯实体、材料、坐标和接线，'
-                                 '请核对是否与本单元一致。', wraplength=600).grid(
-                row=1, columnspan=3, sticky='w', pady=(0, 8))
+            ttk.Label(frame, text='绕组几何取自当前设计。请核对提取设置中的磁芯、材料、坐标和接线。',
+                      style='Muted.TLabel', wraplength=600).grid(row=3, columnspan=3, sticky='w', pady=(0, 8))
             root_path = self.settings.get('tool_root') or os.environ.get('POWER_DESIGN_TRANSFORMER_TOOL', '')
             self.tool = tk.StringVar(win, root_path)
             self.template = tk.StringVar(win, _matching_template(root_path, self.core, self.settings))
-            rows = [(2, '本机提取工具目录', self.tool, self.pick_tool),
-                    (3, '提取设置 JSON', self.template, self.pick_template),
-                    (4, '报告保存目录', self.output, self.pick_output)]
+            rows = [(4, '本机提取工具目录', self.tool, self.pick_tool),
+                    (5, '提取设置 JSON', self.template, self.pick_template),
+                    (6, '报告保存目录', self.output, self.pick_output)]
         for row, label, var, pick in rows:
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky='w', padx=(0, 8))
             entry = ttk.Entry(frame, textvariable=var, width=50)
@@ -127,14 +134,14 @@ class _SimulationDialog:
             button = ttk.Button(frame, text='选择…', command=pick)
             button.grid(row=row, column=2, padx=(6, 0))
             self.path_controls.extend((entry, button))
-        self.log = tk.Text(frame, width=64, height=8, wrap='word', state='disabled',
+        self.log = tk.Text(frame, width=64, height=7, wrap='word', state='disabled',
                            font='TkDefaultFont')
-        self.log.grid(row=5, column=0, columnspan=2, sticky='nsew', pady=(10, 6))
+        self.log.grid(row=7, column=0, columnspan=2, sticky='nsew', pady=(10, 6))
         scroll = ttk.Scrollbar(frame, command=self.log.yview)
-        scroll.grid(row=5, column=2, sticky='nsw', pady=(10, 6))
+        scroll.grid(row=7, column=2, sticky='nsw', pady=(10, 6))
         self.log.configure(yscrollcommand=scroll.set)
         bar = ttk.Frame(frame)
-        bar.grid(row=6, columnspan=3, sticky='ew')
+        bar.grid(row=2, columnspan=3, sticky='ew', pady=(0, 8))
         self.report = ttk.Button(bar, text='场仿真报告', command=lambda:self.open_report('report_path'))
         self.compare = ttk.Button(bar, text='闭环对比', command=lambda:self.open_report('comparison_path'))
         self.folder = ttk.Button(bar, text='运行目录', command=lambda:self.open_path(self.directory, directory=True))
@@ -146,9 +153,9 @@ class _SimulationDialog:
                                       command=lambda:self.start(prepare=True))
             self.prepare.pack(side='right')
         actions = ttk.Frame(frame)
-        actions.grid(row=7, columnspan=3, sticky='ew', pady=(5, 0))
+        actions.grid(row=8, columnspan=3, sticky='ew', pady=(5, 0))
         self.apply = ttk.Button(actions, text='采用参数并重算', command=self.apply_result)
-        self.stop = ttk.Button(actions, text='停止', command=self.cancel)
+        self.stop = ttk.Button(actions, text='取消运行', command=self.cancel)
         self.run = ttk.Button(actions, text='开始电磁仿真' if self.embedded else '一键仿真并生成报告',
                               command=self.start)
         self.apply.pack(side='left')
@@ -173,28 +180,23 @@ class _SimulationDialog:
         self.frame.bind('<Destroy>', self.destroyed, add='+')
 
     def _build_automatic_inputs(self, frame):
-        note = ttk.Label(frame, text='复用当前 3D 绕组结构、磁材和气隙，自动准备场仿真输入。',
-                         wraplength=750, justify='left')
-        note.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 8))
-        card = ttk.LabelFrame(frame, text='输入检查', padding=9)
-        card.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 10))
+        card = ttk.LabelFrame(frame, text='模型与输入检查', padding=9)
+        card.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         card.columnconfigure(0, weight=1)
-        self.readiness = ttk.Label(card, text='等待检查', wraplength=750, justify='left')
+        self.readiness = ttk.Label(card, text='未检查', wraplength=750, justify='left')
         self.readiness.grid(row=0, column=0, sticky='ew')
         if self.navigate is not None:
             ttk.Button(card, text='本机工具与磁芯模型…', command=lambda:self.navigate('tools')).grid(
                 row=1, column=0, sticky='w', pady=(7, 0))
         def resize(event):
-            width = max(250, event.width - 44)
-            note.configure(wraplength=width)
-            self.readiness.configure(wraplength=width)
+            self.readiness.configure(wraplength=max(250, event.width - 44))
         frame.bind('<Configure>', resize, add='+')
 
     def refresh_preflight(self, config):
         if not self.embedded or self.job is not None:
             return
         self.core = _core_name(config)
-        self.title.configure(text=f'当前变压器 · {self.core or "自动选磁芯"}')
+        self.title.configure(text=f'变压器电磁仿真 · {self.core or "自动选磁芯"}')
         try:
             readiness = self._automatic_inputs(config)
             has_elmer = self._has_elmer(readiness['environment'])
@@ -206,7 +208,7 @@ class _SimulationDialog:
         if not has_elmer:
             missing = [*missing, '在本机工具中选择完整的 Elmer 安装目录。']
         if missing:
-            summary += '\n\n需要处理\n' + '\n'.join(missing)
+            summary = '待处理 · ' + ' '.join(missing) + '\n' + summary
             self.readiness.configure(text=summary, foreground='#9a5809')
         else:
             self.readiness.configure(text=summary, foreground='#24604b')
@@ -252,6 +254,9 @@ class _SimulationDialog:
     def write(self, text):
         self.log.configure(state='normal')
         self.log.insert('end', str(text).strip() + '\n')
+        lines = int(self.log.index('end-1c').split('.')[0])
+        if lines > 600:
+            self.log.delete('1.0', f'{lines-500}.0')
         self.log.see('end')
         self.log.configure(state='disabled')
 
@@ -274,12 +279,14 @@ class _SimulationDialog:
             return
         output = self.output.get().strip()
         if not output:
-            self.write('请选择报告保存目录。')
+            self.status.set('未运行 · 请选择报告保存目录。')
+            self.write(self.status.get())
             return
         try:
             config = copy.deepcopy(self.app._config_dict())
         except (ValueError, tk.TclError) as exc:
-            self.write('请检查当前单元输入：' + str(exc))
+            self.status.set('未运行 · 请检查当前单元输入。' + str(exc))
+            self.write(self.status.get())
             return
 
         run_inputs = {'output_directory': output}
@@ -292,7 +299,8 @@ class _SimulationDialog:
                 if not self._has_elmer(auto['environment']):
                     raise ValueError('请在本机工具中选择完整的 Elmer 安装目录。')
             except (ValueError, OSError, tk.TclError) as exc:
-                self.write('输入需补充：' + str(exc))
+                self.status.set('未运行 · ' + str(exc))
+                self.write(self.status.get())
                 self.refresh_preflight(config)
                 return
             run_inputs['environment'] = copy.deepcopy(auto['environment'])
@@ -300,7 +308,8 @@ class _SimulationDialog:
         else:
             tool, template = self.tool.get().strip(), self.template.get().strip()
             if not tool or not template or not Path(tool).is_dir() or not Path(template).is_file():
-                self.write('请先选择本机提取工具目录和有效的提取设置 JSON。')
+                self.status.set('未运行 · 请选择提取工具目录和提取设置 JSON。')
+                self.write(self.status.get())
                 return
             run_inputs.update(tool_root=tool, project_file=template)
             templates = dict(self.settings.get('templates') or {}) if self.settings.get('tool_root') == tool else {}
@@ -316,9 +325,10 @@ class _SimulationDialog:
             self.directory = output
         self.refresh()
         if prepare:
-            self.write('正在按本单元匝数准备参考窗口、层序和接线…')
+            self.status.set('运行中 · 按当前匝数准备参考窗口、层序和接线。')
         else:
-            self.write('正在冻结当前单元并检查仿真输入…')
+            self.status.set('运行中 · 正在同步绕组并检查仿真输入。')
+        self.write(self.status.get())
         mailbox = self.queue
         def work():
             try:
@@ -339,22 +349,27 @@ class _SimulationDialog:
 
     def poll(self):
         self.poll_id = None
+        if self.closed:
+            return
         for _ in range(60):
             try:
                 kind, data = self.queue.get_nowait()
             except queue.Empty:
                 break
             if kind == 'progress':
+                self.status.set('运行中 · ' + str(data))
                 self.write(data)
                 continue
-            cancelled = self.job.is_set()
+            cancelled = self.job is not None and self.job.is_set()
             self.job = None
             if kind == 'error' and data[1]:
                 self.directory = data[1]
             if cancelled and kind in ('error','reference'):
-                self.write('已停止本次任务。')
+                self.status.set('已取消 · 已有记录可在运行目录查看。')
+                self.write(self.status.get())
             elif kind == 'error':
-                self.write('本次未完成：' + data[0])
+                self.status.set('失败 · ' + data[0])
+                self.write(self.status.get())
                 if not self.embedded:
                     self.write('如缺少窗口、层序或接线与模板不符，可从同型号磁芯准备参考设置，核对后重新仿真。')
             elif kind == 'reference':
@@ -366,16 +381,20 @@ class _SimulationDialog:
                 if data.get('preparation'):
                     self.write(data['preparation'])
                 field = data.get('record', {}).get('field', {})
+                conclusion = '已完成 · 电磁仿真与对比报告已生成。'
                 if 'primary_self_H' in field and 'primary_short_H' in field:
-                    self.write('原边开路自感 %.4g µH；全部副边短路折算漏感 %.4g µH。' %
-                               (field['primary_self_H'] * 1e6, field['primary_short_H'] * 1e6))
+                    conclusion = '已完成 · 原边开路自感 %.4g µH · 全部副边短路时的原边漏感 %.4g µH' % (
+                        field['primary_self_H'] * 1e6, field['primary_short_H'] * 1e6)
                 for note in data.get('notes') or []:
                     self.write(note)
+                self.status.set(conclusion)
+                self.write(self.status.get())
             if self.directory:
                 self.write('运行文件位置：' + str(self.directory))
             self.refresh()
             return
-        self.poll_id = self.win.after(100, self.poll)
+        if self.job is not None:
+            self.poll_id = self.win.after(100, self.poll)
 
     def adopt_reference(self, prepared, original_config):
         summary = str(prepared['summary'])
@@ -385,26 +404,30 @@ class _SimulationDialog:
                 '\n\n请核对骨架窗口、每层绕组和匝数、材料、气隙，以及各段同向串联的假设。'
                 '\n是否将上面的参考设置写入当前单元，作为这次仿真的输入？',
                 default='no', parent=self.win):
-            self.write('已保留原设计和原提取设置。')
+            self.status.set('参考设置已生成，尚未采用。')
+            self.write(self.status.get())
             return
         try:
             if self.app._config_dict() != original_config:
                 raise ValueError('准备参考设置后设计参数已变化，请重新准备。')
             self.app._apply_config(prepared['config'])
         except (ValueError, OSError, KeyError, tk.TclError) as exc:
-            self.write('无法采用参考设置：' + str(exc))
+            self.status.set('无法采用参考设置：' + str(exc))
+            self.write(self.status.get())
             return
         self.result = {}
         self.applied = True
         self.template.set(str(prepared['project_file']))
         self.directory = str(Path(prepared['project_file']).parent)
-        self.write('已采用所列参考假设。点击“一键仿真并生成报告”运行当前单元。')
+        self.status.set('参考设置已采用，可按当前单元开始电磁仿真。')
+        self.write(self.status.get())
         self.app.status_var.set('参考绕制与建模设置已应用，可运行场解或返回画布保存工程。')
 
     def cancel(self):
         if self.job is not None:
             self.job.set()
-            self.write('正在停止本次任务…')
+            self.status.set('正在取消 · 等待当前求解停止。')
+            self.write(self.status.get())
             self.refresh()
 
     def open_report(self, key):
@@ -439,7 +462,8 @@ class _SimulationDialog:
             return
         self.applied = True
         self.refresh()
-        self.write('场解参数与报告记录已写入当前单元，正在按新参数重算。')
+        self.status.set('已采用 · 当前单元正在按场解参数重算。')
+        self.write(self.status.get())
         self.app.status_var.set('变压器仿真参数已采用，可返回画布并保存系统工程。')
 
     def close(self):
@@ -450,10 +474,15 @@ class _SimulationDialog:
 
     def destroyed(self, event):
         if event.widget is self.frame:
+            self.closed = True
             if self.job is not None:
                 self.job.set()
             if self.poll_id is not None:
-                self.win.after_cancel(self.poll_id)
+                try:
+                    self.win.after_cancel(self.poll_id)
+                except tk.TclError:
+                    pass
+                self.poll_id = None
 
 
 def show(app):

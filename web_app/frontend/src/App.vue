@@ -156,6 +156,7 @@ const summary = computed(() =>
 );
 const op = computed(() => summary.value?.operating_point || {});
 const checks = computed<Check[]>(() => selected.value?.checks || []);
+const phaseMarginCheck = computed(() => checks.value.find((row) => row.id === "phase_margin"));
 const needsReview = computed(() =>
   checks.value.filter((c) => c.state === "review" || c.state === "undefined"),
 );
@@ -1605,7 +1606,7 @@ onBeforeUnmount(() => {
             <details class="parameter-section">
               <summary>
                 <Icon name="shield" :size="16" /><strong
-                  >评审目标与计算选项</strong
+                  >评审、环路整定与计算选项</strong
                 ><Icon name="chevron" :size="14" />
               </summary>
               <div class="section-content">
@@ -1765,13 +1766,13 @@ onBeforeUnmount(() => {
                   <p>Q1 · 按当前钳位 / 应力模型估算</p>
                 </article>
                 <article class="metric-card">
-                  <span>环路相位裕度<Icon name="wave" :size="17" /></span
-                  ><strong>{{ fmt(summary.loop?.pm) }}<small>°</small></strong>
+                  <span>环路最小相位裕度<Icon name="wave" :size="17" /></span>
+                  <strong>{{ fmt(summary.loop?.min_pm, "", 6) }}<small>°</small></strong>
                   <p>
                     {{
-                      summary.loop?.fc
-                        ? "穿越频率 " + fmt(summary.loop.fc, "Hz")
-                        : "当前工况无有效环路结果"
+                      phaseMarginCheck
+                        ? `验收 ${phaseMarginCheck.comparison} ${fmt(phaseMarginCheck.limit, "°")} · ${stateName(phaseMarginCheck.state)}`
+                        : "当前工况无有效相位裕度"
                     }}
                   </p>
                 </article>
@@ -2375,12 +2376,13 @@ onBeforeUnmount(() => {
                     >穿越频率
                     <strong>{{ cotBuck && summary.loop.fc == null ? '带内未检出' : fmt(summary.loop.fc, "Hz") }}</strong></span
                   ><span
-                    >相位裕度
-                    <strong>{{ fmt(summary.loop.pm, "°") }}</strong></span
+                    >全部穿越的最小相位裕度
+                    <strong>{{ fmt(summary.loop.min_pm, "°", 6) }}</strong></span
                   ><span
                     >增益裕度
                     <strong>{{ cotBuck && summary.loop.gm_db == null ? '带内未检出' : fmt(summary.loop.gm_db, "dB") }}</strong></span
-                  ><span class="tag">{{ cotBuck ? '公共电压外环' : '只闭合主反馈路' }}</span>
+                  ><span v-if="phaseMarginCheck" class="tag" :class="phaseMarginCheck.state === 'pass' ? 'green' : 'amber'">相位裕度验收 {{ phaseMarginCheck.comparison }} {{ fmt(phaseMarginCheck.limit, "°") }} · {{ stateName(phaseMarginCheck.state) }}</span>
+                  <span class="tag">{{ cotBuck ? '公共电压外环' : '只闭合主反馈路' }}</span>
                   <template v-if="cotBuck && summary.loop.model">
                     <span>有效 Kp <strong>{{ fmt(summary.loop.model.cot_kp_hz, 'Hz') }}</strong></span>
                     <span>有效 Ki <strong>{{ fmt(summary.loop.model.cot_ki_hz_per_s, 'Hz/s') }}</strong></span>
@@ -2712,12 +2714,12 @@ onBeforeUnmount(() => {
                       <tbody>
                         <tr v-for="c in checks" :key="c.id">
                           <td>{{ c.name }}</td>
-                          <td>{{ fmt(c.value, c.unit) }}</td>
+                          <td>{{ c.id === 'phase_margin' ? fmt(c.value, '°', 6) : fmt(c.value, c.unit) }}</td>
                           <td>
                             {{
                               c.limit === null
                                 ? c.note
-                                : c.comparison + " " + fmt(c.limit, c.unit)
+                                : c.comparison + " " + fmt(c.limit, c.id === 'phase_margin' ? '°' : c.unit)
                             }}
                           </td>
                           <td>

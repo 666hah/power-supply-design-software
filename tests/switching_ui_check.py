@@ -122,12 +122,7 @@ class GUIPageChecks(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        a = cls.app; a._closing = True; a._work_cancel.set()
-        for job in (a.update_timer, a._font_timer, a._initial_update_job,
-                    a._control_warmup_job, a._control_poll_job, a._work_poll):
-            if job is not None:
-                try: cls.root.after_cancel(job)
-                except tk.TclError: pass
+        cls.app.dispose()
         cls.root.destroy()
 
     def setUp(self):
@@ -138,8 +133,9 @@ class GUIPageChecks(unittest.TestCase):
 
     def test_tab_order_and_all_lazy_updaters(self):
         a = self.app
-        expected = [a.tab_topology, a.tab_power, a.tab_stress, a.tab_mag,
-                    a.tab_loop, a.tab_cross, a.tab_eff, a.tab_cap, a.tab_rcd, a.tab_comp, a.tab_review]
+        expected = [a.tab_topology, a.tab_bom, a.tab_power, a.tab_stress, a.tab_mag,
+                    a.tab_loop, a.tab_cross, a.tab_eff, a.tab_cap, a.tab_rcd, a.tab_comp,
+                    a.tab_tolerance, a.tab_review]
         self.assertEqual(list(a.nb.tabs()), [str(w) for w in expected])
         self.assertEqual(len(a._tab_updaters()), len(expected))
         self.assertEqual(a.nb.tab(a.tab_cross, 'state'), 'hidden')
@@ -166,7 +162,7 @@ class GUIPageChecks(unittest.TestCase):
             labels = ' '.join(t.get_text() for t in ax.get_xticklabels())
             for i in expected: self.assertIn(f't{i}', labels)
         a._update_topology(L['op'], L['p'])
-        self.assertIn('Q1', a.topology_tree.get_children())
+        self.assertIn('Q1', a.topology_rows)
 
     def test_minimum_window_keeps_every_visible_page_accessible(self):
         a = self.app
@@ -188,6 +184,7 @@ class GUIPageChecks(unittest.TestCase):
             for page in pages:
                 button = buttons[page]
                 self.assertLessEqual(button.winfo_x() + button.winfo_width(), nav.winfo_width())
+                self.assertGreaterEqual(button.winfo_width(), button.winfo_reqwidth(), button.cget('text'))
                 button.invoke()
                 self.assertEqual(a.nb.select(), page)
 
@@ -208,6 +205,25 @@ class GUIPageChecks(unittest.TestCase):
             self.root.geometry('1600x950')
             self.root.attributes('-alpha', 1.)
             a._apply_scale(1.)
+
+    def test_tolerance_and_acceptance_are_standalone_result_pages(self):
+        a = self.app
+        pages = (
+            ('tolerance', a.tab_tolerance, a._tolerance_panel, '⑪ 硬件容差边界与分布评估'),
+            ('review', a.tab_review, a.acceptance_panel, '⑫ 工程验证与验收'),
+        )
+        initial_page = a.nb.select()
+        try:
+            for key, tab, panel, label in pages:
+                with self.subTest(page=key):
+                    self.assertEqual(a.nb.tab(tab, 'text').strip(), label)
+                    self.assertIs(a._result_pages[key], tab)
+                    self.assertEqual(tab.winfo_children(), [panel])
+                    self.assertEqual(panel.winfo_manager(), 'pack')
+                    a.restore_result_page(key)
+                    self.assertEqual(a.selected_result_page(), key)
+        finally:
+            a.nb.select(initial_page)
 
 
 if __name__ == '__main__':

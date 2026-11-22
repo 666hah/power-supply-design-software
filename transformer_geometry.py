@@ -169,13 +169,15 @@ def _geometry_hash(g):
 
 
 def resolve_geometry(cases,snapshot_id,input_hash,design_id,profile=None,*,cancelled=None):
+    from transformer_gap import target_inductance
+
     if ([c.get('id') for c in cases]!=['Vinmin','Vinmax']
             or any(c.get('error') or not c.get('result') for c in cases)):
         raise ValueError('输入端点计算不完整，不能绑定几何快照')
     case=cases[0];p=case['p'];cfg=p.get('winding_config')
     if [c['voltage'] for c in cases]!=[p.get('V_in_min',p['V_in']),p.get('V_in_max',p['V_in'])]:
         raise ValueError('端点电压与设计规格不一致')
-    if p['topology'] not in ('FLYBACK','QR-FLYBACK','ACF-FORWARD'):
+    if p['topology'] not in ('FLYBACK','QR-FLYBACK','ACF-FORWARD','LLC'):
         raise ValueError('当前拓扑没有隔离变压器')
     wires=transformer_windings(case['result'])
     if not wires: raise ValueError('未得到有效变压器，无法导出')
@@ -242,7 +244,7 @@ def resolve_geometry(cases,snapshot_id,input_hash,design_id,profile=None,*,cance
                     electromagnetic_convergence='not_run',measurement_comparison='not_run'),
         ready=dict(cross_section=bool(sections),geometry_3d=ready_3d,electromagnetic=False),
         missing_fields=missing,operating_points=conditions,
-        design_targets=dict(primary_self_inductance_H=p['Lm_forward'] if p['topology']=='ACF-FORWARD' else p['L'],
+        design_targets=dict(primary_self_inductance_H=target_inductance(p),
             coupling_enabled=bool(coupling.get('enabled')),coupling_order=power_ids if matrix_k else [],
             coupling_k=matrix_k,provenance='calculator_input_not_extracted')))
     if tr.get('gap_design'):

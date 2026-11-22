@@ -5,6 +5,7 @@
     python cli.py corners   --spec spec.json --out corners.json
     python cli.py transient --spec spec.json --di 2.0 [--fc 10e3] [--out t.json]
     python cli.py autotune  --spec spec.json --fc 10e3 --pm 60 [--out comp.json]
+    python cli.py review    --spec spec.json --output-dir output/review [--report xlsx|docx]
 
 Spec format: JSON object with DEFAULT_PARAMS keys (SI values) or config-file
 {'v': .., 'u': prefix} objects, e.g.
@@ -24,7 +25,7 @@ import design_api  # noqa: E402
 
 
 def _read_spec(path):
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, 'r', encoding='utf-8-sig') as f:
         return json.load(f)
 
 
@@ -35,6 +36,34 @@ def _write(path, data):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2, default=float)
     print('written', path)
+
+
+def _review_design(spec_path, output_dir, report_format):
+    from design_engine.service import calculate, export_report
+    from engineering_acceptance import report_snapshot
+
+    target = Path(output_dir).resolve()
+    if target.exists():
+        raise FileExistsError(f'请指定新的结果目录：{target}')
+    spec = _read_spec(spec_path)
+    run = calculate(spec, analysis='endpoints', include_efficiency=bool(report_format))
+    bundle = run.runtime_bundle()
+    acceptance = report_snapshot(bundle['base_spec'], range_result=bundle)
+
+    target.mkdir(parents=True, exist_ok=False)
+    snapshot_path = target / 'snapshot.json'
+    acceptance_path = target / 'acceptance.json'
+    snapshot_id = run.save(snapshot_path, include_waveforms=False)
+    acceptance_path.write_text(json.dumps(acceptance, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
+    outcome = dict(ok=all(case.get('result') is not None and not case.get('error') for case in bundle['cases']),
+                   snapshot=str(snapshot_path), snapshot_id=snapshot_id, acceptance=str(acceptance_path),
+                   acceptance_state=acceptance['summary']['state'])
+    if report_format:
+        report_path = target / f'设计报告.{report_format}'
+        compensation = spec.get('__comp')
+        report = export_report(run, report_path, compensation_state=compensation if isinstance(compensation, dict) else None)
+        outcome.update(report=str(report_path), ok=outcome['ok'] and not report.get('incomplete'))
+    return outcome
 
 
 def report_markdown(r):
@@ -143,6 +172,11 @@ def main():
     r.add_argument('--spec', required=True)
     r.add_argument('--out', required=True, help='.docx 或 .xlsx')
 
+    review = sub.add_parser('review', help='同一计算快照生成双端点工程验收及可选 Word / Excel 报告')
+    review.add_argument('--spec', required=True)
+    review.add_argument('--output-dir', required=True, help='本轮结果目录，须为新目录')
+    review.add_argument('--report', choices=('docx', 'xlsx'), help='额外导出的设计报告格式')
+
     geometry=sub.add_parser('geometry',help='导出变压器三维建模数据包')
     geometry.add_argument('--spec',required=True)
     geometry.add_argument('--profile',help='独立的 power-transformer.model-input.v1 JSON')
@@ -198,11 +232,16 @@ def main():
         if not args.out:
             print(json.dumps(r, ensure_ascii=False, allow_nan=False, indent=2))
 
-    elif args.cmd in ('snapshot', 'report'):
+    elif args.cmd in ('snapshot', 'report', 'review'):
         from design_engine.service import calculate, export_report, SpecValidationError
         from calculation_scheduler import CalculationCancelled
         try:
-            if args.cmd == 'snapshot':
+            if args.cmd == 'review':
+                outcome = _review_design(args.spec, args.output_dir, args.report)
+                print(json.dumps(outcome, ensure_ascii=False, allow_nan=False))
+                if not outcome['ok']:
+                    sys.exit(2)
+            elif args.cmd == 'snapshot':
                 run = calculate(_read_spec(args.spec), analysis=args.analysis,
                                 include_efficiency=args.include_efficiency)
                 identity = run.save(args.out, include_waveforms=not args.no_waveforms)
@@ -223,6 +262,9 @@ def main():
         except CalculationCancelled:
             print(json.dumps(dict(ok=False, error='cancelled'), ensure_ascii=False))
             sys.exit(130)
+        except OSError as exc:
+            print(json.dumps(dict(ok=False, error='io_error', message=str(exc)), ensure_ascii=False))
+            sys.exit(2)
         except (ValueError, FloatingPointError, RuntimeError, OverflowError) as exc:
             print(json.dumps(dict(ok=False, error='calculation_failed', message=str(exc)), ensure_ascii=False))
             sys.exit(2)

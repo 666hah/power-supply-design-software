@@ -13,6 +13,7 @@ import magnetics as mag
 from isolated_fields import FIELDS
 from isolated_outputs import ISOLATED, RAIL_KEYS, output_specs
 from mp6005 import DEFAULTS
+from numeric_input import limit_numeric_input
 from winding_coupling import default_coupling_config, resolve_winding_model, validate_coupling_config
 from custom_cores import CUSTOM_CORE, is_custom
 from custom_core_ui import CoreGeometryEditor
@@ -554,18 +555,18 @@ class OutputParameterPanel:
         self._coupling_enable_widget = check
         self._inline_extra(frame, [check], '绕组 耦合 漏感 kij coupling_config enabled', supported)
         row += 1
-        note = ttk.Label(frame, text='SSR 反激 / QR 反激 / 有源钳位正激：独立求解各路绕组电流及交叉调整率。QR 使用退磁与谷底变频周期；正激另求钳位和各路电感。PSR 暂不支持。kij 不是旧版 RCD K。',
+        note = ttk.Label(frame, text='反激、准谐振反激和有源钳位正激在 SSR 下可计算各绕组电流和交叉调整率。准谐振按退磁与谷底周期求解，正激同时求解钳位和输出电感。kij 表示绕组间耦合系数。',
                          style='Muted.TLabel', wraplength=350, justify='left')
         note.grid(row=row, column=0, columnspan=4, sticky='ew', pady=4)
         self._inline_extra(frame, [note], '绕组 耦合 漏感 kij 模型限制 SSR', supported)
         row += 1
-        unavailable = ttk.Label(frame, text='已保留绕组耦合草稿；当前 PSR 模型不支持该求解，耦合输入已隐藏。切回 SSR 反激、QR 或有源钳位正激后恢复。',
+        unavailable = ttk.Label(frame, text='当前 PSR 工况的绕组耦合待评估。草稿已保留，切回支持的 SSR 拓扑可继续编辑。',
                                 style='Muted.TLabel', wraplength=350, justify='left')
         unavailable.grid(row=row, column=0, columnspan=4, sticky='ew', pady=4)
         self._inline_extra(frame, [unavailable], '绕组 耦合 漏感 kij 模型限制 SSR',
                            lambda: self._topo_key() in ISOLATED and not supported() and self.coupling_enabled.get())
         row += 1
-        hint = ttk.Label(frame, text='反激 Lp 使用励磁 L；正激 Lp 使用 Lm_forward，不能用输出电感。Lii=Lp/(Np/Nsi)²；DCR 由几何计算。同名端按各拓扑连接。全部 kij=1 为理想模型。',
+        hint = ttk.Label(frame, text='原边励磁电感 Lp 对应反激的 L 或正激的 Lm_forward。各绕组自感 Lii = Lp/(Np/Nsi)²，DCR 由绕组几何计算。同名端随拓扑连接。全部 kij 为 1 时表示理想耦合。',
                          style='Muted.TLabel', wraplength=350, justify='left')
         hint.grid(row=row, column=0, columnspan=4, sticky='ew', pady=4)
         self._inline_extra(frame, [hint], '绕组 自感 Lp Lii 同名端 匝数 Np Ns kij',
@@ -577,6 +578,7 @@ class OutputParameterPanel:
             caption.grid(row=row, column=0, sticky='w', padx=(2, 6), pady=3)
             self.param_labels.append(caption)
             entry = ttk.Entry(frame, textvariable=variable, width=8)
+            limit_numeric_input(entry)
             entry.grid(row=row, column=1, sticky='ew', padx=2, pady=3)
             unit = ttk.Label(frame, text='0 ≤ k ≤ 1', style='Muted.TLabel')
             unit.grid(row=row, column=2, columnspan=2, sticky='w', padx=4)
@@ -609,6 +611,8 @@ class OutputParameterPanel:
                 entry = ttk.Combobox(frame, textvariable=variable, values=['auto',CUSTOM_CORE] + list(mag.CORE_DB), state='readonly', width=12)
             else:
                 entry = ttk.Entry(frame, textvariable=variable, width=8)
+                if key != 'name':
+                    limit_numeric_input(entry, integer=key in ('Ns','n_strand_s','parallel_wires_s'))
             entry.grid(row=row, column=1, columnspan=2 if key in ('name', 'core_choice_L') else 1,
                        sticky='ew', padx=2, pady=3)
             widgets = [lab, entry]
@@ -644,6 +648,7 @@ class OutputParameterPanel:
             label = ttk.Label(frame, text='启用输出路数', style='Param.TLabel')
             label.grid(row=row, column=0, sticky='w', pady=3)
             spin = ttk.Spinbox(frame, from_=1, to=6, textvariable=self.output_count, width=6)
+            limit_numeric_input(spin, integer=True, max_digits=1)
             spin.grid(row=row, column=1, columnspan=2, sticky='ew', pady=3)
             self._inline_count_picker = spin
             self._inline_extra(frame, [label, spin], '输出路数 outputs count 1 6', self._inline_multiple_active)
@@ -712,7 +717,7 @@ class OutputParameterPanel:
         self.feedback_pick.bind('<<ComboboxSelected>>', lambda _e: self.schedule_update())
         self._inline_extra(frame, [label, self.feedback_pick], '主反馈 PSR 基准 OUT feedback_output', self._inline_multiple_active)
         row += 1
-        note = ttk.Label(frame, text='MP6005：固定频率反激；PWM 参考 250 kHz。辅助绕组与实物 COMP 网络在本组编辑。', style='Muted.TLabel', wraplength=350, justify='left')
+        note = ttk.Label(frame, text='MP6005 采用固定频率反激，PWM 参考 250 kHz。在本组设置辅助绕组和 COMP 网络。', style='Muted.TLabel', wraplength=350, justify='left')
         note.grid(row=row, column=0, columnspan=4, sticky='ew', pady=5)
         self._inline_extra(frame, [note], 'MP6005 PSR 辅助绕组 COMP', lambda: self._topo_key() == 'FLYBACK' and self.feedback_mode.get() == 'PSR-MP6005')
         row += 1
@@ -722,6 +727,7 @@ class OutputParameterPanel:
             label.grid(row=row, column=0, sticky='w', padx=(2, 6), pady=3)
             self.param_labels.append(label)
             entry = ttk.Entry(frame, textvariable=variable, width=8)
+            limit_numeric_input(entry, integer=key == 'psr_Na')
             entry.grid(row=row, column=1, sticky='ew', padx=2, pady=3)
             unit_label = ttk.Label(frame, text=unit, style='Muted.TLabel')
             unit_label.grid(row=row, column=2, sticky='w', padx=4)
@@ -835,12 +841,13 @@ class OutputParameterPanel:
         finally:
             self._inline_binding_busy = previous
 
-    def _focus_inline_section(self, section):
+    def _focus_inline_section(self, section, *, widget=None, context=()):
         frame = self._param_sections[section]
-        self.param_search.set('')
         self._folded_sections.discard(frame)
-        self._filter_params()
-        self.root.update_idletasks()
-        total = max(1, self.left_inner.winfo_height())
-        self.left_canvas.yview_moveto(max(0, frame._section_container.winfo_y() - 4) / total)
+        self._set_parameter_scroll_anchor(widget, context)
+        self._parameter_scroll_target = widget if widget is not None else frame._section_container
+        if self.param_search.get():
+            self.param_search.set('')
+        else:
+            self._apply_parameter_folds((frame,))
         return frame

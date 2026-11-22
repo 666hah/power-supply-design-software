@@ -84,6 +84,9 @@ def _tri_phase(tt, T, D_on, D_off, I_pk, I_min):
 
 
 def make_waveforms(op, n_cycles=2, n_pts=2048):
+    if op.get('llc'):
+        from llc_design import waveforms
+        return waveforms(op, n_cycles, n_pts)
     if op.get('niso_model'):
         from nonisolated import waveform
         return waveform(op,n_cycles,n_pts)

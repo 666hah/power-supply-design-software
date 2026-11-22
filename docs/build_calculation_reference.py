@@ -10,6 +10,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from docx_layout import new_document, paragraph, table, figure, figure_pair, equation, section
 from app_resources import resource_path
 from docs.calculation_reference_layout import add_symbols, finish_book, prepare_book
+from docs.update_calculation_control_reference import DIAGRAM_NAME_PREFIX, add_control_reference
+from docs.update_llc_reference import insert_llc_reference
 
 
 def build(source,output):
@@ -20,6 +22,9 @@ def build(source,output):
     images=[]
     worked_figures={}
     for shape in old.inline_shapes:
+        if (shape._inline.docPr.get('name', '').startswith(DIAGRAM_NAME_PREFIX)
+                or shape._inline.docPr.get('descr','').startswith('图 22-')):
+            continue
         rid=shape._inline.xpath('.//a:blip')[0].get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
         blob=old.part.related_parts[rid].blob
         images.append(blob)
@@ -71,7 +76,7 @@ def build(source,output):
     chapter('1  计算路径与符号约定')
     H('1.1  一次设计计算的顺序')
     P('设计从负载与输入边界开始。同一套器件在输入下限和上限各建立一个稳态工作点，随后用该工作点计算波形与损耗。只规定一个输入电压时，设计按一个工况计算。')
-    P('GUI 将输入（包括预设效率）换算为 SI → 求解工作点 → 构造周期波形 → 计算器件、磁件、电容与其他已建模损耗 → 汇总最终计算效率并复核差值。未启用耦合矩阵时使用固定预设效率的等效负担模型；启用逐对耦合后按第 16 章的显式电路求解，预设效率仅作初值。⑤页仅为已有小信号模型显示结果，新耦合模型不沿用旧 Bode。Word 导出刷新当前设计，与程序共享绘图函数，不依赖页签是否已打开。最终效率不自动覆盖预设效率，也不自动重整定补偿器。')
+    P('GUI 将输入（包括预设效率）换算为 SI → 求解工作点 → 构造周期波形 → 计算器件、磁件、电容与其他已建模损耗 → 汇总最终计算效率并复核差值。未启用耦合矩阵时使用固定预设效率的等效负担模型；启用逐对耦合后按第 16 章的显式电路求解，预设效率仅作初值。环路页仅为已有小信号模型显示结果，新耦合模型不沿用旧 Bode。Word 导出刷新当前设计，与程序共享绘图函数，不依赖页签是否已打开。最终效率不自动覆盖预设效率，也不自动重整定补偿器。')
     T(['变量','含义 / 内部单位','容易混淆的约定'],[
         ('Vin / Vo / Po','输入 / 输出电压 V；输出功率 W','Buck-Boost 的 Vo 输入为幅值，VM 对象保留反相符号'),
         ('fs / Ts','Hz / s；Ts=1/fs','QR 的界面 fs 是频率上限，工作频率另求'),
@@ -189,7 +194,7 @@ def build(source,output):
         ('ΔIp', '导通窗口中原边励磁电流的增量', 'A'),
         ('Is,pk', '按理想匝比折算的副边电流峰值', 'A'),
     )
-    P('此 fRHP 为同一效率工作点下的低频带宽提示；⑤页小信号对象使用 U、Req 与实际 D，有限 RHP 零点与该提示一致。没有由此建立真实损耗动态，仍需完整反馈链和实测复核。')
+    P('此 fRHP 为同一效率工作点下的低频带宽提示；环路页的小信号对象使用 U、Req 与实际 D，有限 RHP 零点与该提示一致。没有由此建立真实损耗动态，仍需完整反馈链和实测复核。')
     H('2.5  电感与电容初选')
     T(['拓扑','Lmin 的软件表达式','解释'],[
         ('Buck','1.5(Vin−U)D/(2fsIo)','在 CCM 边界基础上加 1.5 倍系数'),
@@ -708,7 +713,7 @@ def build(source,output):
     H('从软件到硬件的核查顺序')
     T(['复核步骤','为什么需要'],[
         ('核对反馈极性与采样增益','避免反相对象相位和归一化尺度理解错误'),
-        ('检查实际有效零 / 极点','④的抽象补偿器与⑧简化支路并非必然一致'),
+        ('检查实际有效零 / 极点','对照环路页的抽象补偿器与补偿参数页的简化支路'),
         ('检查所有 0 dB 穿越','单点匹配不保证最小裕度'),
         ('检查 RHP / fs / 钳位谐振约束','低频近似在这些频率附近可能失效'),
         ('加入 ESR、延迟、器件带宽和光耦','软件简化对象不含完整实物反馈链'),
@@ -723,7 +728,7 @@ def build(source,output):
     E('ωz₁=1/(R₂C₁)；ωz₂=1/[(R₁+R₃)C₃]')
     E('Cs=C₁C₂/(C₁+C₂)')
     E('ωp₁=1/(R₂Cs)；ωp₂=1/(R₃C₃)')
-    P('这里 p₁ / p₂ 指两个有限极点，另有原点积分极点。原图用 fp1=0、fp2 / fp3 编号，与④输入编号不同，本文统一使用有限极点编号。')
+    P('这里 p₁ / p₂ 与界面输入均指两个有限极点。原图用 fp1=0 标出原点积分极点，再以 fp2 / fp3 标记两个有限极点。')
     E('S=1/(KPR₁)；r=ωz₁/ωp₁')
     E('C₂=Sr；C₁=S−C₂；R₂=1/(ωz₁C₁)')
     E('R₃=ωz₂R₁/(ωp₂−ωz₂)；C₃=1/(ωp₂R₃)')
@@ -753,7 +758,7 @@ def build(source,output):
         ('r','第一个零点与第一个有限极点的角频率之比','1'),
         ('Vo、Vref','输出电压与跨导放大器的输入参考电压','V'),
     )
-    P('R₂ / gm 必须为正，ωp₂>ωz₂；分压反馈电压 VoR₂/(R₁+R₂) 应与 Vref 相容。原版简化支路令 C₁=C₃=0，需要用户提供 R₁；同样只保留一个零点和积分极点，不实现④标准二型的有限高频极点。')
+    P('R₂ / gm 必须为正，ωp₂>ωz₂；分压反馈电压 VoR₂/(R₁+R₂) 应与 Vref 相容。原版简化支路令 C₁=C₃=0，需要用户提供 R₁，并只保留一个零点和积分极点。环路页的标准二型还包含一个有限的高频极点。')
 
     chapter('10.3  TL431 + 光耦：无快车道')
     if len(images)>2: figure(d,images[2],'图 10-3  无快车道的 TL431 补偿网络',4.3)
@@ -855,7 +860,7 @@ def build(source,output):
     H('12.1  效率-负载曲线与参数扫描')
     P('界面和双端点报告固定 Vin min 的磁芯、匝数、平均匝长和线径，以同一预设 η₀重算各负载的工作点与损耗；QR 也不迭代效率。无效点留空，曲线不是实测。旧标量 API 可按各点重新设计磁件，不能混同固定硬件结果。参数优化目标仅为模型内效率，不含采购、EMI 或制造约束。')
     H('12.2  API 角点与负载阶跃估算')
-    P('工程评审扫描需求页两端输入 ×10/25/50/75/100%负载，共10点；两端相同则5点。固定 Vin min 全部磁件和绕组，电容、采样与补偿不变，重算各点工作点、损耗与环路；失败显式列出。旧 run_corners 标量 API 保留 ±10%默认范围。扫描不穷举输入区间、容差和温度；A/B 对比不修改设计或自动评判优劣。')
+    P('Python API 的 run_corners 用同一套硬件扫描输入上下限与默认 10/25/50/75/100% 负载，并列出失败工况。磁件在规格含输入范围时按低端冻结，标量规格按 V_in 冻结。未显式传入扫描边界时，沿用规格上下限，标量规格取 V_in 的 ±10%。每档负载同比例缩放各路输出功率。桌面容差评估另按声明的器件参数范围复算。')
     E('ΔVESR=ΔI·ESReq')
     E('ΔVC≈ΔI/(2πfcCtotal)')
     E('ΔV估算≈ΔVESR+ΔVC')
@@ -1084,6 +1089,8 @@ def build(source,output):
     update_document(d, 'reference', data=evidence, symbols=symbols, figures=worked_figures)
     from docs.update_qr_cross_regulation_reference import update_document as update_qr_cross
     update_qr_cross(d, symbols=symbols)
+    add_control_reference(d)
+    insert_llc_reference(d)
     Path(output).parent.mkdir(parents=True,exist_ok=True)
     finish_book(d)
     d.save(output)

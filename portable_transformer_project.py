@@ -19,7 +19,7 @@ from field_core_cad import OUTLINE_TOLERANCE_MM, catalog_field_core
 from transformer_geometry import (export_geometry_package, json_bytes, read_geometry_package,
                                   resolve_geometry)
 from transformer_geometry_contract import profile_template
-from transformer_sim_reference import _connections
+from transformer_sim_reference import _connections, synchronize_simulation_connections
 from transformer_sim_runner import _sha, bind_solver_project
 from transformer_simulation import _calculate
 
@@ -255,9 +255,9 @@ def prepare_portable_reference(config, *, environment, output_directory, cancell
 
     The returned settings JSON uses relative source-ZIP and CAD paths, so its
     entire directory can be moved. Elmer remains a machine-local selection.
-    Existing window, layer IDs, turn locations, connections and wire evidence
-    are authoritative. Only fully blank connections may receive explicit
-    series-additive reference assumptions.
+    The current design supplies the winding geometry. Existing manual nodes
+    and polarity are preserved. Derived counts and generated series wiring
+    can be synchronized in this run's copy.
     """
     cancel = cancelled or (lambda: False)
     if cancel():
@@ -298,15 +298,14 @@ def prepare_portable_reference(config, *, environment, output_directory, cancell
                       source=bobbin.get('source') or '沿用当前设计或同型号机械基准的圆形等效匝')
     core = profile.setdefault('core', {})
     run = _calculate(candidate, cancel)
-    geometry, _ = resolve_geometry(run.runtime_bundle()['cases'], '0' * 64, '0' * 64,
+    cases = run.runtime_bundle()['cases']
+    connection_update = synchronize_simulation_connections(profile, cases)
+    geometry, _ = resolve_geometry(cases, '0' * 64, '0' * 64,
                                    'T1', profile, cancelled=cancel)
     if not geometry['ready']['cross_section'] or not geometry['checks']['two_dimensional_fit']:
         raise ValueError('当前线材、层序、手动匝位置与净窗口未通过可绕制评估，请先调整磁件设计')
     connection_note = _connections(profile, geometry)
-    # Re-resolve: partial, tapped or parallel connections must not be silently
-    # replaced by a simple series circuit just because some fields exist.
-    geometry, _ = resolve_geometry(run.runtime_bundle()['cases'], '0' * 64, '0' * 64,
-                                   'T1', profile, cancelled=cancel)
+    connection_note = connection_update or connection_note
     if (geometry['connection_matrix']['values'] is None or
             any(p['turns_match_calculator'] is not True for p in geometry['connections'])):
         raise ValueError('当前绕组接线不完整或含未支持的外接抽头/并联约束，请在建模设置中补全')
@@ -391,4 +390,5 @@ def prepare_portable_reference(config, *, environment, output_directory, cancell
                f"r0={project['frame']['r0_m']*1e3:g} mm，z0={project['frame']['z0_m']*1e3:g} mm\n"
                f"总气隙 {gap*1e3:g} mm；{connection_note}\n"
                'CAD与绕制包已复制到同一输入目录；后续仍须通过实体装配/干涉检查和场求解。')
-    return dict(config=candidate, project_file=str(path), summary=summary)
+    return dict(config=candidate, project_file=str(path), summary=summary,
+                connection_update=connection_update)

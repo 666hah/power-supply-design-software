@@ -12,12 +12,15 @@ import hashlib
 import json
 import math
 
+from loop_acceptance import MIN_PHASE_MARGIN_DEG
+
 SCHEMA = 'power-design.engineering-acceptance.v1'
 VERSION = 1
 SOURCES = ('calculation', 'simulation', 'measurement')
 CASE_IDS = ('Vinmin', 'Vinmax')
-STATE_LABELS = {'pass': '录入/模型值满足', 'review': '不满足 / 需整改',
-                'undefined': '待补证据/目标', 'stale': '输入已变 / 证据失效',
+GROUPS = (('components', '器件规格'), ('performance', '电源外特性'))
+STATE_LABELS = {'pass': '满足', 'review': '超限',
+                'undefined': '待补规格或结果', 'stale': '证据已失效',
                 'na': '不适用'}
 _DISPLAY_KEYS = {'input_voltage_case', 'ui_font_size', 'font_size', 'display_voltage_case',
                  'sweep_var', 'sweep_min', 'sweep_max', 'sweep_n'}
@@ -223,70 +226,104 @@ def _cases(bundle):
     return {row.get('id'): row for row in rows if isinstance(row, dict) and row.get('id') in CASE_IDS}
 
 
-def _default_rows(parameters, calculation_cases):
-    """Metric registration and thresholds project existing checks, not formulas."""
-    from cot_settings import active as cot_active
-    cot = cot_active(parameters)
-    result = []
-    def add(key, name, unit='', comparison='<=', limit=None, note=''):
-        result.append(dict(id=key, metric=key, name=name, unit=unit, comparison=comparison,
-            limit=limit, lower=None, upper=None, note=note, enabled=True, required_sources=list(SOURCES)))
-    add('eta', '模型效率', '', '>=', parameters.get('target_eta'), '按已计算损耗求得，比例值 0.93 表示 93%。')
-    add('primary_rms', '每相电感电流 RMS' if cot else '电感/原边电流 RMS', 'A')
-    add('primary_peak', '每相电感电流峰值' if cot else '电感/原边电流峰值', 'A')
-    add('vds_peak', 'MOS 稳态最大 Vds', 'V', note='取稳态工况的峰值。')
-    add('startup_vds_peak', 'MOS 全启动 Vds 峰值', 'V', note='取启动全过程的峰值。')
-    add('fc', '环路穿越频率', 'Hz')
-    add('phase_margin', '全部穿越最小相位裕度', 'deg', '>=', parameters.get('pm_target'))
-    add('gain_margin', '测得频带内有限增益裕度', 'dB', '>=' , 0., '频带内有相位交越时取有限值。')
-    add('temperature_rise', '磁件最高估算温升', 'K', '<=', parameters.get('temp_rise_limit'), '按给定热阻或对流条件估算。')
-    rails = parameters.get('outputs') or [dict(V_out=parameters.get('V_out'), ripple_target=parameters.get('ripple_target'))]
-    for index, rail in enumerate(rails, 1):
-        add(f'out{index}_voltage', f'OUT{index} 端口平均电压', 'V', note='取防反管后端口电压。填写允许范围。')
-        add(f'out{index}_ripple', f'OUT{index} 低频输出纹波', 'V', note='取低频峰峰值。')
-        if not cot:
-            add(f'out{index}_rms', f'OUT{index} 整流/副边电流 RMS', 'A')
-            add(f'out{index}_peak', f'OUT{index} 整流/副边电流峰值', 'A')
-    # Reuse unified engineering check thresholds, including the actual ripple
-    # target evaluated by that model. Unknown/NA check limits remain unknown.
-    for case in calculation_cases.values():
-        for check in case.get('checks') or (case.get('result') or {}).get('checks') or []:
-            cid = check.get('id')
-            if cid == 'ripple' and len(rails) == 1:
-                row = next(r for r in result if r['id'] == 'out1_ripple')
-                row['limit'] = _number(check.get('limit'))
-            for index in range(1, len(rails)+1):
-                if cid == f'OUT{index}_ripple':
-                    next(r for r in result if r['id'] == f'out{index}_ripple')['limit'] = _number(check.get('limit'))
-            if cid == 'bom_Q1_voltage':
-                for key in ('vds_peak', 'startup_vds_peak'):
-                    next(r for r in result if r['id'] == key)['limit'] = _number(check.get('limit'))
-            if cid == 'phase_margin':
-                next(r for r in result if r['id'] == 'phase_margin')['limit'] = _number(check.get('limit'))
-        break
-    return result
-
-
-def _calculation_values(case):
+def _check_index(case):
     res = case.get('result') or case.get('res') or {}
-    op = res.get('op') or case.get('op') or {}
-    wf = res.get('wf') or case.get('wf') or {}
-    loop = res.get('loop') or {}
-    magnetic = res.get('mag') or {}
-    temperatures = [_number(d.get('dT')) for key in ('transformer', 'inductor')
-                    if isinstance((d := magnetic.get(key)), dict)]
-    values = dict(eta=res.get('eta'), primary_rms=op.get('I_p_rms', op.get('I_L_rms', op.get('I_sw_rms'))),
-        primary_peak=op.get('I_sw_pk', op.get('I_L_pk')), vds_peak=op.get('V_sw_max'),
-        startup_vds_peak=None, fc=loop.get('fc'), phase_margin=loop.get('min_pm'),
-        gain_margin=loop.get('gm_db'), temperature_rise=max((v for v in temperatures if v is not None), default=None))
-    outputs = res.get('outputs') or [dict(op=op, ripple_pp=wf.get('ripple_pp'))]
-    for index, rail in enumerate(outputs, 1):
-        child = rail.get('op') or {}
-        values.update({f'out{index}_voltage': child.get('V_out'), f'out{index}_ripple': rail.get('ripple_pp')})
-        if not op.get('cot'):
-            values.update({f'out{index}_rms': child.get('I_s_rms', child.get('I_d_rms')),
-                           f'out{index}_peak': child.get('I_s_pk', child.get('I_d_pk'))})
-    return {k: _number(v) for k, v in values.items()}
+    return {check['id']: check for check in (case.get('checks') or res.get('checks') or [])
+            if check.get('id')} if not case.get('error') else {}
+
+
+def _metric(key, name, unit, comparison, limit, note='', *, group='components'):
+    return dict(id=key, metric=key, name=name, unit=unit, comparison=comparison,
+                limit=_number(limit), lower=None, upper=None, note=note, group=group)
+
+
+def _magnetic_rows(p):
+    """Keep both magnetic limits visible even if a device has no valid model."""
+    from cot_settings import active
+    common = dict(
+        B=('峰值磁密', 'T', '<', p['Bsat']),
+        T=('温升', 'K', '<=', p['temp_rise_limit']),
+    )
+    topo = p['topology']
+    count = len(p.get('outputs') or ())
+    devices = []
+    if topo in ('FLYBACK', 'QR-FLYBACK', 'LLC', 'ACF-FORWARD'):
+        suffix = '_T' if topo in ('LLC', 'ACF-FORWARD') else ''
+        devices.append(('T1 变压器', {'B': 'B_sat'+suffix, 'T': 'temp_rise'+suffix}))
+    if topo == 'ACF-FORWARD' and count:
+        devices.extend((f'L_O{i} 输出电感', {key: f'OUT{i}_L_{key}' for key in common})
+                       for i in range(1, count+1))
+    elif topo not in ('FLYBACK', 'QR-FLYBACK'):
+        if active(p):
+            devices.extend((f'PH{i} 电感', {key: f'cot_phase_{i}_{key}' for key in common})
+                           for i in range(1, int(p.get('buck_phases', 1))+1))
+        else:
+            suffix = '_L' if topo in ('LLC', 'ACF-FORWARD') else ''
+            ref = 'L_R 谐振电感' if topo == 'LLC' else 'L1 电感'
+            devices.append((ref, {'B': 'B_sat'+suffix, 'T': 'temp_rise'+suffix}))
+    return [_metric(ids[key], ref+' '+label, unit, comparison, limit,
+                    '限值来自磁件参数。峰值磁密按绝对峰值，温升按环境以上增量。')
+            for ref, ids in devices for key, (label, unit, comparison, limit) in common.items()]
+
+
+def _acceptance_metrics(p, calculation_checks):
+    """Register only the specified component limits and external targets."""
+    from component_management import evaluate_components
+    from isolated_outputs import output_specs
+
+    published = {key: check for checks in calculation_checks.values() for key, check in checks.items()}
+    component_checks = evaluate_components(p)['checks']
+    rows = []
+    for item in component_checks:
+        key = item['id']
+        if item['metric'] == 'spike':  # generic diode follow-up is already covered by reverse voltage
+            continue
+        if item['metric'] == 'peak' and not any(
+                _number(checks.get(key, {}).get('value')) is not None for checks in calculation_checks.values()):
+            continue  # no modeled repeatable peak distinct from the blocking platform
+        check = published.get(key, item)
+        name = check.get('name', item['name'])
+        note = '限值来自器件 BOM 与规格。'
+        if item['metric'] == 'peak':
+            name = f"{item['ref']} MOS 模型峰值 Vds"
+            note += '使用模型峰值适用的降额限值。'
+        elif item['metric'] == 'voltage' and item['ref'].startswith('Q'):
+            name = f"{item['ref']} MOS 漏源电压 Vds"
+            note += '计算采用阻断平台。仿真采用有效测量窗的峰值。'
+        rows.append(_metric(key, name, item['unit'], '<=', check.get('limit'), note))
+    rows.extend(_magnetic_rows(p))
+    for index, rail in enumerate(output_specs(p) or [p], 1):
+        target = rail.get('ripple_target', p['ripple_target']) * abs(rail['V_out'])
+        rows.append(_metric(f'out{index}_ripple', f'OUT{index} 低频输出纹波', 'V', '<=', target,
+                            '限值来自需求中的纹波目标。计算值为低频峰峰值。', group='performance'))
+    rows.extend((
+        _metric('phase_margin', '最小相位裕度', 'deg', '>', MIN_PHASE_MARGIN_DEG,
+                '取所有有效 0 dB 穿越中的最小相位裕度。', group='performance'),
+        _metric('eta', '效率', '', '>=', p['target_eta'],
+                '使用需求中的效率目标。录入 0.93 表示 93%。', group='performance'),
+    ))
+    return rows
+
+
+def _calculated_item(criterion, case, checks):
+    key = criterion['id']
+    if not case or case.get('error'):
+        return None, criterion['limit']
+    res = case.get('result') or case.get('res') or {}
+    if key == 'phase_margin':
+        return _number((res.get('loop') or {}).get('min_pm')), criterion['limit']
+    if key == 'eta':
+        return _number(res.get('eta')), criterion['limit']
+    if criterion['group'] == 'performance':
+        index = int(key.removeprefix('out').removesuffix('_ripple'))
+        rails = res.get('outputs') or [dict(ripple_pp=(res.get('wf') or {}).get('ripple_pp'))]
+        check = checks.get(f'OUT{index}_ripple') if res.get('outputs') else checks.get('ripple')
+        value = rails[index-1].get('ripple_pp') if index <= len(rails) else None
+        return _number(value), _number(check.get('limit')) if check else criterion['limit']
+    check = checks.get(key)
+    if check is None:
+        return None, criterion['limit']
+    return _number(check.get('value')), _number(check.get('limit'))
 
 
 def _simulation_values(case):
@@ -312,6 +349,67 @@ def _simulation_values(case):
             if key.endswith(suffix):
                 values[key[:-len(suffix)] + target] = value
     return {k: _number(v) for k, v in values.items()}
+
+
+def _simulation_acceptance_values(case, *, multi_output):
+    """Project qualified electrical stress evidence using measured quantities and units."""
+    if not case:
+        return {}
+    from spice_white_box import bom_reference
+    periodicity = case.get('periodicity')
+    stable = (periodicity.get('stable') if isinstance(periodicity, dict)
+              else bool(case.get('phase_table') and case.get('steady_before_step', {}).get('passed')))
+    qualified = bool(case.get('complete') and case.get('nominal_comparable') and stable
+                     and not case.get('protection_stop'))
+    values = {}
+
+    def record(key, value):
+        value = _number(value)
+        if value is not None:
+            worst = min if key == 'phase_margin' else max
+            values[key] = worst(value, values.get(key, value))
+
+    llc = case.get('measured') or {}
+    if case.get('status') == '完成' and llc.get('ready') and llc.get('no_gate_overlap'):
+        for field, prefix, metric in (
+            ('switch_Vds_peak_V', 'Q', 'voltage'), ('diode_Vr_peak_V', 'D', 'voltage'),
+            ('switch_I_rms_A', 'Q', 'current_rms'), ('input_bank_rms_A', 'C_IN', 'ripple'),
+            ('output_bank_rms_A', 'C_O', 'ripple'),
+        ):
+            for index, value in enumerate(llc.get(field) or (), 1):
+                record(f'bom_{prefix}{index}_{metric}', value)
+        record('bom_C_R_voltage', llc.get('V_cr_peak_V'))
+        record('bom_C_R_ripple', llc.get('I_res_rms_A'))
+        from spice_analysis import llc_fra_phase_margin
+        record('phase_margin', llc_fra_phase_margin(case))
+    if qualified:
+        loop = case.get('loop') or {}
+        if loop.get('available'):
+            result = loop.get('simulation') or loop.get('metrics') or {}
+            result = result.get('loop', result)
+            from spice_analysis import minimum_phase_margin
+            record('phase_margin', minimum_phase_margin(result))
+        window = case.get('white_box') or {}
+        if window.get('available'):
+            for item in window.get('rows') or ():
+                ref = item.get('ref', '')
+                label = item.get('metric', '').removeprefix(ref+' ')
+                metric = {
+                    '纹波 AC RMS': 'ripple', '端电压绝对峰值': 'voltage', '沟道电流 RMS': 'current_rms',
+                    '|Vds| 峰值': 'voltage', '反向电压峰值': 'voltage',
+                    'If 峰值': 'current_peak', '|Id| 峰值': 'current_peak',
+                }.get(label)
+                if ref and metric:
+                    record(f'bom_{bom_reference(ref, multi_output)}_{metric}', item.get('simulation'))
+    # Startup is a separate measurement window. Its voltage peak uses the
+    # ordinary per-part voltage limit, regardless of the steady-state window.
+    startup = case.get('white_box_startup') or {}
+    if case.get('complete') and startup.get('complete_window'):
+        for item in startup.get('rows') or ():
+            if item.get('channel') == 'voltage' and item.get('kind') in ('mos', 'diode', 'capacitor') and item.get('ref'):
+                ref = bom_reference(item['ref'], multi_output)
+                record(f'bom_{ref}_voltage', item.get('simulation'))
+    return values
 
 
 def _judge(value, criterion):
@@ -353,6 +451,87 @@ def _spice_binding(p, fingerprint, joint_record, spice_evidence, notes):
     return {}, False, '未取得匹配配置的仿真证据'
 
 
+def _endpoint_simulations(p, spice):
+    from mos_manual import distinct_endpoints
+
+    cases = [case for case in spice.get('cases', ()) if isinstance(case, dict) and not case.get('fault_test')]
+    shared = p.get('V_in_min') == p.get('V_in_max') and not distinct_endpoints(p)
+    multi_output = bool(p.get('outputs') or p.get('feedback_mode') == 'PSR-MP6005')
+    result = {}
+    for case_id in CASE_IDS:
+        vin = p.get('V_in_min' if case_id == 'Vinmin' else 'V_in_max', p.get('V_in'))
+        at_vin = [case for case in cases if _number(case.get('voltage')) == _number(vin)]
+        sim = next((case for case in at_vin if str(case.get('id', '')).split('_', 1)[0] == case_id), None)
+        if sim is None and shared and at_vin:
+            sim = at_vin[0]
+        result[case_id] = _simulation_acceptance_values(sim, multi_output=multi_output)
+    return result
+
+
+def _summary(rows):
+    counts = dict.fromkeys(STATE_LABELS, 0)
+    for row in rows:
+        for cell in row['cases'].values():
+            counts[cell['status']] += 1
+    state = ('review' if counts['review'] else 'stale' if counts['stale'] else
+             'undefined' if counts['undefined'] or not counts['pass'] else 'pass')
+    return dict(state=state, counts=counts, label=STATE_LABELS[state])
+
+
+def _case_evidence(criterion, case, vin, checks, simulated, measurement, fingerprint, *, origin, stale_calculation):
+    value, limit = _calculated_item(criterion, case, checks)
+    target = dict(comparison=criterion['comparison'], limit=limit, lower=None, upper=None)
+    available = dict(calculation=value, simulation=simulated,
+                     measurement=measurement.get('value') if measurement else None)
+    usable = {source for source, reading in available.items() if reading is not None}
+    states, margins, reasons = {}, {}, []
+    for source in SOURCES:
+        states[source], margins[source] = _judge(available[source], target)
+    if stale_calculation:
+        states['calculation'], margins['calculation'] = 'stale', None
+        usable.discard('calculation')
+    if measurement:
+        if measurement['input_fingerprint'] != fingerprint:
+            states['measurement'], margins['measurement'] = 'stale', None
+            usable.discard('measurement')
+            reasons.append('实测记录对应旧输入')
+        elif not measurement['source'] or not measurement['conditions']:
+            states['measurement'], margins['measurement'] = 'undefined', None
+            usable.discard('measurement')
+            reasons.append('实测缺来源或测试条件')
+    valid = tuple(margin for margin in margins.values() if margin is not None)
+    status = ('review' if 'review' in states.values() else 'pass' if valid else
+              'stale' if 'stale' in states.values() else 'undefined')
+    pending_reason = None
+    if status == 'undefined':
+        pending_reason = ('缺限值' if usable else '缺限值和结果') if limit is None else '缺结果'
+        if limit is None:
+            reasons.append('到器件 BOM 与规格补充额定值或适用降额限值' if criterion['id'].startswith('bom_')
+                           else '到对应设计页补充目标或限值')
+        if not usable:
+            reasons.append('当前工况缺少可比较的计算、仿真或实测结果')
+    elif status == 'stale' and stale_calculation:
+        reasons.append('需更新旧计算结果')
+
+    def delta(source):
+        measurement_value = available[source]
+        # A device simulation can include startup and switching spikes,
+        # while its calculated value may only describe the blocking platform.
+        if (criterion['group'] == 'performance' and value not in (None, 0)
+                and measurement_value is not None and states[source] in ('pass', 'review')):
+            return 100 * (measurement_value - value) / abs(value)
+        return None
+
+    return dict(V_in=_number(vin), **available, **target, states=states, margins=margins,
+                margin=min(valid, default=None), delta_simulation=delta('simulation'),
+                delta_measurement=delta('measurement'), status=status, pending_reason=pending_reason,
+                reason='。'.join(reasons),
+                sources=dict(calculation='当前计算快照' if value is not None else '待更新计算快照',
+                             simulation=origin, measurement=measurement['source'] if measurement else ''),
+                measurement_record=copy.deepcopy(measurement),
+                calculation_error=case.get('error') or (case.get('loop_error') if criterion['id'] == 'phase_margin' else None))
+
+
 def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None):
     """Pure completed-data projection. Never reads arbitrary paths or runs tools."""
     from config_io import decode_config
@@ -366,96 +545,44 @@ def report_snapshot(p, range_result=None, joint_record=None, spice_evidence=None
     calculation_cases = _cases(range_result) if matched else {}
     if range_result is not None and not matched:
         notes.append('输入已变，请刷新计算快照。')
-    criteria = _default_rows(p, calculation_cases)
-    by_id = {row['id']: row for row in criteria}
-    for override in config['criteria']:
-        if override['id'] in by_id:
-            current = by_id[override['id']]
-            current.update({key: value for key, value in override.items()
-                            if key not in ('name', 'unit') or value})
-        else:
-            criteria.append(copy.deepcopy(override))
+    from power_stage import DEFAULT_PARAMS
+    from input_voltage_range import normalize_input_voltage_spec
+    parameters = dict(DEFAULT_PARAMS, **p)
+    if 'V_in_min' not in p and 'V_in_max' not in p:
+        parameters.update(V_in_min=parameters['V_in'], V_in_max=parameters['V_in'])
+    parameters = normalize_input_voltage_spec(parameters)
+    calculation_checks = {case_id: _check_index(case) for case_id, case in calculation_cases.items()}
+    criteria = _acceptance_metrics(parameters, calculation_checks)
     spice, bound, origin = _spice_binding(p, fingerprint, joint_record, spice_evidence, notes)
-    simulated = [c for c in spice.get('cases', []) if isinstance(c, dict) and not c.get('fault_test')]
+    simulated = _endpoint_simulations(parameters, spice)
     measurements = {(m['criterion_id'], m['case_id']): m for m in config['measurements']}
     rows = []
     for criterion in criteria:
-        row = copy.deepcopy(criterion)
-        row['cases'] = {}
+        row = dict(criterion, cases={})
         for case_id in CASE_IDS:
             case = calculation_cases.get(case_id) or {}
-            vin = p.get('V_in_min' if case_id == 'Vinmin' else 'V_in_max', p.get('V_in'))
-            # Endpoints can share a voltage but have separate manual gate-charge
-            # events. A named Vinmin record must never fill a missing Vinmax.
-            sim = next((c for c in simulated if str(c.get('id', '')).split('_', 1)[0] == case_id
-                        and _number(c.get('voltage')) == _number(vin)), {})
-            shared_note = ''
-            if not sim:
-                from mos_manual import distinct_endpoints
-                legacy_shared = (p.get('V_in_min') == p.get('V_in_max') and not distinct_endpoints(p))
-                if legacy_shared:
-                    sim = next((c for c in simulated if _number(c.get('voltage')) == _number(vin)), {})
-                    if sim:
-                        shared_note = '同电压、同 MOS 事件，沿用 ' + str(sim.get('id') or '原单工况') + ' 的仿真'
-            measurement = measurements.get((criterion['id'], case_id))
-            values = _calculation_values(case) if case and not case.get('error') else {}
-            simvalues = _simulation_values(sim)
-            available = dict(calculation=values.get(criterion['metric']), simulation=simvalues.get(criterion['metric']),
-                measurement=measurement.get('value') if measurement else None)
-            states, margins, reasons = {}, {}, [shared_note] if shared_note else []
-            for source in SOURCES:
-                state, margin = _judge(available[source], criterion)
-                if not criterion['enabled']:
-                    state, margin = 'na', None
-                elif source == 'calculation' and range_result is not None and not matched:
-                    state, margin = 'stale', None
-                elif source == 'simulation' and sim:
-                    valid = bool(bound and sim.get('complete') and sim.get('nominal_comparable') and
-                                 (sim.get('periodicity') or {}).get('stable') and not sim.get('protection_stop'))
-                    if not valid:
-                        state, margin = 'undefined', None
-                        reasons.append('仿真未通过标称/逐周期检查或处于保护')
-                    elif criterion['metric'] in ('fc', 'phase_margin', 'gain_margin') and not (sim.get('loop') or {}).get('available'):
-                        state, margin = 'undefined', None
-                elif source == 'measurement' and measurement:
-                    if measurement['input_fingerprint'] != fingerprint:
-                        state, margin = 'stale', None
-                        reasons.append('实测记录对应旧输入')
-                    elif not measurement['source'] or not measurement['conditions']:
-                        state, margin = 'undefined', None
-                        reasons.append('实测缺来源或测试条件')
-                states[source], margins[source] = state, margin
-            required = [states[s] for s in criterion['required_sources']]
-            status = ('na' if not criterion['enabled'] else 'review' if 'review' in required else
-                      'stale' if 'stale' in required else 'undefined' if 'undefined' in required else 'pass')
-            base = available['calculation']
-            def delta(value):
-                return (value - base) / abs(base) * 100 if base not in (None, 0) and value is not None else None
-            usable_margins = [margins[s] for s in criterion['required_sources'] if margins[s] is not None]
-            row['cases'][case_id] = dict(V_in=_number(vin), **available, states=states, margins=margins,
-                margin=min(usable_margins) if len(usable_margins) == len(required) else None,
-                delta_simulation=delta(available['simulation']) if states['calculation'] != 'stale' else None,
-                delta_measurement=delta(available['measurement']) if 'stale' not in (states['calculation'], states['measurement']) else None,
-                status=status, reason='。'.join(dict.fromkeys(reasons)),
-                sources=dict(calculation='当前计算快照' if matched else '待更新计算快照',
-                             simulation=origin, measurement=measurement['source'] if measurement else ''),
-                measurement_record=copy.deepcopy(measurement),
-                calculation_error=case.get('error') or case.get('loop_error'))
+            vin = parameters['V_in_min' if case_id == 'Vinmin' else 'V_in_max']
+            row['cases'][case_id] = _case_evidence(
+                criterion, case, vin, calculation_checks.get(case_id, {}),
+                simulated[case_id].get(criterion['id']), measurements.get((criterion['id'], case_id)),
+                fingerprint, origin=origin, stale_calculation=range_result is not None and not matched)
+        low, high = (row['cases'][case_id]['limit'] for case_id in CASE_IDS)
+        row['limits_vary'] = low != high
+        row['limit'] = None if row['limits_vary'] else low
         rows.append(row)
     issues = copy.deepcopy(config['issues'])
     for issue in issues:
         issue['effective_status'] = ('stale' if issue['status'] == 'closed' and issue['input_fingerprint'] != fingerprint else
             'undefined' if issue['status'] == 'closed' and not issue['evidence'] else issue['status'])
-    counts = {state: sum(r['cases'][c]['status'] == state for r in rows for c in CASE_IDS) for state in STATE_LABELS}
-    open_issues = sum(i['effective_status'] != 'closed' for i in issues)
-    enabled = sum(r['enabled'] for r in rows)
-    summary_state = ('review' if counts['review'] or open_issues else 'stale' if counts['stale'] else
-                     'undefined' if counts['undefined'] or not enabled else 'pass')
+    groups = [dict(id=key, title=title, summary=_summary([row for row in rows if row['group'] == key]))
+              for key, title in GROUPS]
+    summary = _summary(rows)
+    summary.update(unresolved_issues=sum(issue['effective_status'] != 'closed' for issue in issues),
+                   scope='判定覆盖器件规格和电源外特性，依据所列工况的有效证据。')
     return dict(schema=SCHEMA, version=VERSION, input_fingerprint=fingerprint,
-        rows=rows, criteria=copy.deepcopy(criteria), issues=issues, evidence_notes=notes,
+        rows=rows, groups=groups, criteria=copy.deepcopy(criteria), issues=issues, evidence_notes=notes,
         calculation_matched=matched, simulation_matched=bound,
-        summary=dict(state=summary_state, counts=counts, unresolved_issues=open_issues,
-            label=STATE_LABELS[summary_state], scope='评审范围为已启用的指标、指定数据来源和所列输入工况。'),
+        summary=summary,
         config=config)
 
 

@@ -1,5 +1,6 @@
 """Owned LTspice batch runs, bounded RAW reading and auditable comparisons."""
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import hashlib
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from threading import Event, Lock
 import time
 import zipfile
 import numpy as np
@@ -31,6 +33,60 @@ def set_ltspice(executable):
     preferences=Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'PowerDesign'/'ltspice.json'
     preferences.parent.mkdir(parents=True,exist_ok=True)
     preferences.write_text(json.dumps(dict(executable=str(path)),ensure_ascii=False),encoding='utf-8')
+
+
+def endpoint_workers(endpoint_count, threads, *, parallel=True):
+    """Allow at most two solvers with capacity left for the UI and OS."""
+    cpu_count = getattr(os, 'process_cpu_count', os.cpu_count)() or 1
+    if parallel and endpoint_count > 1 and cpu_count >= max(6, 2 * int(threads) + 2):
+        return 2
+    return 1
+
+
+def run_endpoint_cases(cases, solve, *, workers, cancelled, progress, stages_per_case, total):
+    """Run isolated endpoint pipelines and collect their results in input order."""
+    from calculation_scheduler import CalculationCancelled
+
+    stopped = Event()
+    progress_lock = Lock()
+    stages = [0] * len(cases)
+
+    def interrupted():
+        return stopped.is_set() or cancelled()
+
+    def execute(index, case):
+        if interrupted():
+            raise CalculationCancelled()
+
+        def notify(stage, message):
+            if progress is None:
+                return
+            with progress_lock:
+                stages[index] = max(stages[index], stage)
+                label = f'{workers} 端点并行 · {message}' if workers > 1 else message
+                progress(sum(stages), total, label)
+
+        result = solve(case, interrupted, notify)
+        with progress_lock:
+            stages[index] = stages_per_case
+        if interrupted():
+            raise CalculationCancelled()
+        return result
+
+    if workers == 1:
+        return [execute(index, case) for index, case in enumerate(cases)]
+
+    results = [None] * len(cases)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='spice-endpoint') as pool:
+        pending = {pool.submit(execute, index, case): index for index, case in enumerate(cases)}
+        try:
+            for future in as_completed(pending):
+                results[pending[future]] = future.result()
+        finally:
+            stopped.set()
+            for future in pending:
+                future.cancel()
+    return results
 
 
 def read_log(path):
@@ -154,6 +210,8 @@ def partial_transient_time(path):
 
 def _run(executable,folder,timeout,cancelled,*,progress=None,simulation_end=None):
     from calculation_scheduler import CalculationCancelled
+    if cancelled():
+        raise CalculationCancelled()
     folder=Path(folder).resolve()
     kwargs=dict(cwd=str(folder),stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
     if os.name=='nt':
@@ -428,20 +486,25 @@ def _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,prog
         if raw is not None:raw.close()
 
 
-def compare_design(run,destination,*,cancelled=lambda:False,progress=None,executable=None):
-    """Create a Word report plus an auditable ZIP. Never invent simulator data."""
+def compare_design(run,destination,*,cancelled=lambda:False,progress=None,executable=None,parallel=True):
+    """Publish the report formats from the same frozen simulation evidence."""
     from spice_export import project_files,normalize_settings
     from calculation_scheduler import CalculationCancelled
     executable=executable or find_ltspice()
     if not executable:raise ValueError('未检测到 LTspice。请在桌面仿真设置中选择 LTspice.exe 后重试')
     bundle=run.runtime_bundle();p=bundle['base_spec']
+    if p.get('topology') == 'LLC':
+        from llc_spice_comparison import compare_design as compare_llc
+        return compare_llc(bundle,destination,executable=executable,cancelled=cancelled,
+                           progress=progress,parallel=parallel)
     from cot_settings import active as cot_active
     if cot_active(p):
         from cot_spice_comparison import compare_design as compare_cot
-        return compare_cot(bundle,destination,executable=executable,cancelled=cancelled,progress=progress)
+        return compare_cot(bundle,destination,executable=executable,cancelled=cancelled,progress=progress,parallel=parallel)
     settings=normalize_settings(p.get('spice_config'))
     destination=Path(destination).resolve();destination.parent.mkdir(parents=True,exist_ok=True)
     report_path=destination if destination.suffix.lower()=='.docx' else destination.with_suffix('.docx')
+    xlsx_path=destination if destination.suffix.lower()=='.xlsx' else destination.with_suffix('.xlsx')
     zip_path=destination if destination.suffix.lower()=='.zip' else destination.with_suffix('.zip')
     from spice_export import MODEL_VERSION
     qr=p.get('topology')=='QR-FLYBACK'
@@ -470,13 +533,28 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
     cases=endpoint_cases(p,bundle['cases'])
     bundle=dict(bundle,cases=cases)
     total=len(plan['stages'])
+    per_endpoint = (total - int(bool(settings['line_load_enabled']))) // len(cases)
+    workers = endpoint_workers(len(cases), settings['simulation_threads'], parallel=parallel)
+    evidence['execution'] = dict(endpoint_workers=workers, threads_per_case=int(settings['simulation_threads']))
+    cache_io = Lock()
     with tempfile.TemporaryDirectory(prefix='spice-compare-',dir=destination.parent) as temporary:
-        work=Path(temporary);archive_files={};done=0
-        for case in cases:
+        work = Path(temporary)
+
+        def execute_study(folder, timeout, stopped, update):
+            analysis = (folder/'analysis.inc').read_text(encoding='ascii')
+            stop_match = re.search(r'(?im)^\.tran\s+\S+\s+([\d.eE+-]+)\s', analysis)
+            return _run(executable, folder, timeout, stopped, progress=update,
+                        simulation_end=float(stop_match[1]) if stop_match else None)
+
+        def solve(case, cancelled, notify):
+            archive_files = {}
+            records = []
+            line_load_inputs = None
+            done = 0
             for fault_case in ([False,True] if settings['short_test'] else [False]):
                 if cancelled():raise CalculationCancelled()
                 done+=1;label=case['id']+('_短路测试' if fault_case else '_标称负载')
-                if progress:progress(done,total,'LTspice '+label)
+                notify(done, 'LTspice '+label)
                 q=copy.deepcopy(p);q['spice_config']=dict(settings,short_test=int(fault_case),load_after=1.)
                 files=project_files(q,bundle=bundle)
                 meta=json.loads(files['manifest.json'])
@@ -496,7 +574,7 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     niso=meta.get('niso'),
                     hardware=meta['hardware'],source_hashes={k:hashlib.sha256(v).hexdigest() for k,v in files.items() if k.endswith(('.cir','.inc','.lib'))},
                     loop=dict(available=False,error='未启用 FRA'),cross=dict(supported=False,error='未启用交叉调整率扫描'))
-                evidence['cases'].append(record)
+                records.append(record)
                 if case['result']['op'].get('acf_model'):
                     cm=case['result']['op']['acf_model']
                     record['calculation_model']={key:cm[key] for key in ('kind','revision','assumptions','mesh','current_mesh_verified','normalized_residual','energy_balance_relative')}
@@ -504,7 +582,8 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                 if settings['simulation_reuse'] and not fault_case:
                     try:
                         key=cache_key(files,case,settings,executable,processors)
-                        cached=cache.load(key)
+                        with cache_io:
+                            cached=cache.load(key)
                     except (ValueError,TypeError,OSError):pass
                 if cached is not None:
                     cached_record,log,created_at=cached
@@ -512,10 +591,10 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     record['cache']=dict(hit=True,created_at=created_at,key=key)
                     record['wall_elapsed_s']=0.
                     archive_files[label+'/Flyback.log']=log
-                    if progress:progress(done,total,label+' · 复用已通过的标称仿真 '+created_at)
+                    notify(done,label+' · 复用已通过的标称仿真 '+created_at)
                 else:
                     _simulate_nominal(executable,folder,case,meta,settings,record,cancelled,
-                        progress=lambda text:progress(done,total,label+' · '+text) if progress else None)
+                        progress=(lambda text:notify(done,label+' · '+text)) if progress else None)
                     record['cache']=dict(hit=False)
                     if record.get('complete') and record.get('nominal_comparable') and not fault_case:
                         from flyback_cap_boundary import attach_comparison
@@ -523,19 +602,21 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     if (folder/'Flyback.log').is_file():
                         log=(folder/'Flyback.log').read_bytes()
                         archive_files[label+'/Flyback.log']=log
-                        if key and not cancelled():cache.store(key,record,log)
+                        if key:
+                            with cache_io:
+                                if not cancelled():
+                                    cache.store(key,record,log)
                 if fault_case:continue
-                phase=[case['id']+' 环路 FRA']
+                if settings['line_load_enabled'] and case is cases[-1]:
+                    line_load_inputs = files, meta
+                phase=case['id']+' 环路 FRA'
                 def phase_progress(message):
-                    phase[0]=case['id']+' '+message
-                    if progress:progress(done,total,phase[0])
+                    nonlocal phase
+                    phase=case['id']+' '+message
+                    notify(done,phase)
                 def execute(study_folder,timeout):
-                    analysis=(study_folder/'analysis.inc').read_text(encoding='ascii')
-                    stop_match=re.search(r'(?im)^\.tran\s+\S+\s+([\d.eE+-]+)\s',analysis)
-                    simulation_end=float(stop_match[1]) if stop_match else None
-                    return _run(executable,study_folder,timeout,cancelled,
-                        progress=lambda text:progress(done,total,phase[0]+' · '+text) if progress else None,
-                        simulation_end=simulation_end)
+                    return execute_study(study_folder,timeout,cancelled,
+                        (lambda text:notify(done,phase+' · '+text)) if progress else None)
                 done+=1
                 phase_progress('反馈路 10% ↔ 90% 双向负载阶跃')
                 if record.get('complete') and not record.get('protection_stop'):
@@ -547,7 +628,7 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     record['load_transient']=dict(available=False,complete=False,error='满载仿真未完成或触发保护，双向阶跃未运行')
                 if settings['fra_enabled']:
                     done+=1
-                    if progress:progress(done,total,'LTspice '+case['id']+' 原生 FRA')
+                    phase_progress('原生 FRA')
                     if record['complete'] and record['periodicity']['stable'] and record['nominal_comparable']:
                         study=work/(case['id']+'_FRA')
                         operating_point=None
@@ -576,34 +657,54 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
                     if study.is_dir():archive_files.update(collect_study(study,study.name))
                     for retry in study.glob('retry_*'):
                         if retry.is_dir():archive_files.update(collect_study(retry,study.name+'/'+retry.name))
-                if settings['line_load_enabled'] and case is cases[-1]:
-                    done += 1
-                    baselines = [item for item in evidence['cases'] if not item['fault_test']]
-                    if all(item.get('nominal_comparable') for item in baselines):
-                        from isolated_outputs import output_specs
-                        from spice_line_load import run_line_load
-                        phase_progress('黑盒动态稳定度：线载联合跳变')
-                        study = work/'line_load'
-                        evidence['line_load_stability'] = run_line_load(files, output_specs(p) or [p], [item['voltage'] for item in cases], settings, meta['resolved_controller']['FSW'], study, execute)
-                        if study.is_dir():archive_files.update(collect_study(study, study.name))
-                    else:
-                        evidence['line_load_stability'] = dict(complete=False,error='边界满载基线未稳态，未启动线载联合试验')
+            return records, archive_files, line_load_inputs
+
+        boundaries = run_endpoint_cases(cases, solve, workers=workers, cancelled=cancelled,
+                                        progress=progress, stages_per_case=per_endpoint, total=total)
+        archive_files = {}
+        for records, captured, _ in boundaries:
+            evidence['cases'].extend(records)
+            archive_files.update(captured)
+        if settings['line_load_enabled']:
+            baselines = [item for item in evidence['cases'] if not item['fault_test']]
+            if all(item.get('nominal_comparable') for item in baselines):
+                from isolated_outputs import output_specs
+                from spice_line_load import run_line_load
+                label = '黑盒动态稳定度：线载联合跳变'
+                if progress:
+                    progress(total, total, label)
+                def execute_line(folder, timeout):
+                    return execute_study(folder,timeout,cancelled,
+                        (lambda text:progress(total,total,label+' · '+text)) if progress else None)
+                files, meta = boundaries[-1][2]
+                study = work/'line_load'
+                evidence['line_load_stability'] = run_line_load(files, output_specs(p) or [p], [item['voltage'] for item in cases],
+                    settings, meta['resolved_controller']['FSW'], study, execute_line)
+                if study.is_dir():archive_files.update(collect_study(study, study.name))
+            else:
+                evidence['line_load_stability'] = dict(complete=False,error='边界满载基线未稳态，未启动线载联合试验')
         if cancelled():raise CalculationCancelled()
         from spice_comparison_report import write_report
+        from spice_comparison_xlsx import write_spice_xlsx
         pending_report=work/'comparison.docx'
+        pending_xlsx=work/'comparison.xlsx'
         evidence['simulation_wall_s']=time.monotonic()-started
         archive_files['comparison.json']=json.dumps(evidence,ensure_ascii=False,allow_nan=False,indent=2).encode('utf-8')
-        try:write_report(pending_report,evidence)
+        try:
+            write_report(pending_report,evidence)
+            write_spice_xlsx(pending_xlsx,evidence)
         except Exception as exc:
             recovery=destination.with_name(destination.stem+f'-evidence-{time.time_ns()}.zip')
             with zipfile.ZipFile(recovery,'w',zipfile.ZIP_DEFLATED) as archive:
                 for name,data in archive_files.items():archive.writestr(name,data)
             raise RuntimeError('报告排版未完成，实际仿真证据已保留：'+str(recovery)) from exc
         archive_files[report_path.name]=pending_report.read_bytes()
+        archive_files[xlsx_path.name]=pending_xlsx.read_bytes()
         pending_zip=work/'comparison.zip'
         with zipfile.ZipFile(pending_zip,'w',zipfile.ZIP_DEFLATED) as archive:
             for name,data in archive_files.items():archive.writestr(name,data)
         if cancelled():raise CalculationCancelled()
+        os.replace(pending_xlsx,xlsx_path)
         os.replace(pending_report,report_path)
         os.replace(pending_zip,zip_path)
     nominal=[c for c in evidence['cases'] if not c['fault_test']]
@@ -612,7 +713,8 @@ def compare_design(run,destination,*,cancelled=lambda:False,progress=None,execut
     cross_success=sum(c['cross'].get('complete',False) for c in cross_cases)
     cross_simulation_success=sum(c['cross'].get('simulation_complete',c['cross'].get('complete',False)) for c in cross_cases)
     cross_design_success=sum(c['cross'].get('design_complete',c['cross'].get('complete',False)) for c in cross_cases)
-    return dict(path=str(zip_path),report_path=str(report_path),successful=sum(c['complete'] for c in evidence['cases']),
+    return dict(path=str(zip_path),report_path=str(report_path),xlsx_path=str(xlsx_path),
+        successful=sum(c['complete'] for c in evidence['cases']),
         total=len(evidence['cases']),fra_successful=fra_success,fra_total=len(nominal) if settings['fra_enabled'] else 0,
         cross_successful=cross_success,cross_total=len(cross_cases),
         cross_simulation_successful=cross_simulation_success,cross_design_successful=cross_design_success,

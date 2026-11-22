@@ -6,36 +6,122 @@ import math
 
 from transformer_geometry import (export_geometry_package, json_bytes, read_geometry_package,
                                   resolve_geometry, strict_json)
-from transformer_geometry_contract import profile_template
+from transformer_geometry_contract import profile_template, validate_profile
 from transformer_sim_runner import bind_solver_project
 from transformer_simulation import _calculate, _sha
+from winding_layout import assess_winding_window, transformer_windings
 
 
-def _connections(profile, geometry):
-    if geometry['connection_matrix']['values'] is not None:
-        return '保留当前工程接线'
-    if (profile.get('terminals') or profile.get('leads') or
-            any(s.get('start_node') or s.get('end_node') or s.get('dot_node') or s.get('direction')
+NOMINAL_CONNECTION_SOURCE = '名义绕制假设：从 +Z 观察各段逆时针，电流流入起点同名端，同一绕组各段按层序串联相加，中间节点不外接。'
+PUBLIC_CONNECTION_SOURCE = '公开演示算例的合成骨架和接线假设'
+
+
+def _has_wiring(profile):
+    return (profile.get('terminals') or profile.get('leads') or
+            any(any(s.get(key) for key in ('start_node', 'end_node', 'dot_node', 'direction'))
                 for s in profile.get('sections', {}).values()) or
-            any(p.get('section_order') or p.get('connection') or p.get('dot_node') or p.get('other_node')
-                for p in profile.get('ports', {}).values())):
-        raise ValueError('当前接线已部分填写，请在三维建模设置中补全后再准备；自动参考接线仅用于空白接线。')
-    source = '名义绕制假设：从 +Z 观察各段逆时针，电流流入起点同名端，同一绕组各段按层序串联相加，中间节点不外接。'
+            any(any(p.get(key) for key in ('section_order', 'connection', 'dot_node', 'other_node'))
+                for p in profile.get('ports', {}).values()))
+
+
+def _nominal_wiring(groups, source):
     sections, ports, terminals = {}, {}, []
-    turns = {s['section_id']: s['turns'] for s in geometry['physical_sections']}
-    for winding in geometry['windings']:
-        label, ids = winding['id'], winding['section_ids']
-        nodes = [label + '_D'] + [f'{label}_J{i}' for i in range(1, len(ids))] + [label + '_R']
-        for i, sid in enumerate(ids):
-            sections[sid] = dict(winding_id=label, turns=turns[sid], start_node=nodes[i], end_node=nodes[i+1],
+    for label, segments in groups.items():
+        ids = [sid for sid, _ in segments]
+        if source == PUBLIC_CONNECTION_SOURCE:
+            nodes = [f'{label}_N{i}' for i in range(len(ids) + 1)]
+        else:
+            nodes = [label + '_D'] + [f'{label}_J{i}' for i in range(1, len(ids))] + [label + '_R']
+        for i, (sid, count) in enumerate(segments):
+            sections[sid] = dict(winding_id=label, turns=count, start_node=nodes[i], end_node=nodes[i+1],
                                  dot_node=nodes[i], direction='ccw', status='assumed', source=source)
         ports[label] = dict(dot_node=nodes[0], other_node=nodes[-1], connection='series',
                             section_order=ids, status='assumed', source=source)
         for n in nodes[1:-1]:
             terminals.append(dict(node=n, pin='REF_' + n, position_xyz_m=None, external_connection='none',
                                   net=None, status='assumed', source=source))
-    profile.update(sections=sections, ports=ports, terminals=terminals)
-    return source
+    return dict(sections=sections, ports=ports, terminals=terminals)
+
+
+def _automatic_wiring_source(profile):
+    """Recognize complete producer patterns. An assumed custom wire is still explicit."""
+    sections, ports = profile.get('sections', {}), profile.get('ports', {})
+    if not sections or not ports or profile.get('leads'):
+        return None
+    source = next(iter(sections.values())).get('source')
+    if source not in (NOMINAL_CONNECTION_SOURCE, PUBLIC_CONNECTION_SOURCE):
+        return None
+    groups = {}
+    for winding, port in ports.items():
+        order = port.get('section_order', [])
+        if not order or len(order) != len(set(order)) or any(sid not in sections for sid in order):
+            return None
+        groups[winding] = [(sid, sections[sid]['turns']) for sid in order]
+    expected = _nominal_wiring(groups, source)
+    if expected['sections'] != sections or expected['ports'] != ports:
+        return None
+    terminals = {t['node']: t for t in profile.get('terminals', [])}
+    if terminals == {t['node']: t for t in expected['terminals']} or (
+            source == PUBLIC_CONNECTION_SOURCE and not terminals):
+        return source
+    return None
+
+
+def synchronize_simulation_connections(profile, cases):
+    """Synchronize the run's private profile from the current physical layers."""
+    validate_profile(profile)
+    if not cases or not cases[0].get('result'):
+        return None
+    case = cases[0]
+    assessment = assess_winding_window(transformer_windings(case['result']), case['p'].get('winding_config'))
+    layers = assessment.get('physical_layers')
+    if not layers or not assessment['fits']:
+        return None  # The geometry resolver reports missing windows, overflow, and limits.
+    groups = {}
+    layer_by_id = {layer['section_id']: layer for layer in layers}
+    for layer in layers:
+        groups.setdefault(layer['winding_id'], []).append((layer['section_id'], layer['turns']))
+
+    source = _automatic_wiring_source(profile)
+    if source:
+        refreshed = _nominal_wiring(groups, source)
+        # Terminal list order carries no wiring information.
+        if ({t['node']: t for t in profile.get('terminals', [])} ==
+                {t['node']: t for t in refreshed['terminals']}):
+            refreshed['terminals'] = profile.get('terminals', [])
+        if any(profile.get(key, []) != value for key, value in refreshed.items()):
+            before = profile['ports']
+            after = refreshed['ports']
+            order_changed = ({key: p['section_order'] for key, p in before.items()} !=
+                             {key: p['section_order'] for key, p in after.items()})
+            profile.update(refreshed)
+            return ('已按当前层序重建软件生成的串联接线。' if order_changed else
+                    '已自动同步当前层匝数和段接线。')
+        return None
+    if not _has_wiring(profile):
+        profile.update(_nominal_wiring(groups, NOMINAL_CONNECTION_SOURCE))
+        return NOMINAL_CONNECTION_SOURCE
+
+    updated = []
+    for sid, section in profile.get('sections', {}).items():
+        layer = layer_by_id.get(sid)
+        if layer and section['winding_id'] == layer['winding_id'] and section['turns'] != layer['turns']:
+            section['turns'] = layer['turns']
+            updated.append(sid)
+    if updated:
+        return '已自动同步现有段的匝数，沿用节点和绕向。更新层：' + '、'.join(updated)
+    return None
+
+
+def _connections(profile, geometry):
+    if geometry['connection_matrix']['values'] is not None:
+        return '保留当前工程接线'
+    if _has_wiring(profile):
+        raise ValueError('当前接线已部分填写或有外接抽头/并联约束，请在三维建模设置中核对该绕组。')
+    turns = {s['section_id']: s['turns'] for s in geometry['physical_sections']}
+    groups = {w['id']: [(sid, turns[sid]) for sid in w['section_ids']] for w in geometry['windings']}
+    profile.update(_nominal_wiring(groups, NOMINAL_CONNECTION_SOURCE))
+    return NOMINAL_CONNECTION_SOURCE
 
 
 def prepare_reference(config, *, project_file, output_directory, cancelled=None):
@@ -73,6 +159,7 @@ def prepare_reference(config, *, project_file, output_directory, cancelled=None)
     # Resolve the current windings, including current wire count and every user-positioned turn.
     first = _calculate(candidate, cancelled)
     cases = first.runtime_bundle()['cases']
+    connection_update = synchronize_simulation_connections(profile, cases)
     g, _ = resolve_geometry(cases, '0'*64, '0'*64, 'T1', profile, cancelled=cancelled)
     if (g['core']['calculator_core'] != reference['core']['calculator_core'] or
             settings['core'].get('calculator_core_model', g['core']['calculator_core']) != g['core']['calculator_core']):
@@ -80,6 +167,11 @@ def prepare_reference(config, *, project_file, output_directory, cancelled=None)
     if not g['ready']['cross_section'] or not g['checks']['two_dimensional_fit']:
         raise ValueError('当前线材、层序与净窗口未通过可绕制评估，请先调整磁件设计')
     note = _connections(profile, g)
+    if any(p['turns_match_calculator'] is False for p in g['connections']):
+        raise ValueError('当前层匝数与接线极性归算的有效匝数不符，请核对绕向和同名端。')
+    if connection_update:
+        note = connection_update
+        profile['assumptions'] = list(dict.fromkeys([*(profile.get('assumptions') or []), note]))
     target = g['design_targets']['air_gap']
     core = settings['core']
     physical = (profile.get('core') or {}).get('gap_geometry') or {}
@@ -113,4 +205,5 @@ def prepare_reference(config, *, project_file, output_directory, cancelled=None)
                f"净窗口 {winding['window_width']*1e3:.3g} × {winding['window_height']*1e3:.3g} mm，"
                f"r0={frame['r0_m_if_circular']*1e3:g} mm，z0={frame['z0_m']*1e3:g} mm。\n"
                f"层序：{layers}\n总气隙 {gap*1e3:.6g} mm；{core['source']}\n{note}")
-    return dict(config=candidate, project_file=str(new_path), summary=summary)
+    return dict(config=candidate, project_file=str(new_path), summary=summary,
+                connection_update=connection_update)

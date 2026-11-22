@@ -28,8 +28,16 @@ def form_options(current=None):
                 values['eta_guess']=p['eta_guess']*100.
             if p.get('control_mode') in modes:
                 mode=p['control_mode']
-            locks.update(L=p['L'],input_capacitors=bank(p,'input'),output_capacitors=bank(p))
-            if p.get('inductor_design_enabled') is False and p.get('inductor_dcr',0)>0:
+            locks.update(input_capacitors=bank(p,'input'),output_capacitors=bank(p))
+            if topo == 'LLC':
+                from math import pi, sqrt
+                values.update(bridge=2 if p['llc_bridge']=='full' else 1.,
+                              ratio=p['llc_lm']/p['llc_lr'],
+                              fs=1.e-3/(2*pi*sqrt(p['llc_lr']*p['llc_cr'])))
+                locks.update({key:p[key] for key in ('llc_lr','llc_cr','llc_lm')})
+            else:
+                locks['L']=p['L']
+            if topo!='LLC' and p.get('inductor_design_enabled') is False and p.get('inductor_dcr',0)>0:
                 locks['inductor_dcr']=p['inductor_dcr']
         forms[topo]=dict(fields=fields,values=values,modes=modes,mode=mode,locks=locks)
         if topo=='FLYBACK':
@@ -294,6 +302,9 @@ def generate(request, *, cancelled=None):
     """The solver never edits its input or substitutes a different topology."""
     from input_voltage_range import _cancellation_scope
     with _cancellation_scope(cancelled):
+        if isinstance(request,dict) and request.get('topology')=='LLC':
+            from .llc_sizing import generate_llc
+            return generate_llc(request)
         topo,s,mode,locked = _prepare(request)
         if topo=='FLYBACK':
             from .flyback_sizing import generate_flyback
@@ -392,6 +403,9 @@ def generate(request, *, cancelled=None):
 def describe(p):
     """Plain-text preview shared by both application front ends."""
     b = p['__auto_design_basis']
+    if b['topology']=='LLC':
+        from .llc_sizing import describe_llc
+        return describe_llc(p)
     if b['topology']=='FLYBACK':
         from .flyback_sizing import describe_flyback
         return describe_flyback(p)

@@ -1,17 +1,20 @@
-"""Module-per-sheet Excel reports for the same two solved input endpoints.
+"""Engineering Excel report for the same solved input endpoints as Word.
 
 Reuses the existing engineering-report authoring path in memory, so the Excel
 and Word versions cannot drift to different loss, ripple or compensation
-formulas. No intermediate Word file is written. Only the final XLSX is saved.
+formulas. The sheet builder is also used by the joint report.
 """
 from collections import OrderedDict
 import math
 import re
 
-from xlsx_report_writer import (Sheet, WIDTHS, SIDE_PX, fitted_height,
+from xlsx_report_writer import (WIDTHS, SIDE_PX, fitted_height,
                                 numeric_text, number_format, save_workbook)
-from report_architecture import (acceptance_columns, acceptance_snapshot, block_pairs,
-                                 case_heading, missing_evidence_note, paired_table_data, report_cases, review_findings,
+import engineering_workbook as layout
+from report_architecture import (acceptance_columns, acceptance_findings, acceptance_group_line,
+                                 acceptance_sections, acceptance_snapshot, block_pairs,
+                                 case_heading, missing_evidence_note, module_key,
+                                 paired_table_data, report_cases,
                                  shared_report_images)
 
 
@@ -27,19 +30,22 @@ MODULES = OrderedDict([
 ])
 
 
-def _module(title):
-    if title.startswith('1.4'): return 'bom'
-    if title.startswith('1.3'): return 'cross_regulation'
-    if title.startswith('附录'): return 'inputs'
-    if title.startswith('1.2'):
-        return 'psr' if 'PSR' in title or 'MP6005' in title else 'topology'
-    if title.startswith('1.1'): return 'topology'
-    match = re.match(r'^(\d+)(?:[.\s]|$)', title)
-    if match:
-        return {'0':'topology', '1':'overview', '2':'power', '3':'devices',
-                '4':'caps', '5':'magnetics', '6':'loop', '7':'clamp',
-                '8':'efficiency', '9':'review'}.get(match[1])
-    return None
+_EVIDENCE_INDEX = {
+    'overview': '设计需求、工作点及不利输入端点。',
+    'topology': '电路图、器件位号和各路反馈位置。',
+    'power': '开关周期及原副边电压、电流和输出波形。',
+    'devices': '开关、整流及其他器件的应力和损耗。',
+    'caps': '逐颗电容 RMS、分流及低频纹波计算。',
+    'magnetics': '磁芯、分层绕制、磁密、损耗和温升。',
+    'loop': 'Bode 图、补偿器与相位/增益裕度。',
+    'clamp': '钳位电压、器件参数和损耗。',
+    'efficiency': '损耗分项和预期效率。',
+    'psr': '控制器反馈结构和保护设置。',
+    'review': '完整核查、假设及模型边界。',
+    'inputs': '冻结的参数、单位和工程字段。',
+    'cross_regulation': '同一硬件的负载角点覆盖及电压包络。',
+    'bom': '器件位号、额定值与降额核查。',
+}
 
 
 def _math_text(element):
@@ -91,7 +97,7 @@ def _capture_document(doc):
         text = p.text.strip()
         if p.style.name.startswith('Heading'):
             if text == '当前工况完整设计核算': continue
-            new_module = _module(text)
+            new_module = module_key(text)
             if new_module is not None: module = new_module
             section = text
             sections[module].setdefault(section, [])
@@ -132,6 +138,12 @@ def _spans(count):
 
 
 def _state_style(text):
+    # Composite evidence cells may contain quantitative values and their
+    # local conclusion. Only the conclusion determines the status colour.
+    conclusion = next((line.removeprefix('结论 ') for line in text.splitlines()
+                       if line.startswith('结论 ')), None)
+    if conclusion is not None:
+        text = conclusion
     if any(term in text for term in ('需复核','需整改','超限','超出限值','不满足','失败')):
         return 10
     if any(term in text for term in ('待','未计算','未评估','失效')):
@@ -194,26 +206,103 @@ def _shared_block(left, right):
     return left.get('text') == right.get('text')
 
 
-def _headers(sheet, cases, note):
-    sheet.heights.update({1:12, 2:34, 3:36, 4:30})
-    sheet.span(2,0,sheet.column_count,sheet.name,1)
-    sheet.span(3,0,sheet.column_count,note,7)
+def _endpoints_header(sheet, cases):
+    sheet.heights[4] = 30
     for offset, case in zip((0,9),cases):
         text = case_heading(case, len(cases))
         if case.get('error') or not case.get('result'): text += '  计算不可用'
         sheet.span(4,offset,8,text,2 if offset == 0 else 3)
 
 
-def export_input_range_xlsx(path, range_result, *, compensation_state=None,
-                            mos_real_time=False, comparison=None, corners=None,
-                            tolerance_result=None):
-    """Write an offline XLSX report; never change parameters or auto-tune.
+def write_acceptance_details(sheet, row, snapshot, labels, rows):
+    summary = snapshot.get('summary') or {}
+    row = layout.note(sheet, row, summary.get('scope', ''))
+    for title, group, details in acceptance_sections(snapshot, rows):
+        if title:
+            state = group.get('state', 'undefined')
+            row = layout.verdict(sheet, row+1, f"{title}  {group['label']}",
+                                 state='fail' if state == 'review' else state)
+        if details:
+            row += _write_block(sheet, row, 0, dict(kind='table',
+                rows=[['验收指标','限值与依据',*labels],*details]), '共同', sheet.column_count)
+        else:
+            row = layout.note(sheet, row, '未取得适用的验收检查。')
+    for text in snapshot.get('evidence_notes') or []:
+        row = layout.note(sheet, row, str(text))
+    if issues := snapshot.get('issues'):
+        row = layout.band(sheet, row+1, '补充记录 · 整改')
+        row = layout.table(sheet, row, ('问题', '状态', '说明或证据'), [
+            (item.get('title') or item['id'], item['effective_status'],
+             '\n'.join(str(item[k]) for k in ('description','evidence') if item.get(k)))
+            for item in issues], spans=(2,2,4) if sheet.column_count == 8 else (5,3,9))
+    return row
 
-    Worksheets display each distinct input operating point once.
-    The workbook is a report snapshot, not a second implementation of the
-    switching solver. Graphs and mathematical descriptions use the Word
-    report's exact source. Numeric single quantities remain numeric in Excel.
-    """
+
+def _design_conclusion_sheet(range_result, cases, acceptance, common, navigation, name):
+    from input_range_report import _metrics, METRICS, _finite, _worse
+    from report_docx import TOPOLOGY
+
+    evidence_labels, evidence_rows = acceptance_columns(acceptance, range_result)
+    width = 8 if len(evidence_labels) == 1 else 17
+    topo = range_result['base_spec']['topology']
+    sheet = layout.page(name, f'{TOPOLOGY.get(topo, topo)} · 设计计算与工程验收',
+                        common, widths=WIDTHS[:width])
+    sheet.tab_color = '173C64'
+    evidence_cases = cases if width == 8 else sorted(range_result['cases'], key=lambda case: case['id'] != 'Vinmin')
+    _endpoints_header(sheet, evidence_cases)
+    summary = acceptance['summary']
+    findings = acceptance_findings(acceptance, evidence_labels)
+    failures = [case for case in cases if case.get('error') or not case.get('result')]
+    fixed = bool(range_result.get('fixed_hardware', range_result.get('hardware')))
+    cross = range_result.get('cross_regulation') or {}
+    cross_pending = cross.get('supported') and not cross.get('complete')
+    state = 'fail' if summary['state'] == 'review' else summary['state']
+    headline = '工程验收 ' + summary['label']
+    coverage = [acceptance_group_line(acceptance),
+                f'{len(cases)-len(failures)} / {len(cases)} 个展示工况计算完成']
+    if not fixed:
+        coverage.append('磁件冻结待确认')
+    if cross_pending:
+        coverage.append('交叉调整率角点待核对')
+    missing = missing_evidence_note(acceptance)
+    if missing:
+        coverage.append(missing)
+    row = layout.verdict(sheet, 5, headline, '。'.join(filter(None, coverage))+'。', state)
+    for case in failures:
+        row = layout.note(sheet,row,case['id']+' 求解失败 '+str(case.get('error') or '无结果'))
+
+    row = layout.band(sheet,row+1,'关键计算结果')
+    metrics = [_metrics(case) for case in cases]
+    main_keys = {'eta','V_sw_max','ripple_pp','B_pk','min_pm'}
+    rows = []
+    for key, label, unit, scale, direction in METRICS:
+        if key not in main_keys:
+            continue
+        values = [m.get(key) for m in metrics]
+        cells = [v*scale if _finite(v) else None for v in values]
+        if len(cases) == 2:
+            cells.append(_worse(*values,direction))
+        rows.append((label,unit,*cells))
+    headers = ['计算指标','单位', *[case_heading(case,len(cases)) for case in cases]]
+    if len(cases) == 2:
+        headers.append('较不利端点')
+    spans = (4,1,3) if width==8 else (7,2,4,4) if len(cases)==1 else (5,2,3,3,4)
+    row = layout.table(sheet,row,headers,rows,spans=spans)
+
+    if findings:
+        row = layout.band(sheet,row+1,'验收超限项')
+        row = layout.table(sheet,row,('项目','观察与阈值'),findings[:5],spans=(3,5) if width==8 else (5,12))
+    if navigation:
+        row = layout.index(sheet,row+1,navigation)
+    row = layout.band(sheet,row+1,'工程验收与证据')
+    write_acceptance_details(sheet, row, acceptance, evidence_labels, evidence_rows)
+    return sheet
+
+
+def build_input_range_xlsx_sheets(range_result, *, compensation_state=None,
+                                  mos_real_time=False, comparison=None, corners=None,
+                                  tolerance_result=None, sheet_prefix='', acceptance=None):
+    """Project a frozen design calculation to reusable workbook sheets."""
     cases = report_cases(range_result)
     endpoints = range_result['cases']
     single = len(cases) == 1
@@ -235,49 +324,20 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
         content.append(_capture_document(doc))
         del doc
     fixed = bool(range_result.get('fixed_hardware',range_result.get('hardware')))
-    common = '固定输入，列出一次计算结果。' if single else '左侧 Vinmin，右侧 Vinmax。'
-    common += '磁件待核对。' if not fixed else '' if single else '两端采用同一套磁件与补偿。'
+    common = ('固定输入。' if single else 'Vinmin 与 Vinmax 并列。')
+    common += '磁件冻结状态待核对。' if not fixed else '' if single else '两端采用同一套磁件与补偿。'
     if not single and cases[0]['voltage'] == cases[1]['voltage'] and len(details) == 2:
         common += '输入电压相同，各工况结果分别列出。'
-    acceptance=acceptance_snapshot(range_result['base_spec'],range_result)
-    evidence_labels, evidence_rows = acceptance_columns(acceptance, range_result)
-    evidence_width = 8 if len(evidence_labels) == 1 else 17
-    acceptance_sheet=Sheet('00 工程验收', column_count=evidence_width)
-    _headers(acceptance_sheet,cases,common)
-    summary=acceptance.get('summary') or {}
-    findings, pending = review_findings(cases)
-    failure_lines = [case['id']+' 求解失败 '+str(case.get('error') or '无结果')
-                     for case in endpoints if case.get('error') or not case.get('result')]
-    conclusion = [f"工程验收 {summary.get('label','待评估')}",
-                  f"重点复核 {len(findings)} 项，待补数据 {pending} 项", *failure_lines]
-    missing = missing_evidence_note(acceptance)
-    if missing:
-        conclusion.append(missing)
-    cross = range_result.get('cross_regulation') or {}
-    if cross.get('supported') and not cross.get('complete'):
-        conclusion.append('交叉调整率部分角点待核对。')
-    summary_style = 10 if findings or failure_lines or summary.get('state')=='review' else 11 if summary.get('state')=='pass' else 8
-    summary_text = '\n'.join(conclusion)
-    acceptance_sheet.span(5,0,evidence_width,summary_text,summary_style)
-    acceptance_sheet.heights[5]=fitted_height(summary_text,sum(WIDTHS[:evidence_width]))
-    row=7
-    if findings:
-        row += _write_block(acceptance_sheet,row,0,dict(kind='table',
-            rows=[['优先复核','当前值与要求'],*findings[:5]]),'共同',evidence_width)
-    if evidence_rows:
-        row += _write_block(acceptance_sheet,row,0,dict(kind='table',
-            rows=[['验收指标','需求阈值',*evidence_labels],*evidence_rows]),'共同',evidence_width)
-    for note in acceptance.get('evidence_notes') or []:
-        acceptance_sheet.span(row,0,evidence_width,str(note),7)
-        acceptance_sheet.heights[row]=max(30,fitted_height(note,sum(WIDTHS[:evidence_width])))
-        row+=2
-    sheets = [acceptance_sheet]
+    if acceptance is None:
+        acceptance = acceptance_snapshot(range_result['base_spec'],range_result)
+    common += '证据按当前计算快照、匹配仿真与实测记录核对。'
+    sheets, navigation = [], []
     if tolerance_result is not None:
         from tolerance_report import TITLE, report_sections, result_summary, result_notes
 
-        sheet = Sheet(TITLE, column_count=17)
+        sheet = layout.page(sheet_prefix+TITLE,TITLE,result_summary(tolerance_result),widths=WIDTHS)
         notes = result_notes(tolerance_result)
-        _headers(sheet, cases, result_summary(tolerance_result))
+        _endpoints_header(sheet,cases)
         row = 6
         for note in notes:
             row += _write_block(sheet, row, 0, dict(kind='note', text=note), '共同', 17)
@@ -286,12 +346,13 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
             row += 2
             row += _write_block(sheet, row, 0, dict(kind='table', rows=[headers, *data]), '共同', 17)
         sheets.append(sheet)
+        navigation.append((sheet.name,TITLE,'公差、最不利边界与统计覆盖。'))
     for module, name in MODULES.items():
         left = content[0][module]
         right = {} if single else content[1][module]
         if module != 'overview' and not left and not right: continue
-        sheet = Sheet(name, column_count=column_count)
-        _headers(sheet,cases,common)
+        sheet = layout.page(sheet_prefix+name,name,_EVIDENCE_INDEX[module],widths=WIDTHS[:column_count])
+        _endpoints_header(sheet,cases)
         row, page_start = 6, 6
         if module == 'overview':
             metrics = [_metrics(case) for case in cases]
@@ -316,10 +377,10 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
             sheet.span(row,0,column_count,title,4)
             sheet.heights[row]=30; row+=2
             for a,b in block_pairs(left.get(title,[]),right.get(title,[])):
-                if single or _shared_block(a,b):
+                circuit = title.startswith('0 ') and (a or b)['kind']=='image'
+                if single or _shared_block(a,b) or (circuit and fixed and a and b):
                     block = a or b
-                    # The topology caption and drawing describe the shared circuit.
-                    if block['kind']=='image' and title.startswith('0 '):
+                    if circuit:
                         block = dict(block, topology=True)
                     row += _write_block(sheet,row,0,block,'固定输入' if single else '共同',column_count)
                     continue
@@ -337,15 +398,39 @@ def export_input_range_xlsx(path, range_result, *, compensation_state=None,
                 sheet.span(5,side*9,8,'本工况计算不可用：'+str(case.get('error') or '没有有效结果'),8)
                 sheet.heights[5]=max(sheet.heights.get(5,24),fitted_height(str(case.get('error','')),100))
         sheets.append(sheet)
-    save_workbook(path,sheets)
+        navigation.append((sheet.name,name,_EVIDENCE_INDEX[module]))
+    summary = _design_conclusion_sheet(range_result,cases,acceptance,common,navigation,
+                                       sheet_prefix+'00 工程验收')
+    for sheet in sheets:
+        col = sheet.column_count-3
+        sheet.span(3,col,3,'返回工程验收',4)
+        sheet.heights[3] = 20
+        sheet.links[3,col] = summary.name
+    sheets.insert(0,summary)
     failed=[case['id'] for case in endpoints if case.get('error') or not case.get('result')]
     cross = range_result.get('cross_regulation')
     cross_incomplete = bool(cross and cross.get('supported') and not cross.get('complete'))
-    return dict(path=str(path),case_count=2,successful_cases=2-len(failed),failed_cases=failed,
+    metadata = dict(case_count=2,successful_cases=2-len(failed),failed_cases=failed,
                 displayed_case_count=len(cases),
                 incomplete=bool(failed) or not fixed or cross_incomplete,hardware_fixed=fixed,
                 cross_regulation_complete=cross.get('complete') if cross else None,
                 acceptance_summary=acceptance.get('summary'),
                 sheet_count=len(sheets),sheet_names=[sheet.name for sheet in sheets],
                 figure_count=sum(len(sheet.images) for sheet in sheets),
+                report_architecture='engineering-workbook-v2',
                 check_count=sum(detail['checks'] for detail in details))
+    return sheets, metadata
+
+
+def export_input_range_xlsx(path, range_result, *, compensation_state=None,
+                            mos_real_time=False, comparison=None, corners=None,
+                            tolerance_result=None):
+    """Save the standalone workbook without changing the design or its evidence."""
+    if range_result['base_spec']['topology'] == 'LLC':
+        from llc_report import export_xlsx
+        return export_xlsx(path,range_result)
+    sheets, metadata = build_input_range_xlsx_sheets(
+        range_result, compensation_state=compensation_state, mos_real_time=mos_real_time,
+        comparison=comparison, corners=corners, tolerance_result=tolerance_result)
+    save_workbook(path,sheets)
+    return dict(path=str(path),**metadata)

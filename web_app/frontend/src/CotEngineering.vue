@@ -35,12 +35,15 @@ function apply(){
       <header><div><h2>COT 工程配置</h2><p>共用一套控制、逐相和验收参数，随当前工程保存。</p></div><button @click="open=false">关闭</button></header>
       <nav><button v-for="(group,i) in groups" :key="group.name" :class="{selected:tab===i}" @click="tab=i">{{group.name}}</button><button :class="{selected:tab===groups.length}" @click="tab=groups.length">逐相器件与采样</button></nav>
       <div class="cot-content">
-        <div v-if="tab<groups.length" class="cot-fields">
-          <label v-for="field in groups[tab].fields" :key="field.key"><span>{{field.label}}<small v-if="field.unit"> / {{field.unit}}</small></span>
-            <select v-if="field.choices" :value="get(field.key,field.default)" @change="set(field.key,($event.target as HTMLSelectElement).value)"><option v-for="(label,key) in field.choices" :key="key" :value="key">{{label}}</option></select>
-            <input v-else type="number" step="any" min="0" :value="get(field.key,field.default)*field.factor" @input="numeric(field,$event)"/>
-            <small>{{field.note}}</small>
-          </label>
+        <div v-if="tab<groups.length">
+          <p v-if="groups[tab].note">{{groups[tab].note}}</p>
+          <div class="cot-fields">
+            <label v-for="field in groups[tab].fields" :key="field.key"><span>{{field.label}}<small v-if="field.unit"> / {{field.unit}}</small></span>
+              <select v-if="field.choices" :value="get(field.key,field.default)" @change="set(field.key,($event.target as HTMLSelectElement).value)"><option v-for="(label,key) in field.choices" :key="key" :value="key">{{label}}</option></select>
+              <input v-else type="number" step="any" min="0" :value="get(field.key,field.default)*field.factor" @input="numeric(field,$event)"/>
+              <small>{{field.note}}</small>
+            </label>
+          </div>
         </div>
         <div v-else>
           <p>当前 {{phases}} 相，已配置 {{draft.phase_parameters.length}} 行。倍率作用于主界面的单相标称值。</p>

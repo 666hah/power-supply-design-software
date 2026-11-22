@@ -28,6 +28,22 @@
         "https://www.coilcraft.com/getmedia/1ba55433-bcc8-4838-9b21-382f497e12e0/xal7070.pdf"
       ]
     },
+    "XGL1010-473MED": {
+      "manufacturer": "Coilcraft",
+      "model": "XGL1010-473MED",
+      "package": "XGL1010 屏蔽一体成型 / SMD",
+      "calculation": {
+        "L": 4.7e-05,
+        "inductor_dcr": 0.0469,
+        "inductor_rated_current": 5.1,
+        "inductor_saturation_current": 8.4
+      },
+      "conditions": "47 µH ±20%。25 °C DCR 最大 46.9 mΩ。5.1 A 对应温升 20 K。3.7 / 6.1 / 8.4 A 分别对应电感下降 10% / 20% / 30%。",
+      "note": "恒定电感初算。另核电感下降曲线、实际板温与交流损耗。",
+      "sources": [
+        "https://www.coilcraft.com/en-us/products/power/shielded-inductors/molded-inductor/xgl/xgl1010/xgl1010-473/"
+      ]
+    },
     "XAL7070-223MEC": {
       "manufacturer": "Coilcraft",
       "model": "XAL7070-223MEC",

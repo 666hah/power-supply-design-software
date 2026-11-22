@@ -91,7 +91,8 @@ def write_word(output, screens):
         for index, (shot, caption, instruction) in enumerate(topic.get('figures', ()), 1):
             path = screens/f'{shot}.jpg'
             with Image.open(path) as image:
-                width = Mm(min(179, 98 * image.width / image.height))
+                height = topic.get('word_figure_height_mm', 98)
+                width = Mm(min(179, height * image.width / image.height))
             picture = doc.add_paragraph()
             picture.alignment = WD_ALIGN_PARAGRAPH.CENTER
             picture.paragraph_format.keep_with_next = True

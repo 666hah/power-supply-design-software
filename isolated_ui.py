@@ -12,12 +12,12 @@ class IsolatedUI(CrossRegulationUI,OutputParameterPanel):
     def load_isolated_example(self,filename):
         import json
         from power_stage import DEFAULT_PARAMS
-        from main import resource_path
-        from pathlib import Path
+        from example_catalog import example_device_defaults, example_feedback_defaults, example_path
+        from tolerance_defaults import example_tolerance_defaults
         try:
-            raw=Path(resource_path('examples/'+filename)).read_bytes()
-            cfg=json.loads(raw.decode('utf-8-sig'))
-            self._apply_config(dict(DEFAULT_PARAMS,**cfg))
+            raw=example_path(filename).read_bytes()
+            cfg=example_device_defaults(filename, json.loads(raw.decode('utf-8-sig')))
+            self._apply_config(example_tolerance_defaults(example_feedback_defaults(dict(DEFAULT_PARAMS, **cfg))))
             self._geometry_source=(filename,raw)
             self.request_update()
         except Exception as exc: messagebox.showerror('隔离输出示例',str(exc))

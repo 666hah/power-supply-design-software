@@ -17,28 +17,28 @@
   "Rc2": 0.034,
   "ESL2": 5e-09,
   "Cin1": 1e-05,
-  "Rcin1": 0.0109,
+  "Rcin1": 0.0042,
   "ESLin1": 2.4e-08,
   "Cin2": 1e-05,
-  "Rcin2": 0.0109,
+  "Rcin2": 0.0042,
   "ESLin2": 2.4e-08,
   "V_in_min": 252.0,
   "V_in_max": 442.0,
-  "Rds_on": 0.34,
+  "Rds_on": 0.5,
   "Vf_diode": 1.3,
   "Rd_diode": 0.001,
-  "Coss": 9.9e-11,
-  "Qg": 1.78e-08,
-  "Vth": 3.5,
-  "Vgp_on": 5.4,
-  "Vgp_off": 5.4,
-  "Qg_th": 3.3e-09,
-  "Qgs": 5.1e-09,
-  "Qgd": 5.5e-09,
+  "Coss": 1.04e-10,
+  "Qg": 3e-08,
+  "Vth": 4.0,
+  "Vgp_on": 7.5,
+  "Vgp_off": 7.5,
+  "Qg_th": 2.67e-09,
+  "Qgs": 5e-09,
+  "Qgd": 2.2e-08,
   "Rg_drive": 2.0,
   "Rs_on": 4.7,
   "Rs_off": 3.0,
-  "Rg": 1.8,
+  "Rg": 6.0,
   "k_sw": 0.25,
   "Qrr": 0.0,
   "Vgs": 10.0,
@@ -137,7 +137,7 @@
     "cross_mode": 0.0,
     "cross_hold_ms": 8.0,
     "cross_timeout_s": 1200.0,
-    "qr_cds_pf": 99.0,
+    "qr_cds_pf": 104.0,
     "qr_aux_ratio": 0.14285714285714285,
     "qr_zcd_r": 22000.0,
     "qr_zcd_c_pf": 5.0,
@@ -176,7 +176,7 @@
   "__example_note": "基于公开 300 V 示例独立生成的宽输入双路 QR 算例。窗口、绕组、辅助负载、互感参数和第三颗输出电容 ESR 均为合成演示假设。首路稳压 60 V / 92 W，辅助电压由整数匝数及模型算出。器件额定值和降额需按当前输入范围复核。",
   "core_material": "DMR44",
   "mu_r": 0.0,
-  "tr": 4.9e-09,
+  "tr": 2e-08,
   "tf": 1.1e-08,
   "device_curve_settings": {
     "mode": "fixed",
@@ -194,12 +194,12 @@
   "input_capacitors": [
     {
       "C": 1e-05,
-      "ESR": 0.0109,
+      "ESR": 0.0042,
       "ESL": 2.4e-08
     },
     {
       "C": 1e-05,
-      "ESR": 0.0109,
+      "ESR": 0.0042,
       "ESL": 2.4e-08
     }
   ],
@@ -226,35 +226,35 @@
     "items": {
       "Q1": {
         "manufacturer": "STMicroelectronics",
-        "model": "STP80N340K6",
+        "model": "STP15N95K5",
         "package": "TO-220",
-        "conditions": "DS14083 Rev1,Sep2022; p2 ratings,p3 Tables4/5/6,p4 body diode,p5/6 Fig4/Fig7；Vgs10V,Id6A,Tc25C；640V,6A,Vgs0..10V；N-channel",
-        "note": "220V固定频率/300V QR高压候选。计算Coss=99pF明确是Co(tr)常量近似，非13pF点值。当前画布旧QR联合仿真启动Vds约1.335kV，800V候选未通过该启动应力；不得将换器件资料说成解决启动问题。10V驱动为项目假设，L6565理想Vcc15V本身不等于实物受限10V门驱动。；资料：https://www.st.com/resource/en/datasheet/stp80n340k6.pdf",
+        "conditions": "DS9942 Rev 3，表1、4～6及图9。Rds(on) 最大值条件为 VGS=10 V，ID=6 A，TC=25°C。栅电荷典型值条件为 VDD=760 V，ID=12 A，VGS=0～10 V。",
+        "note": "QR 模型用 Co(tr)=104 pF 恒定时间等效近似。平台电压按图9粗读，门限电荷用 Qgs×Vth/Vgp 线性估算。10 V 栅极驱动是例程条件，热态导通电阻和启动尖峰需在对应工况核对。 https://www.st.com/resource/en/datasheet/stp15n95k5.pdf",
         "capacitor_type": "unknown",
-        "voltage_V": 800.0,
+        "voltage_V": 950,
         "ripple_A": null,
         "power_W": null
       },
       "C_IN1": {
         "manufacturer": "TDK",
-        "model": "B32774D4106K000",
-        "package": "Radial boxed 31.5×15×24.5 mm; pitch 27.5 mm",
-        "conditions": "IRMS max 8A，70°C/10kHz，ΔT≤20°C；ESR典型10.9mΩ，70°C/10kHz；ESL典型24nH，谐振频率处。",
-        "note": "10µF/450V输入可用；若用作低压输出旁路体积明显过配。额定纹波不能视为任意频率和温度下的能力。；额定纹波仅对应所列频温条件，跨条件需修正；ESL及阻抗代理见参数来源。；资料：https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/MKP_B32774_778.pdf https://product.tdk.com/en/search/capacitor/film/dc-link/info?part_no=B32774D4106K000",
+        "model": "B32774P6106K000",
+        "package": "MKP 径向 22 × 36.5 × 31.5 mm，脚距 27.5 mm",
+        "conditions": "10 µF±10%；630 V@85°C，540 V@105°C，450 V@125°C；12.5 A RMS、ESR=4.2 mΩ 为 10 kHz、85°C 条件，ESL 典型 24 nH。",
+        "note": "输入直流母线电容；额定纹波及耐压须按实用频率与热点温度核对。 https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/b3277xp.pdf",
         "capacitor_type": "film",
-        "voltage_V": 450.0,
-        "ripple_A": 8.0,
+        "voltage_V": 630,
+        "ripple_A": 12.5,
         "power_W": null
       },
       "C_IN2": {
         "manufacturer": "TDK",
-        "model": "B32774D4106K000",
-        "package": "Radial boxed 31.5×15×24.5 mm; pitch 27.5 mm",
-        "conditions": "IRMS max 8A，70°C/10kHz，ΔT≤20°C；ESR典型10.9mΩ，70°C/10kHz；ESL典型24nH，谐振频率处。",
-        "note": "10µF/450V输入可用；若用作低压输出旁路体积明显过配。额定纹波不能视为任意频率和温度下的能力。；额定纹波仅对应所列频温条件，跨条件需修正；ESL及阻抗代理见参数来源。；资料：https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/MKP_B32774_778.pdf https://product.tdk.com/en/search/capacitor/film/dc-link/info?part_no=B32774D4106K000",
+        "model": "B32774P6106K000",
+        "package": "MKP 径向 22 × 36.5 × 31.5 mm，脚距 27.5 mm",
+        "conditions": "10 µF±10%；630 V@85°C，540 V@105°C，450 V@125°C；12.5 A RMS、ESR=4.2 mΩ 为 10 kHz、85°C 条件，ESL 典型 24 nH。",
+        "note": "输入直流母线电容；额定纹波及耐压须按实用频率与热点温度核对。 https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/b3277xp.pdf",
         "capacitor_type": "film",
-        "voltage_V": 450.0,
-        "ripple_A": 8.0,
+        "voltage_V": 630,
+        "ripple_A": 12.5,
         "power_W": null
       },
       "U_CTRL": {
@@ -421,15 +421,15 @@
     "selections": {
       "Q1": {
         "catalog": "semiconductor",
-        "key": "STP80N340K6"
+        "key": "STP15N95K5"
       },
       "C_IN1": {
         "catalog": "passive",
-        "key": "B32774D4106K000"
+        "key": "B32774P6106K000"
       },
       "C_IN2": {
         "catalog": "passive",
-        "key": "B32774D4106K000"
+        "key": "B32774P6106K000"
       },
       "U_CTRL": {
         "catalog": "controller",

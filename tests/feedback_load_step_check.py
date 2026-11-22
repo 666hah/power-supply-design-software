@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import control as ct
 import numpy as np
 
-from loop_load_step import _closed_loop, _step_samples, feedback_load_step
+from loop_load_step import _closed_loop, _step_samples, closed_loop_load_ports, feedback_load_step
 
 
 class FeedbackLoadStepChecks(unittest.TestCase):
@@ -46,6 +46,22 @@ class FeedbackLoadStepChecks(unittest.TestCase):
         np.testing.assert_allclose(result['rise_delta_V'], -result['fall_delta_V'])
         self.assertAlmostEqual(result['rise']['final_voltage_V'], 11.9)
         self.assertGreater(result['rise']['settling_s'], 0)
+
+    def test_coupled_load_ports_keep_independent_and_cross_responses(self):
+        plant = ct.ss([[-60, 0], [0, -100]], [[20, -10, -900], [30, -550, -50]],
+                      np.eye(2), [[.07, -.4, -.8], [.04, -.7, -.02]])
+        comp = ct.ss([[0]], [[20]], [[1]], [[.8]])
+        a, b, c, d = closed_loop_load_ports(plant, comp, feedback_index=1)
+        model = ct.ss(a, b, c, d)
+        for s in (10j, 280j, 1200j):
+            matrix = plant(s)
+            gain = comp(s)/(1+matrix[1, 0]*comp(s))
+            expected = matrix[:, 1:]-np.outer(matrix[:, 0], gain*matrix[1, 1:])
+            np.testing.assert_allclose(model(s), expected, atol=1e-12)
+        _, step, dc = _step_samples(a, b, c, d, 100e3)
+        self.assertEqual(step.shape[1:], (2, 2))
+        np.testing.assert_allclose(dc[1], 0., atol=1e-10)
+        self.assertGreater(abs(dc[0, 1]), .1)
 
     def test_proportional_controller_uses_distinct_loaded_equilibria(self):
         gvc = ct.tf([1], [1, 5])

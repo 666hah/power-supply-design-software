@@ -52,8 +52,8 @@ def schema():
         ('dynamic.overshoot_V','允许输出过冲','mV',1e3,'端口电压允许的动态过冲幅值。'),
     ])
     from cot_acceptance import DEFAULT_LIMITS
+    from loop_acceptance import MIN_PHASE_MARGIN_DEG
     group('报告验收', [
-        ('acceptance.pm_min_deg','最小相位裕度','°',1.,'FRA 有效后，按此限值判定稳定裕度。'),
         ('acceptance.gm_min_db','最小增益裕度','dB',1.,'有效频带未覆盖相位穿越时标记未覆盖。'),
         ('acceptance.fc_error_pct','计算与仿真 fc 允许偏差','%',1.,'两者穿越频率偏差的限值。'),
         ('acceptance.pm_error_deg','计算与仿真 PM 允许偏差','°',1.,'两者相位裕度差的绝对值。'),
@@ -65,6 +65,7 @@ def schema():
         ('acceptance.recovery_s','最大恢复时间','ms',1e3,'从负载变化起计时。'),
         ('acceptance.input_peak_A','输入峰流限值','A',1.,'0 为仅观察，不判定输入浪涌通过。'),
     ])
+    groups[-1]['note'] = f'FRA 最小相位裕度验收要求严格大于 {MIN_PHASE_MARGIN_DEG:g}°。'
     for field in groups[-1]['fields']:
         field['default']=DEFAULT_LIMITS[field['key'].split('.')[-1]]
     phase_labels = {'L_scale':'电感倍率','dcr_scale':'DCR 倍率','rhigh_scale':'高侧 Rds 倍率',

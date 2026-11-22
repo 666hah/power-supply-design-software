@@ -79,16 +79,15 @@ class _LazyControl:
 
 ct = _LazyControl()
 
-from resource_canvas import EfficientFigureCanvasTkAgg as FigureCanvasTkAgg
+from resource_canvas import EfficientFigureCanvasTkAgg, HiddenRasterCache
 from matplotlib.figure import Figure
-from matplotlib.image import imread
 
 from manual import show_manual, MANUAL_VERSION
 from engineering_ui import EngineeringUI, Tooltip
 from parameter_panel import ParameterPanelUI
 from multi_output_results import MultiOutputResultsUI
 from calculation_scheduler import (LatestCalculationWorker, calculate_efficiency_curve,
-                                   calculate_report_efficiency_curve, calculate_optimization,
+                                   calculate_report_efficiency_curve,
                                    parameter_signature, CalculationCancelled)
 from winding_ui import WindingUI
 
@@ -115,12 +114,9 @@ BAD = '#b03a2e'
 # Shown wherever η is reported: the loss model counts only the major
 # power-stage losses, so the computed efficiency is optimistic and is NOT the
 # efficiency of the built hardware.
-ETA_NOTE = ('⚠ 计算效率说明: η 仅计入 MOSFET(导通/开关/Coss/栅极)、二极管/SR(导通/反向恢复)、'
-            '磁件(磁芯+铜损)、输入/输出/钳位电容 ESR、采样电阻、RCD 钳位电阻、输入/输出防反二极管(如启用)损耗; '
-            '未计温度效应(热态 Rds_on 增大)、'
-            '辅助/控制电路功耗(驱动供电/反馈/风扇)、输入整流桥、PCB/连接器铜损、EMI 滤波、'
-            'RCD 以外的吸收电路、绕组邻近效应等附加损耗 —— 模型估算, 并非最终实物效率, '
-            '差值需实测确定，不保证固定百分点或实测上限。运行点按预设η的等效损耗预算，不逐项叠加压降；最终η不覆盖预设。')
+ETA_NOTE = ('计算范围包括开关器件、整流器件、磁件、电容、采样电阻和已启用的钳位与防反支路。'
+            '实物效率还受温度、控制及驱动供电、输入整流、布线和 EMI 滤波等影响。'
+            '工作点仍按预设效率估算，输出功率与计算损耗共同决定上方的计算效率。')
 
 
 # reference window size the fixed UI layout was designed for; fonts scale
@@ -190,6 +186,8 @@ def _apply_fonts(style, k):
                     font=(FAM, F(12)))
     style.configure('Result.TLabel', background=BG, foreground=ACCENT,
                     font=(FAM, F(12)))
+    from ui_preferences import style_conclusion
+    style_conclusion(style, F(13))
     style.configure('Ok.TLabel', background=BG, foreground=OK,
                     font=(FAM, F(10), 'bold'))
     style.configure('Warn.TLabel', background=BG, foreground=WARN,
@@ -316,9 +314,9 @@ from power_stage import (DEFAULT_PARAMS, TOPOLOGIES, TOPO_FLYBACK,
 from waveforms import make_waveforms
 from semiconductor import device_stress
 from loss_model import compute_design
+from loop_acceptance import MIN_PHASE_MARGIN_DEG, phase_margin_passes
 from loop_tuning import kfactor_tune
 import comp_design as compd
-import optimizer as opt
 import capripple as capr
 import magnetics as mag
 from plants import (BuckConverter, BoostConverter, BuckBoostConverter,
@@ -326,7 +324,18 @@ from plants import (BuckConverter, BoostConverter, BuckBoostConverter,
                     make_compensator, uses_dcm_peak_energy,
                     normalize_controller_type, resolve_controller_type)
 
-APP_VERSION = 'V0.0.0 · 20261118 单窗口工作台'
+APP_VERSION = 'V0.0.0 · 20261121 环路验收'
+
+
+def _result_si(value, unit):
+    """Display a result with a space before its prefixed SI unit."""
+    if not np.isfinite(value):
+        return '—'
+    text = fmt_eng(value)
+    if text[-1] in 'pnumkMG':
+        prefix = 'µ' if text[-1] == 'u' else text[-1]
+        return f'{text[:-1]} {prefix}{unit}'
+    return f'{text} {unit}'
 
 
 def _subplots(nrows=1, ncols=1, figsize=(6.4, 4.8)):
@@ -338,6 +347,32 @@ def _subplots(nrows=1, ncols=1, figsize=(6.4, 4.8)):
     """
     fig = Figure(figsize=figsize)
     return fig, fig.subplots(nrows, ncols)
+
+
+def _expand_paired_plots(scroll, canvas, axes, headline):
+    """Use the result viewport for the two plots and stack them at narrow widths."""
+    figure = canvas.figure
+    widget = canvas.get_tk_widget()
+    figure.set_layout_engine('constrained')
+
+    def resize(_event):
+        width = scroll.canvas.winfo_width()
+        if width <= 1:
+            return
+        columns = 2 if width >= 800 else 1
+        shape = (2 // columns, columns)
+        if axes[0].get_subplotspec().get_gridspec().get_geometry() != shape:
+            grid = figure.add_gridspec(*shape)
+            for axis, position in zip(axes, grid):
+                axis.set_subplotspec(position)
+            canvas.request_draw()
+        available = scroll.canvas.winfo_height() - headline.winfo_reqheight() - 12
+        height = max(540 if columns == 2 else 800, available)
+        if widget.winfo_reqheight() != height:
+            widget.configure(height=height)
+
+    scroll.canvas.bind('<Configure>', resize, add='+')
+    headline.bind('<Configure>', resize, add='+')
 
 
 def _loss_bars(ax, labels, values, title, colors=ACCENT):
@@ -458,7 +493,8 @@ def resource_path(rel):
 def _calculate_input_report(request, cancelled):
     """Prepare both endpoints on the existing numerical worker, not Tk."""
     from design_engine.service import prepare_endpoint_bundle
-    return prepare_endpoint_bundle(request['p'], cancelled=cancelled)
+    return prepare_endpoint_bundle(request['p'], cancelled=cancelled,
+                                   include_efficiency=request['p']['topology']!='LLC')
 
 
 def _calculate_acceptance_endpoints(request, cancelled):
@@ -542,6 +578,24 @@ PARAM_SPECS = [
     ('Qrr',      'Diode reverse-recovery Qrr, C (反向恢复电荷)', ['n'], 'device'),
     ('Vgs',      'Gate drive voltage, V (栅极驱动电压)', ['', 'm'], 'device'),
     ('ma_slope', 'Slope compensation ma, A/s (斜坡补偿, 原边电感电流斜率)', ['k'], 'device'),
+    ('llc_lr', '谐振电感 Lr', ['u', 'm'], 'stage'),
+    ('llc_cr', '谐振电容 Cr', ['n', 'u'], 'stage'),
+    ('llc_lm', '励磁电感 Lm', ['u', 'm'], 'stage'),
+    ('llc_fmin', '最低开关频率', ['k'], 'stage'),
+    ('llc_fmax', '最高开关频率', ['k'], 'stage'),
+    ('llc_dead_time', '上下桥臂死区', ['n', 'u'], 'stage'),
+    ('llc_tank_r', '谐振腔串联等效电阻', ['m', ''], 'stage'),
+    ('llc_rect_r', '单颗整流管等效串联电阻', ['m', ''], 'device'),
+    ('llc_qoss', '单颗 MOS 换流电荷 Qoss', ['n'], 'device'),
+    ('llc_diode_cj', '单颗整流管等效结电容', ['p', 'n'], 'device'),
+    ('llc_hhc_sense', 'Cr 电压采样增益', [], 'ctrl'),
+    ('llc_hhc_ramp', '混合滞环补偿斜坡', ['k'], 'ctrl'),
+    ('llc_kp', 'LLC 比例增益', [], 'ctrl'),
+    ('llc_ki', 'LLC 积分增益', [], 'ctrl'),
+    ('llc_ocp', '谐振电流保护峰值', [''], 'ctrl'),
+    ('llc_uvlo', '输入欠压阈值', [''], 'ctrl'),
+    ('llc_ovp', '输出过压阈值', [''], 'ctrl'),
+    ('llc_soft_start', '软启动时间', ['m'], 'ctrl'),
     # magnetics
     ('inductor_dcr', '成品电感 DCR', ['m', ''], 'mag'),
     ('inductor_rated_current', '成品电感额定 RMS 电流', ['', 'm'], 'mag'),
@@ -567,6 +621,15 @@ PARAM_SPECS = [
     ('n_strand_s', 'Secondary parallel strands (副边并绕数)', [], 'mag'),
     ('parallel_wires_p', '原边线圈并绕数（相同整根线）', [], 'mag'),
     ('parallel_wires_s', '副边线圈并绕数（相同整根线）', [], 'mag'),
+    ('llc_lr_turns', '谐振电感 Lr 匝数（0=自动）', [], 'mag'),
+    ('llc_lr_leakage_H', '计入 Lr 的原边折算漏感', ['u', 'm'], 'mag'),
+    ('llc_lr_strands', '谐振电感 Lr 单根绞线股数', [], 'mag'),
+    ('llc_lr_wire_diameter', '谐振电感 Lr 裸铜单股直径', ['m'], 'mag'),
+    ('llc_lr_design_peak', '谐振电感 Lr 校核峰值电流', [], 'mag'),
+    ('llc_lr_min_ae', '谐振电感 Lr 磁路最小截面', [], 'mag'),
+    ('llc_lr_bobbin_radius', '谐振电感 Lr 绕线起始半径', ['m'], 'mag'),
+    ('llc_lr_window_width', '谐振电感 Lr 净窗口轴宽', ['m'], 'mag'),
+    ('llc_lr_window_height', '谐振电感 Lr 净窗口径深', ['m'], 'mag'),
     # controller
     ('KP',   'Controller KP (控制器增益)',               [], 'ctrl'),
     ('fz1',  'Zero fz1, Hz (零点)',                      ['', 'k', 'M'], 'ctrl'),
@@ -581,11 +644,13 @@ TOPO_LABEL = {'BUCK': 'BUCK (降压)', 'BOOST': 'BOOST (升压)',
               'BUCK-BOOST': 'BUCK-BOOST (升降压)',
               'FLYBACK': 'FLYBACK (反激)',
               'QR-FLYBACK': 'FLYBACK-QR (准谐振反激)',
-              'ACF-FORWARD': 'ACF-FORWARD (有源钳位正激)'}
+              'ACF-FORWARD': 'ACF-FORWARD (有源钳位正激)',
+              'LLC': 'LLC (谐振变换器)'}
 TOPO_KEY = {v: k for k, v in TOPO_LABEL.items()}
 CTRL_LABEL = {'Voltage Mode': 'Voltage Mode (电压模式)',
               'Peak Current Mode': 'Peak Current Mode (峰值电流模式)',
-              'Constant On-Time': 'COT (恒定导通时间)'}
+              'Constant On-Time': 'COT (恒定导通时间)',
+              'Hybrid Hysteretic': 'HHC (混合滞环控制)'}
 CTRL_KEY = {v: k for k, v in CTRL_LABEL.items()}
 CONTROLLER_CHOICES = ('auto', 'type2', 'type3')
 CONTROLLER_NAMES = {'type2': '二型', 'type3': '三型'}
@@ -595,48 +660,12 @@ SECTION_TITLES = {'spec': 'Specifications (规格参数)', 'stage': 'Power Stage
                   'device': 'Power Devices (功率器件)',
                   'mag': 'Magnetics (磁件)', 'ctrl': 'Controller (控制器/补偿器)'}
 
-SWEEP_OPTIONS = {
-    'BUCK': [('f_sw', 'Switching frequency (开关频率)'),
-             ('L', 'Inductance (电感)'),
-             ('C_out', 'Output capacitance (输出电容)'),
-             ('Rds_on', 'MOSFET Rds(on) (导通电阻)'),
-             ('Bmax', 'Flux density Bmax (磁通密度)'),
-             ],
-    'BOOST': [('f_sw', 'Switching frequency (开关频率)'),
-              ('L', 'Inductance (电感)'),
-              ('C_out', 'Output capacitance (输出电容)'),
-              ('Rds_on', 'MOSFET Rds(on) (导通电阻)'),
-              ('Bmax', 'Flux density Bmax (磁通密度)'),
-              ],
-    'BUCK-BOOST': [('f_sw', 'Switching frequency (开关频率)'),
-                   ('L', 'Inductance (电感)'),
-                   ('C_out', 'Output capacitance (输出电容)'),
-                   ('Rds_on', 'MOSFET Rds(on) (导通电阻)'),
-                   ('Bmax', 'Flux density Bmax (磁通密度)'),
-                   ],
-    'FLYBACK': [('f_sw', 'Switching frequency (开关频率)'),
-                ('L', 'Magnetising Lm (励磁电感)'),
-                ('N', 'Turns ratio N (匝比)'),
-                ('C_out', 'Output capacitance (输出电容)'),
-                ('Rds_on', 'MOSFET Rds(on) (导通电阻)')],
-    'QR-FLYBACK': [('L', 'Magnetising Lm (励磁电感)'),
-                   ('N', 'Turns ratio N (匝比)'),
-                   ('C_out', 'Output capacitance (输出电容)'),
-                   ('Rds_on', 'MOSFET Rds(on) (导通电阻)')],
-    'ACF-FORWARD': [('f_sw', 'Switching frequency (开关频率)'),
-                    ('L', 'Output choke (输出滤波电感)'),
-                    ('Lm_forward', 'Transformer Lm (励磁电感)'),
-                    ('C_clamp', 'Clamp capacitor (钳位电容)'),
-                    ('N', 'Turns ratio Np/Ns (匝比)')],
-}
-
 # one-line guidance shown at the top of every step (design flow)
 STEP_GUIDE = [
-    '功率级 (书 ch.2/3): 核对 CCM/DCM、器件电流与输出纹波；末两图为 Q1 开通 / 关断的 Vgs、Vds 分段示意。电容电流见⑦页。',
-    '器件应力 (书 ch.4): 核对 MOSFET / 二极管的电压、电流应力与损耗分解, 按 ≥1.2~1.5 倍裕量选型。',
-    '磁件设计 (书 ch.10~12): 选芯、匝数、气隙; 校核饱和裕度 Bpk < Bsat 与温升 ΔT。',
-    '环路设计 (书 ch.8/9): 校核穿越频率、相位裕度、增益裕度; 注意 RHP 零点与 DCM 模型限制。',
-    '效率与优化 (书 ch.3): 损耗分解、效率-负载曲线、参数扫描与优化。',
+    '末两图显示 Q1 开通与关断的栅源、漏源电压。逐颗电容电流见「电容纹波」。',
+    '应力和损耗按器件列出。读取实际额定值与降额判定请打开「器件 BOM 与规格」。',
+    '查看峰值磁密、估算温升、匝数与气隙。',
+    '环路结果对应当前输入、负载和补偿器。模型适用范围见下方说明。',
 ]
 
 # First four power-page charts; the last two are Q1 turn-on / turn-off.
@@ -711,6 +740,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._acceptance_evidence_reference = None
         self._acceptance_evidence_cache = None
         self._rendered_tabs = set()  # notebook indexes matching _last
+        self._feedback_redraw_job = None
 
         self.params = {}
         self.unit_opts = {}
@@ -739,7 +769,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
         self.create_widgets()
         from config_io import read_default_config
-        self._apply_config(initial_config if initial_config is not None else read_default_config())
+        from example_catalog import example_feedback_defaults
+        from tolerance_defaults import example_tolerance_defaults
+        self._apply_config(initial_config if initial_config is not None
+                           else example_tolerance_defaults(example_feedback_defaults(read_default_config())))
         self._building = False
 
         # Apply topology-dependent defaults before traces are attached; this
@@ -859,6 +892,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._schedule_parameter_scrollregion()
         # Font/viewport changes are presentation-only: keep the numerical solve.
         self._rendered_tabs.clear()
+        self._result_rasters.invalidate(self)
+        self._layout_result_navigation()
         self._refresh_visible_tab()
 
     def on_close(self):
@@ -891,7 +926,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         center = getattr(self, '_simulation_center', None)
         if center is not None and not center.closed:
             center.close()
-        for job in (self.update_timer, self._font_timer,
+        for job in (self.update_timer, self._font_timer, self._feedback_redraw_job,
                     self._initial_update_job, self._control_warmup_job, self._control_poll_job, self._work_poll,
                     self._param_layout_job, self._calculation_poll_job,
                     getattr(self, '_design_ready_job', None)):
@@ -914,6 +949,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.params['topology'] = tk.StringVar(
             value=TOPO_LABEL[DEFAULT_PARAMS['topology']])
         self.params['control_mode'] = tk.StringVar(value=CTRL_LABEL[DEFAULT_PARAMS['control_mode']])
+        self.params['llc_bridge'] = tk.StringVar(value=DEFAULT_PARAMS['llc_bridge'])
         self.params['controller_type'] = tk.StringVar(value='auto')
         self.params['input_voltage_case'] = tk.StringVar(value='min')
         self.params['core_choice'] = tk.StringVar(value='auto')
@@ -925,7 +961,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.rcd_dC = tk.DoubleVar(value=0.10)
         self.params.update(rcd_K=self.rcd_K, rcd_Kc=self.rcd_Kc, rcd_dC=self.rcd_dC)
 
-        # optimisation tab vars
+        # Retain historical analysis fields for configuration round-trips.
         self.params['target_eta'] = tk.DoubleVar(value=DEFAULT_PARAMS['target_eta'])
         self.params['load_frac'] = tk.DoubleVar(value=DEFAULT_PARAMS['load_frac'])
         self.params['sweep_var'] = tk.StringVar(value='f_sw')
@@ -999,11 +1035,18 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             return None
 
     def _sync_buck_control_mode(self):
-        if self._topo_key() == 'BUCK':
+        from llc_settings import CONTROL_MODES, HYBRID_MODE
+        topology, mode = self._topo_key(), self._ctrl_key()
+        if topology == 'LLC':
+            if mode not in CONTROL_MODES:
+                self.params['control_mode'].set(CTRL_LABEL['Voltage Mode'])
+        elif topology == 'BUCK':
             phases = self._buck_phase_count()
             if phases is not None and phases > 1 and not self._cot_active():
                 self.params['control_mode'].set(CTRL_LABEL['Constant On-Time'])
-        elif self._ctrl_key() == 'Constant On-Time':
+            elif mode == HYBRID_MODE:
+                self.params['control_mode'].set(CTRL_LABEL['Voltage Mode'])
+        elif mode in ('Constant On-Time', HYBRID_MODE):
             self.params['control_mode'].set(CTRL_LABEL['Voltage Mode'])
 
     def _on_buck_phase_change(self, *_):
@@ -1022,6 +1065,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         kind = self._controller_key()
         self.controller_note.set(
             'COT 电压外环：PI 根据归一化电压误差调节发脉冲频率。Kp、Ki 均为 0 时按工况自动取基准值。' if self._cot_active() else
+            'LLC 电压外环：PI 调节开关频率或滞环阈值。开关时序、谐振腔及保护使用同一工程参数。' if self._topo_key() == 'LLC' else
             '二型: 原点极点 + fz1 零点 + fp1 高频极点；fz2/fp2 未启用，阻容计算忽略。' if kind == 'type2' else
             '三型: 原点极点 + fz1/fz2 零点 + fp1/fp2 高频极点。')
         if hasattr(self,'tune_result'):
@@ -1054,11 +1098,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         p['engineering_acceptance']=copy.deepcopy(self._engineering_acceptance)
         p.update(self._capacitor_parameters())
         for key in ('Rd_diode','Rd_din','Rd_dout'):p[key]=0.
-        p['mos_manual_events']=self._manual_events_value() if self._mos_resolved_mode()=='manual' else {}
+        p['mos_manual_events']=(self._manual_events_value()
+                                if self._topo_key()!='LLC' and self._mos_resolved_mode()=='manual' else {})
         if self._psr_active():
             p.update(f_sw=250e3, A_sense=11.)
         p['topology'] = self._topo_key()
         p['control_mode'] = self._ctrl_key()
+        p['llc_bridge'] = self.params['llc_bridge'].get()
         p['controller_type'] = normalize_controller_type(self.params['controller_type'].get())
         p['inductor_design_enabled'] = self.params['inductor_design_enabled'].get()
         p['cin2_enable'] = self.params.get('cin2_enable', tk.BooleanVar(value=False)).get()
@@ -1076,14 +1122,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                                            tk.StringVar(value='auto')).get()
         p['core_choice_L'] = self.params.get('core_choice_L',
                                              tk.StringVar(value='auto')).get()
-        if self._topo_key() != 'ACF-FORWARD' or self._multiple_active():
+        if self._topo_key() not in ('ACF-FORWARD','LLC') or self._multiple_active():
             p['core_choice_L'] = 'auto'
         p['core_shape'] = self.params.get('core_shape',
                                           tk.StringVar(value='auto')).get()
         p['core_material'] = self.params['core_material'].get()
         p.update(self._custom_core_parameters())
         from isolated_outputs import ISOLATED
-        if p['topology'] in ISOLATED:
+        if p['topology'] in (*ISOLATED,'LLC'):
             p.update(self._winding_config())
         p.update(target_eta=self.params['target_eta'].get(),
                  fc_target=self.get_param('fc_target'),
@@ -1151,6 +1197,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._result_navigation.pack(fill='x', pady=(0, 6))
         self._result_buttons = {}
         self._result_nav_layout = None
+        self._result_nav_selected = None
         self._result_nav_combo = ttk.Combobox(self._result_navigation, state='readonly', width=1)
         self._result_nav_combo.bind('<<ComboboxSelected>>', self._choose_result_page)
         self._result_navigation.bind('<Configure>', self._layout_result_navigation)
@@ -1160,6 +1207,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         main.rowconfigure(1, weight=1)
 
         self.tab_topology = ttk.Frame(nb)
+        self.tab_bom = ttk.Frame(nb)
         self.tab_power = ttk.Frame(nb)
         self.tab_stress = ttk.Frame(nb)
         self.tab_mag = ttk.Frame(nb)
@@ -1169,28 +1217,38 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.tab_cap = ttk.Frame(nb)
         self.tab_rcd = ttk.Frame(nb)
         self.tab_comp = ttk.Frame(nb)
+        self.tab_tolerance = ttk.Frame(nb)
         self.tab_review = ttk.Frame(nb)
         nb.add(self.tab_topology, text=' ① 拓扑 ')
-        nb.add(self.tab_power, text=' ② 功率级 ')
-        nb.add(self.tab_stress, text=' ③ 器件 ')
-        nb.add(self.tab_mag, text=' ④ 磁件 ')
-        nb.add(self.tab_loop, text=' ⑤ 环路 ')
+        nb.add(self.tab_bom, text=' ② 器件 BOM 与规格 ')
+        nb.add(self.tab_power, text=' ③ 功率级 ')
+        nb.add(self.tab_stress, text=' ④ 器件 ')
+        nb.add(self.tab_mag, text=' ⑤ 磁件 ')
+        nb.add(self.tab_loop, text=' ⑥ 环路 ')
         nb.add(self.tab_cross, text=' 交叉调整率 ', state='hidden')
-        nb.add(self.tab_eff, text=' ⑥ 效率 ')
-        nb.add(self.tab_cap, text=' ⑦ 电容纹波 ')
-        nb.add(self.tab_rcd, text=' ⑧ RCD钳位 ')
-        nb.add(self.tab_comp, text=' ⑨ 补偿参数 ')
-        nb.add(self.tab_review, text=' ⑩ 工程评审 ')
+        nb.add(self.tab_eff, text=' ⑦ 效率 ')
+        nb.add(self.tab_cap, text=' ⑧ 电容纹波 ')
+        nb.add(self.tab_rcd, text=' ⑨ RCD钳位 ')
+        nb.add(self.tab_comp, text=' ⑩ 补偿参数 ')
+        from tolerance_report import TITLE as tolerance_title
+        nb.add(self.tab_tolerance, text=f' ⑪ {tolerance_title} ')
+        nb.add(self.tab_review, text=' ⑫ 工程验证与验收 ')
         self.nb = nb
         self._result_pages = {
-            'topology': self.tab_topology, 'power': self.tab_power,
+            'topology': self.tab_topology, 'bom': self.tab_bom, 'power': self.tab_power,
             'stress': self.tab_stress, 'mag': self.tab_mag, 'loop': self.tab_loop,
             'cross': self.tab_cross, 'eff': self.tab_eff, 'cap': self.tab_cap,
-            'rcd': self.tab_rcd, 'comp': self.tab_comp, 'review': self.tab_review,
+            'rcd': self.tab_rcd, 'comp': self.tab_comp, 'tolerance': self.tab_tolerance,
+            'review': self.tab_review,
         }
-        nb.bind('<<NotebookTabChanged>>', lambda _e: self._refresh_visible_tab())
+        nb.bind('<<NotebookTabChanged>>', self._on_result_page_changed)
+
+        if not hasattr(self.root, '_design_hidden_rasters'):
+            self.root._design_hidden_rasters = HiddenRasterCache()
+        self._result_rasters = self.root._design_hidden_rasters
 
         self._build_topology_tab()
+        self._bom_editor = self._bom_scroll = None
         self._build_power_tab()
         self._build_stress_tab()
         self._build_mag_tab()
@@ -1200,40 +1258,41 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._build_cap_tab()
         self._build_rcd_tab()
         self._build_comp_tab()
+        self._build_tolerance_tab()
         self._build_review_tab()
 
         from software_architecture_ui import add_architecture_menu
 
         menubar = tk.Menu(self.root)
         filemenu = tk.Menu(menubar, tearoff=0)
-        filemenu.add_command(label='保存配置 (Save Config)', command=self.save_config)
-        filemenu.add_command(label='打开配置 (Open Config)', command=self.load_config)
-        filemenu.add_command(label='导出设计报告 (Word / Excel)',
+        filemenu.add_command(label='保存配置…', command=self.save_config)
+        filemenu.add_command(label='打开配置…', command=self.load_config)
+        filemenu.add_command(label='导出设计报告…',
                              command=self._export_report_ui)
-        filemenu.add_command(label='仿真配置中心…',command=self._open_simulation_center)
         filemenu.add_separator()
         filemenu.add_command(label='返回系统架构' if self._embedded else '退出', command=self.on_close)
-        menubar.add_cascade(label='File (文件)', menu=filemenu)
+        menubar.add_cascade(label='文件', menu=filemenu)
         examples = tk.Menu(menubar, tearoff=0)
-        from example_catalog import EXAMPLES
-        for filename, label in EXAMPLES.items():
+        from example_catalog import available_examples
+        for filename, label in available_examples().items():
             examples.add_command(label=label, command=lambda name=filename:self.load_isolated_example(name))
         menubar.add_cascade(label='示例', menu=examples)
         automatic = tk.Menu(menubar, tearoff=0)
-        automatic.add_command(label='按规格生成初版（Buck / Boost / 反激）…', command=self.open_initial_design)
+        automatic.add_command(label='按规格生成初版（Buck / Boost / 反激 / LLC）…', command=self.open_initial_design)
         automatic.add_command(label='自动计算参数依据', command=self.open_auto_design_basis)
         menubar.add_cascade(label='自动设计', menu=automatic)
         add_architecture_menu(menubar, self.root)
         helpmenu = tk.Menu(menubar, tearoff=0)
         helpmenu.add_command(label='计算方法与公式说明',
                              command=self.open_calculation_reference)
+        helpmenu.add_command(label='开关电源介绍与计算方法', command=self.open_switching_power_supply_guide)
         helpmenu.add_command(label='多路反激电源设计入门教程',
                              command=self.open_design_tutorial)
         helpmenu.add_command(label='自动计算参数依据', command=self.open_auto_design_basis)
         helpmenu.add_separator()
         add_github_menu_item(helpmenu, self.root)
         helpmenu.add_command(label='关于', command=self.show_about)
-        menubar.add_cascade(label='Help (帮助)', menu=helpmenu)
+        menubar.add_cascade(label='帮助', menu=helpmenu)
         self.workspace_menu = menubar
         if not self._embedded:
             self.root.config(menu=menubar)
@@ -1249,7 +1308,6 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         bar.configure(borderwidth=1, relief='solid')
         self.root.option_add('*TCombobox*Listbox.font', (FAM, 10))
 
-        self.nb.bind('<<NotebookTabChanged>>', self._layout_result_navigation, add='+')
         self._resize_left()
 
     def _build_calculator_banner(self, parent):
@@ -1303,11 +1361,34 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             else:
                 combo.current(pages.index(self.nb.select()))
 
+    def _on_result_page_changed(self, _event=None):
+        previous = self._result_buttons.get(self._result_nav_selected)
+        selected = self.nb.select()
+        if selected != self._result_nav_selected:
+            if previous is not None:
+                previous.state(['!selected'])
+            current = self._result_buttons.get(selected)
+            if current is not None:
+                current.state(['selected'])
+            self._result_nav_selected = selected
+        if self._result_nav_layout is not None:
+            visible, columns = self._result_nav_layout
+            if columns == 0 and selected in visible:
+                index = visible.index(selected)
+                if index != self._result_nav_combo.current():
+                    self._result_nav_combo.current(index)
+        self._refresh_visible_tab()
+
+    def _create_result_canvas(self, figure, *, master):
+        return EfficientFigureCanvasTkAgg(figure, master=master,
+                                           hidden_rasters=self._result_rasters, owner=self)
+
     def _layout_result_navigation(self, _event=None):
         if not hasattr(self, 'nb'):
             return
         nav, nb = self._result_navigation, self.nb
         current = nb.select()
+        self._result_nav_selected = current
         visible = []
         for tab in nb.tabs():
             state = nb.tab(tab, 'state')
@@ -1327,15 +1408,21 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             visible.append(tab)
         if not visible or nav.winfo_width() < 5:
             return
-        cell_width = max(self._result_buttons[tab].winfo_reqwidth() for tab in visible) + 6
-        capacity = max(1, nav.winfo_width() // cell_width)
-        rows = (len(visible) + capacity - 1) // capacity
-        columns = (len(visible) + rows - 1) // rows if rows <= 3 else 0
+        widths = [self._result_buttons[tab].winfo_reqwidth() + 6 for tab in visible]
+        minimum_columns = (len(visible) + 2) // 3
+        columns = 0
+        for count in range(len(visible), minimum_columns - 1, -1):
+            required = sum(max(widths[col::count]) for col in range(count))
+            if required <= nav.winfo_width():
+                columns = count
+                break
         layout = (tuple(visible), columns)
         combo = self._result_nav_combo
         if columns == 0:
-            combo.configure(values=[self._result_buttons[p].cget('text') for p in visible])
-            if current in visible:
+            captions = tuple(self._result_buttons[p].cget('text') for p in visible)
+            if combo.cget('values') != captions:
+                combo.configure(values=captions)
+            if current in visible and combo.current() != visible.index(current):
                 combo.current(visible.index(current))
         if layout == self._result_nav_layout:
             return
@@ -1346,7 +1433,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         combo.grid_remove()
         for col in range(max(1, columns, previous_columns)):
             active = col < max(1, columns)
-            nav.columnconfigure(col, weight=int(active), uniform='result-pages' if active else '')
+            nav.columnconfigure(col, weight=int(active))
         if columns == 0:
             combo.grid(row=0, column=0, sticky='ew', pady=(0, 4))
             return
@@ -1407,6 +1494,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 widget = widget.master
             if widget is self.left and event.delta:
                 Tooltip.hide_all(self.root)
+                self._cancel_parameter_scroll()
                 self.left_canvas.yview_scroll(-int(event.delta / 120), 'units')
                 return 'break'
         except Exception:
@@ -1414,6 +1502,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
     def _scroll_params(self, *args):
         Tooltip.hide_all(self.root)
+        self._cancel_parameter_scroll()
         self.left_canvas.yview(*args)
 
     # ---------------------------------------------------------- config I/O
@@ -1429,9 +1518,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                         engineering_acceptance=copy.deepcopy(self._engineering_acceptance))
             self._last = wrapper
         if hasattr(self, '_tolerance_panel'):
-            self._invalidate_workflows()
+            self._invalidate_tolerance_result()
         self._export_after_calculation = False
-        self.status_var.set('验收设置与记录已应用；保存工程可保留，电气结果无需重算。')
+        self.status_var.set('已应用验收设置。保存工程可保留设置与记录。')
 
     def _acceptance_get_range_result(self):
         from engineering_acceptance import input_fingerprint
@@ -1483,7 +1572,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             request = dict(p=copy.deepcopy(self._current_spec()))
             self._calculation_worker.submit('acceptance_endpoints', request,
                 _calculate_acceptance_endpoints, cache=True)
-            self.status_var.set('正在后台刷新验收 Vinmin / Vinmax；未启动电磁或电路仿真。')
+            self.status_var.set('正在计算验收的两个输入端点。')
             self._ensure_calculation_poll()
         except Exception as exc:
             messagebox.showerror('工程验证与验收', str(exc), parent=self.root)
@@ -1517,7 +1606,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self._acceptance_evidence_reference = reference
             self._acceptance_evidence_cache = None
             self.acceptance_panel.refresh()
-            self.status_var.set('仿真证据引用已导入；按当前硬件匹配判定，保存工程可保留引用。')
+            self.status_var.set('已导入仿真证据。查看验收页的硬件匹配结果。')
         except (OSError, ValueError) as exc:
             messagebox.showerror('导入验收证据', str(exc), parent=self.root)
 
@@ -1572,6 +1661,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         cfg['cot_config']=copy.deepcopy(getattr(self,'_cot_config',{}))
         cfg['parasitic_config']=__import__('copy').deepcopy(self._parasitic_config)
         cfg['engineering_acceptance']=copy.deepcopy(self._engineering_acceptance)
+        cfg['__tolerance'] = self._tolerance_panel.project_profile()
         cfg.update(self._capacitor_parameters())
         for key in ('Rd_diode','Rd_din','Rd_dout'):cfg[key]=dict(v=0.,u='')
         cfg['mos_manual_events']=self._manual_events_value(strict=False)
@@ -1601,7 +1691,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         return d
 
     def _apply_comp_state(self, st):
-        """Restore the tab-8 designer state from a config dict (old configs
+        """Restore the compensation designer state from a config dict (old configs
         without the __comp key are simply skipped)."""
         from compensation_report import network_key
         try:
@@ -1665,7 +1755,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         if self._eff_curve_result is None:
             self._eff_curve_signature = None
             self._rendered_tabs.discard(self.nb.index(self.tab_eff))
-        self.status_var.set('正在后台准备 Vin min / Vin max 两端完整报告数据… 可继续编辑；编辑将取消本次导出。')
+        self.status_var.set('正在计算报告所需的输入工况。编辑设计会取消本次导出。')
         self._ensure_calculation_poll()
 
     def _report_input_parameters(self, parameters):
@@ -1707,7 +1797,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             # independent of the cached numerical results.
             report_params = self._report_input_parameters(L['p'])
             self.root.configure(cursor='watch')
-            self.status_var.set('两端计算已准备；正在生成报告图表与排版，此阶段请稍候…')
+            self.status_var.set('输入工况已算完，正在生成报告图表与排版。')
             self.root.update_idletasks()
             if range_result is None:
                 # Explicit synchronous API/batch callers retain their behavior;
@@ -1744,17 +1834,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     from report_xlsx import export_input_range_xlsx as export_design_report
                 else:
                     from input_range_report import export_input_range_docx as export_design_report
-                corners = self._corner_result
-                if corners and (corners['base_spec'] != L['p'] or
-                                tuple(corners['v_in']) != (self.corner_lo.get(),self.corner_hi.get())):
-                    corners = None
-                comparison = self._comparison
-                if comparison and comparison['context_spec'] != L['p']:
-                    comparison = None
                 tolerance_panel = getattr(self, '_tolerance_panel', None)
                 tolerance = tolerance_panel.current_result(report_params) if tolerance_panel is not None else None
                 tolerance_options = {'tolerance_result': tolerance} if tolerance is not None else {}
-                result = export_design_report(path, range_result, corners=corners, comparison=comparison,
+                result = export_design_report(path, range_result,
                     compensation_state=self._comp_state(), mos_real_time=self.mos_real_time.get(),
                     **tolerance_options)
                 failures = result['failed_cases']
@@ -1780,8 +1863,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         """Apply a loaded config dict (value + unit) to the UI parameters."""
         self._geometry_source=None
         cfg = dict(cfg)
+        from tolerance_ui import normalize_profile
+        tolerance_profile = normalize_profile(cfg.get('__tolerance'))
         from inductor_selection import DEFAULTS as INDUCTOR_DEFAULTS
         for key, default in INDUCTOR_DEFAULTS.items():
+            cfg.setdefault(key, default)
+        from llc_settings import DEFAULTS as LLC_DEFAULTS
+        for key, default in LLC_DEFAULTS.items():
             cfg.setdefault(key, default)
         from component_management import normalize_management
         component_data = normalize_management(cfg.get('component_management'))
@@ -1793,6 +1881,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         from cot_settings import active as cot_active, validate as validate_cot
         spice_context = decode_config({key: cfg.get(key, DEFAULT_PARAMS[key])
                                       for key in ('topology', 'control_mode', 'buck_phases', 'f_sw')})
+        if spice_context['topology'] == 'LLC':
+            for key in ('Np','Ns'):
+                cfg.setdefault(key,0.)
         if spice_context['topology'] == 'BUCK':
             spice_context['buck_phases'] = validate_cot(spice_context)
         if cot_active(spice_context):
@@ -1852,8 +1943,16 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._auto_design_basis=copy.deepcopy(cfg.get('__auto_design_basis'))
         self._transformer_simulation = copy.deepcopy(cfg.get('__transformer_simulation'))
         self._joint_simulation = copy.deepcopy(cfg.get('__joint_simulation'))
-        if hasattr(self,'component_manager'):
-            self.component_manager.current=None  # a new design must not inherit unapplied edits
+        if hasattr(self, 'topology_view'):
+            if self._bom_scroll is not None:
+                self._bom_scroll.destroy()
+                self._bom_editor = self._bom_scroll = None
+            self._rendered_tabs.discard(self.nb.index(self.tab_bom))
+            self._topology_ref = None
+            self.topology_rows.clear()
+            self._topology_links.set_rows([])
+            self.topology_view.clear()
+            self.topology_selection.set('点击图中的器件或位号定位参数。')
         self._load_manual_events(cfg)
         cfg.setdefault('mos_curve_vds',dict(v=0.,u=''))
         # Legacy files carry a scalar, in their original value/unit format.
@@ -1897,10 +1996,11 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 pass
         if isinstance(cfg.get('__comp'), dict):
             self._apply_comp_state(cfg['__comp'])
+        else:
+            self._apply_comp_state(dict(topo='opamp3'))
         self.params['controller_type'].set(normalize_controller_type(self.params['controller_type'].get()))
         self._sync_curve_source_params()
         self._load_capacitor_parameters(cfg)
-        # legacy configs saved with the removed LLC topology fall back to Buck
         if self._topo_key() not in TOPOLOGIES:
             self.params['topology'].set(TOPO_LABEL['BUCK'])
         self._sync_buck_control_mode()
@@ -1911,6 +2011,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._building = False
         self.on_topology_change(reset_target=False)
         self._on_controller_change()
+        self._tolerance_panel.load_project_profile(tolerance_profile)
         self._design_load_revision = getattr(self, '_design_load_revision', 0) + 1
         self.schedule_update()
 
@@ -1947,21 +2048,24 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             '────────────────────────────────────────\n'
             '① 拓扑示意\n'
             '   选择拓扑 → 核对连接、器件位号与当前参数\n'
-            '② 功率级 & 波形  (ch.2/3)\n'
+            '② 器件 BOM 与规格\n'
+            '   按位号编辑厂家、型号、封装及额定值，查看降额结果\n'
+            '③ 功率级 & 波形  (ch.2/3)\n'
             '   填规格与 L/C/匝比 → 核对 CCM/DCM、占空比、\n'
             '   器件电流、输出纹波以及 Q1 的 t1–t8 开通 / 关断图\n'
-            '③ 器件应力  (ch.4)\n'
+            '④ 器件应力  (ch.4)\n'
             '   核对 MOSFET/二极管 Vds/Vr、Id/If 应力与损耗,\n'
             '   按 ≥1.2~1.5 倍裕量选型\n'
-            '④ 磁件设计  (ch.10~12)\n'
+            '⑤ 磁件设计  (ch.10~12)\n'
             '   选磁芯/匝数/气隙/线径; 校核 Bpk < Bsat (饱和裕量)\n'
             '   变压器 ΔT = P×Ri-a，独立电感 ΔT = P/(h·A)\n'
-            '⑤ 环路设计  (ch.8/9)\n'
+            '⑥ 环路设计  (ch.8/9)\n'
             '   设定 fc≈fsw/10、PM≈60° → K因子自动整定;\n'
             '   核对 PM/GM/穿越频率, 注意 Boost/反激 RHP 零点\n'
-            '⑥ 效率 & 优化  (ch.3)\n'
+            '⑦ 效率 & 优化  (ch.3)\n'
             '   损耗分解、效率-负载曲线、参数扫描/优化\n'
-            '⑦ 电容纹波  ⑧ RCD / 有源钳位  ⑨ 补偿参数  ⑩ 工程评审\n'
+            '⑧ 电容纹波  ⑨ RCD / 有源钳位  ⑩ 补偿参数\n'
+            '⑪ 硬件容差边界与分布评估  ⑫ 工程验证与验收\n'
             '\n公式说明和入门教程见“帮助”菜单。')
         tk.messagebox.showinfo('设计流程 (Design Flow)', flow)
 
@@ -1972,6 +2076,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
     def open_design_tutorial(self):
         """Open the separate worked-example tutorial without regenerating it."""
         self._open_help_document('多路反激电源设计入门教程.docx', '入门教程')
+
+    def open_switching_power_supply_guide(self):
+        self._open_help_document('开关电源介绍与计算方法.docx', '开关电源介绍与计算方法')
 
     def open_initial_design(self):
         from initial_design_ui import show
@@ -2027,7 +2134,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             'Topologies: Buck / Boost / Buck-Boost / Flyback / QR-Flyback / ACF-Forward\n'
             '拓扑: 降压 / 升压 / 升降压 / 反激 / 准谐振反激 / 有源钳位正激\n\n'
             '设计检查: 电容纹波电流 / 器件应力 / 磁件饱和与温升 / 环路稳定\n'
-            '帮助 → 计算方法与公式说明 / 多路反激电源设计入门教程 / 自动计算参数依据')
+            '帮助 → 计算方法与公式说明 / 开关电源介绍与计算方法 / 多路反激电源设计入门教程 / 自动计算参数依据')
 
     # ------------------------------------------------------------ param panel
     def _add_section(self, parent, title):
@@ -2094,6 +2201,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             fs = 0  # keep the previous target while an edit is incomplete
         if fs > 0 and reset_target:
             fc = fs/10
+            if topo == 'LLC':
+                fc = min(1000., fs/40)
             if topo == 'ACF-FORWARD':
                 try:
                     fc = compute_operating_point(self.get_params())['fc_recommended_max']
@@ -2103,23 +2212,15 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         # Parameter filtering owns section visibility/order, including the
         # forward-only group while a search hides neighbouring sections.
         self._sync_topology_pages()
-        self.rcd_input_frame.configure(text=(
-            '有源钳位参数请在左栏编辑 (Lm / C_clamp / 死区 / 辅助 MOSFET)'
-            if topo == 'ACF-FORWARD' else
-            'RCD 参数在左栏“功率级与钳位”编辑；本页只显示结果'))
         self.guide_rcd.configure(text=(
-            '有源钳位正激: 低侧钳位复位电压 / 辅助 MOSFET / 励磁电流 / 谐振与带宽限制'
+            '波形显示低侧钳位复位和励磁电流。参数见左侧「功率级与钳位」。'
             if topo == 'ACF-FORWARD' else
-            'RCD 吸收钳位 (反激原边漏感): K / Kc / ΔC'))
-        # update sweep options
-        self.sweep_combo.configure(values=[l for _k, l in SWEEP_OPTIONS.get(topo, SWEEP_OPTIONS['BUCK'])])
-        self.sweep_combo.set(SWEEP_OPTIONS.get(topo, SWEEP_OPTIONS['BUCK'])[0][1])
+            '波形显示原边漏感尖峰和钳位电容电压。参数见左侧「功率级与钳位」。'))
         # step guides
         self.guide_power.configure(text=STEP_GUIDE[0])
         self.guide_stress.configure(text=STEP_GUIDE[1])
         self.guide_mag.configure(text=STEP_GUIDE[2])
         self.guide_loop.configure(text=STEP_GUIDE[3])
-        self.guide_eff.configure(text=STEP_GUIDE[4])
         self._filter_params()
 
     def _sync_topology_pages(self):
@@ -2128,16 +2229,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             return
         topo = self._topo_key()
         if hasattr(self, 'mag_nb'):
-            winding_supported = topo in ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD')
+            winding_supported = topo in ('FLYBACK', 'QR-FLYBACK', 'ACF-FORWARD', 'LLC')
             if not winding_supported and self.mag_nb.select() == str(self.tab_mag_winding):
                 self.mag_nb.select(self.tab_mag_design)
             self.mag_nb.tab(self.tab_mag_winding,
                             state='normal' if winding_supported else 'hidden')
             if winding_supported:
-                self.mag_simulation_button.pack(side='right', padx=5)
                 self.mag_preview_button.pack(side='right', padx=5)
             else:
-                self.mag_simulation_button.pack_forget()
                 self.mag_preview_button.pack_forget()
         pfm = bool(self._psr_active() and self._snapshot_valid and self._last
                    and self._last['p'].get('feedback_mode') == 'PSR-MP6005'
@@ -2147,6 +2246,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self.tab_comp: not (self._psr_active() or self._cot_active()),
             self.tab_loop: not pfm,
         }
+        navigation_changed = False
         selected = self.nb.select()
         if selected and any(str(tab) == selected and not shown for tab, shown in states.items()):
             self.nb.select(self.tab_topology)
@@ -2154,15 +2254,29 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             state = 'normal' if shown else 'hidden'
             if self.nb.tab(tab, 'state') != state:
                 self.nb.tab(tab, state=state)
-        self.nb.tab(self.tab_rcd, text=' ⑧ 有源钳位 ' if topo == 'ACF-FORWARD' else ' ⑧ RCD钳位 ')
+                navigation_changed = True
+        clamp_title = ' ⑨ 有源钳位 ' if topo == 'ACF-FORWARD' else ' ⑨ RCD钳位 '
+        if self.nb.tab(self.tab_rcd, 'text') != clamp_title:
+            self.nb.tab(self.tab_rcd, text=clamp_title)
+            navigation_changed = True
+        if navigation_changed:
+            self._layout_result_navigation()
+        if hasattr(self, '_comp_selector'):
+            self._sync_compensation_editor(topo == 'LLC')
         if hasattr(self, 'loop_tune_frame'):
             cot = self._cot_active()
-            self.guide_loop.configure(text=('COT 电压外环：按当前工况计算对象、PI 与回路增益。'
-                                            if cot else STEP_GUIDE[3]))
-            self.loop_tune_frame.configure(text='COT PI 自动整定' if cot else 'Venable K 因子自动整定')
-            self.tune_type_label.configure(text='模型' if cot else '类型')
-            self.tune_type_combo.configure(textvariable=self.cot_tune_type if cot else self.tune_type,
-                                           state='disabled' if cot else 'readonly')
+            pi = cot or topo == 'LLC'
+            guide = STEP_GUIDE[3]
+            title = 'Venable K 因子自动整定'
+            if cot:
+                guide, title = 'COT 外环按当前工况计算功率级、PI 补偿和回路增益。', 'COT PI 自动整定'
+            if topo == 'LLC':
+                guide, title = 'LLC 外环采用周期事件线性化模型。可查看频率响应和负载阶跃。', 'LLC PI 自动整定'
+            self.guide_loop.configure(text=guide)
+            self.loop_tune_frame.configure(text=title)
+            self.tune_type_label.configure(text='模型' if pi else '类型')
+            self.tune_type_combo.configure(textvariable=self.cot_tune_type if pi else self.tune_type,
+                                           state='disabled' if pi else 'readonly')
         self._sync_inline_output_context()
 
     def _rcd_parameters(self):
@@ -2173,28 +2287,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                         dC=min(max(float(self.rcd_dC.get()), 0.0), 1.0))
         return dict(K=0.95, Kc=1.5, dC=0.10)
 
-    def _sweep_key(self):
-        topo = self._topo_key()
-        opts = SWEEP_OPTIONS.get(topo, SWEEP_OPTIONS['BUCK'])
-        label = self.sweep_combo.get()
-        for k, l in opts:
-            if l == label:
-                return k
-        return opts[0][0]
-
     # ------------------------------------------------------------ actions
     def schedule_update(self):
         if self._building or self._closing:
             return
         self._calculation_worker.invalidate()
         self._export_after_calculation = False
+        if self._snapshot_valid:
+            self._set_result_states('待计算 · 参数已更新')
         self._snapshot_valid = False
-        if hasattr(self,'component_manager'):
-            self.component_manager.mark_stale()
+        if self._bom_editor is not None:
+            self._bom_editor.mark_stale()
         self._refresh_param_summaries()
         self._sync_device_curve_controls()
-        if hasattr(self, '_sync_corner_input_range'):
-            self._sync_corner_input_range()
         self._mark_winding_stale()
         self._mark_transformer_readouts_stale()
         self._mark_cross_regulation_stale()
@@ -2208,9 +2313,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._loop_tune_pending = None
         for var in getattr(self, 'margin_info', {}).values():
             var.set('环路: 待计算')
-        if hasattr(self, 'review_summary'):
-            self.review_summary.set('参数已变化，检查结果待重新计算。')
-        self._invalidate_workflows()
+        self._invalidate_tolerance_result()
         if self.update_timer is not None:
             self.root.after_cancel(self.update_timer)
         # The coupled solver is substantially more costly than the nominal
@@ -2247,6 +2350,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             p = self.get_params()
             p.update(self._rcd_parameters())
             self._snapshot_valid = False
+            if self._bom_editor is not None:
+                self._bom_editor.mark_stale()
             self._mark_winding_stale()
             from input_voltage_range import calculate_input_operating_point
             import threading
@@ -2272,7 +2377,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
             self._calculation_worker.submit('design', p,
                 calculate, cache=True)
-            self.status_var.set('正在后台计算设计… 可继续编辑；仅应用最新参数的结果。')
+            self.status_var.set('正在计算当前设计。')
             self._ensure_calculation_poll()
             return True
         except Exception as error:
@@ -2340,8 +2445,6 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                     self._finish_coupled_loop(result)
                 elif result.kind == 'cross_regulation':
                     self._finish_cross_regulation(result)
-                elif result.kind in ('sweep', 'target', 'optimize'):
-                    self._finish_optimization_job(result)
         except queue.Empty:
             pass
         except Exception as error:
@@ -2356,6 +2459,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         engine_p = L.get('calculation_params', L['p'])
         return (
             lambda: self._update_topology(L['op'], engine_p),
+            self._refresh_components,
             lambda: self._update_power(L['op'], L['wf'], L['res'], engine_p),
             lambda: self._update_stress(L['op'], L['res']),
             lambda: self._update_mag(L['op'], engine_p, L['res'], L['wf']),
@@ -2365,7 +2469,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             lambda: self._update_cap(L['op'], engine_p, L['res']),
             lambda: self._update_rcd(L['op'], engine_p),
             lambda: self._update_comp(L['op'], engine_p),
-            self._update_review,
+            self._invalidate_tolerance_result,
+            self._refresh_acceptance,
         )
 
     def selected_result_page(self):
@@ -2382,11 +2487,16 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         _rendered_tabs on every design change, so the visible tab always
         redraws there and the others render on their first visit."""
         if self._last is None or not self._snapshot_valid:
+            if self.nb.select() == str(self.tab_bom):
+                self._refresh_components()
+            elif self.nb.select() == str(self.tab_review):
+                self._refresh_acceptance()
             return
         try:
             idx = self.nb.index(self.nb.select())
         except Exception:
             return
+        self._refresh_expanded_feedback(idx)
         loop_index = self.nb.index(self.tab_loop)
         review_index = self.nb.index(self.tab_review)
         if idx in (loop_index, review_index) and not self._control_ready:
@@ -2408,7 +2518,23 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 self._update_loop(self._last['p'],draw=False)
             self._tab_updaters()[idx]()
         except Exception as e:
-            self.status_var.set(f'Refresh: {e}')
+            self.status_var.set(f'页面刷新失败。{e}')
+
+    def _refresh_expanded_feedback(self, current_index):
+        for page, view in ((self.tab_topology, self.topology_view), (self.tab_comp, self._comp_diagram_view)):
+            if not view.large_view_open:
+                continue
+            if self.nb.tab(page, 'state') == 'hidden':
+                view.close_large()
+                continue
+            index = self.nb.index(page)
+            if index != current_index and index not in self._rendered_tabs:
+                try:
+                    self._tab_updaters()[index]()
+                except Exception as exc:
+                    self.status_var.set(f'电路大图刷新失败：{exc}')
+                else:
+                    self._rendered_tabs.add(index)
 
     # ------------------------------------------------------------ compute
     def calculate_transfer_functions(self, p, op=None):
@@ -2469,24 +2595,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             if p['topology'] == 'QR-FLYBACK':
                 f_ok = op['f_sw'] <= op['f_max']
                 self.status_var.set(
-                    f"{topo_label}: fsw(计算)={fmt_eng(op['f_sw'], 'Hz')}  "
-                    f"mode=BCM(准谐振)  D={op['D']:.3f}  I_pk={fmt_eng(op['I_L_pk'], 'A')}  "
-                    f"V_r={fmt_eng(op['V_r'], 'V')}  "
-                    f"{'✓ f_sw ≤ f_max' if f_ok else '⚠ f_sw 超 f_max 限制!'}  "
-                    f"η={res['eta'] * 100:.1f}% (模型估算, 未计附加损耗)")
+                    f"准谐振反激 · {'工作频率在上限内' if f_ok else '工作频率超限'} · "
+                    f"工作频率 {_result_si(op['f_sw'], 'Hz')} · 原边峰值电流 {_result_si(op['I_L_pk'], 'A')} · "
+                    f"计算效率 {res['eta'] * 100:.1f}%")
             else:
-                dcm_note = '  [DCM · 环路工作条件见环路页]' if op['mode'] == 'DCM' else ''
                 self.status_var.set(
-                    f"{topo_label}: D={op['D']:.3f}  mode={op['mode']}  "
-                    f"dI_L={fmt_eng(op['dI_L'], 'A')}  I_L_pk={fmt_eng(op['I_L_pk'], 'A')}  "
-                    f"ripple={fmt_eng(wf['ripple_pp'], 'V')}  eta={res['eta'] * 100:.1f}%"
-                    f" (模型估算, 未计附加损耗)"
-                    + dcm_note + (' · 逐对耦合 / 恒阻负载近似' if op.get('coupled_model') else ''))
+                    f"{topo_label} · {op['mode']} · 峰值电流 {_result_si(op['I_L_pk'], 'A')} · "
+                    f"{'反馈路' if op.get('outputs') else '输出'}纹波 {_result_si(wf['ripple_pp'], 'Vpp')} · "
+                    f"计算效率 {res['eta'] * 100:.1f}%")
 
             # toolbar loop margins: cheap numbers only, kept fresh on every
-            # design change; the ④ Bode plots redraw only when that tab shows.
+            # design change; the Bode plots redraw only when that tab shows.
             # Skipped while the lazy `control` import has not finished (the
-            # background warm-up or the first ④ visit fills them in).
+            # background warm-up or the first visit fills them in).
             calculation_params = calculation_params or p
             # Review records do not change the electrical solve. Keep the
             # published wrapper current without mutating cached input dicts.
@@ -2509,18 +2630,29 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             if self._control_ready and self.nb.select() in (str(self.tab_loop), str(self.tab_review)):
                 self._update_loop(p, draw=False)
             self._last_design = res
-            self._update_review()
+            self._refresh_acceptance()
             # redraw ONLY the visible tab; the others refresh on first visit
             self._rendered_tabs.clear()
+            self._result_rasters.invalidate(self)
             self._refresh_visible_tab()
             return True
         except Exception as error:
             self._show_calculation_error(error)
             return False
 
+    def _set_result_states(self, text):
+        for name in ('topology_stats', 'power_stats', 'stress_conclusion', 'mag_check',
+                     'loop_conclusion', 'loop_step_caption', 'loss_summary', 'cap_summary', 'rcd_result'):
+            variable = getattr(self, name, None)
+            if variable is not None:
+                variable.set(text)
+
     def _show_calculation_error(self, error):
-        self.status_var.set(f'Error: {error}')
+        self.status_var.set(f'计算失败。{error}')
+        self._set_result_states('计算失败 · 检查当前输入')
         self._snapshot_valid = False
+        if self._bom_editor is not None:
+            self._bom_editor.mark_stale()
         self._mark_winding_stale()
         self._mark_transformer_readouts_stale()
         self._mark_mos_gate_stale()
@@ -2536,58 +2668,109 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         _draw_canvas(self.canvas_loop)
         if self.loop_view.get() == '反馈路负载阶跃':
             self._draw_loop_load_step(dict(available=False, reason='参数无效，反馈路波形已清空。'))
-        self._invalidate_workflows()
-        self._clear_review(str(error))
+        self._invalidate_tolerance_result()
+        self._refresh_acceptance()
 
     # ============================================================ ① topology
     def _build_topology_tab(self):
         f = self._build_isolated_controls(self.tab_topology)
-        ttk.Button(f, text='仿真配置中心…', command=self._open_simulation_center).pack(anchor='e',padx=8,pady=4)
-        from component_ui import ComponentManager
-        component_page = ttk.Frame(self._isolated_result_book)
-        self._component_page = component_page
-        self._isolated_result_book.insert(1, component_page, text='关键器件 BOM 与降额')
-        from scrollable_results import ScrollableResults
-        self._component_scroll = ScrollableResults(component_page)
-        self._component_scroll.pack(fill='both',expand=True)
-        self.component_manager = ComponentManager(self._component_scroll.content, self._component_context, self._component_changed)
-        self._isolated_result_book.bind('<<NotebookTabChanged>>', lambda _e: self._refresh_components(), add='+')
-        guide = ttk.Frame(f, style='Guide.TFrame', padding='8 5')
-        guide.pack(fill='x', pady=2)
-        ttk.Label(guide, text='拓扑参考图：随当前拓扑与可选器件更新。Q1 对应②页的 Vgs / Vds；下表将位号映射到软件参数。',
-                  style='Guide.TLabel', wraplength=1000).pack(anchor='w')
-        self.topology_stats = tk.StringVar()
-        ttk.Label(f, textvariable=self.topology_stats, style='Margin.TLabel').pack(anchor='w', padx=8, pady=3)
+        from topology_canvas import TopologyCanvas
+        from topology_parameter_links import TopologyParameterLinks
+        self.topology_rows = {}
+        self._topology_ref = None
+        self._topology_links = TopologyParameterLinks(self,
+            lambda ref: self._select_topology_ref(ref, source='parameters'))
+
+        canvas_style = ttk.Style(f)
+        canvas_style.configure('TopologyTool.TButton', font=(FAM, -14), padding=(7,4))
+        canvas_style.configure('TopologyMeta.TLabel', font=(FAM, -14), foreground='#33465b')
+        canvas_style.configure('Topology.TNotebook.Tab', font=(FAM, -15), padding=(10,5))
+        self._isolated_result_book.configure(style='Topology.TNotebook')
+        heading = ttk.Frame(f, padding=(6, 4))
+        heading.pack(fill='x')
+        self.topology_stats = tk.StringVar(value='待计算')
+        self._result_label(heading, textvariable=self.topology_stats, style='ResultConclusion.TLabel').pack(fill='x')
         self.fig_topology, self.ax_topology = _subplots(figsize=(11.5, 4.4))
-        self.fig_topology.subplots_adjust(left=.02, right=.98, bottom=.02, top=.98)
-        self.canvas_topology = FigureCanvasTkAgg(self.fig_topology, master=f)
-        self.canvas_topology.get_tk_widget().pack(fill='both', expand=True)
-        box = ttk.LabelFrame(f, text='器件位号 ↔ 当前计算参数（表内可滚动）', padding=4)
-        box.pack(fill='x', padx=4, pady=4)
-        self.topology_tree = ttk.Treeview(box, columns=('ref', 'role', 'values'), show='headings', height=5)
-        for key, label, width in (('ref', '位号', 95), ('role', '器件 / 用途', 310), ('values', '参数与当前值', 600)):
-            self.topology_tree.heading(key, text=label)
-            self.topology_tree.column(key, width=width, minwidth=70, anchor='w', stretch=key != 'ref')
-        scroll = ttk.Scrollbar(box, orient='vertical', command=self.topology_tree.yview)
-        self.topology_tree.configure(yscrollcommand=scroll.set)
-        self.topology_tree.bind('<Double-1>', self._open_component_manager)
-        scroll.pack(side='right', fill='y'); self.topology_tree.pack(fill='x', expand=True)
-        ttk.Label(f, text='工程示意，非可生产原理图；未展开驱动 / 控制器、ESR / ESL 与寄生参数。防反压降与采样电阻仍按原模型仅计损耗。',
-                  style='Muted.TLabel', wraplength=1100).pack(anchor='w', padx=8, pady=(0, 4))
+        footer = ttk.Frame(f, padding=(8, 4))
+        footer.pack(side='bottom', fill='x')
+        self.topology_selection = tk.StringVar(value='点击图中的器件或位号定位参数。')
+        self._result_label(footer, textvariable=self.topology_selection, style='Muted.TLabel').pack(fill='x')
+        self.topology_view = TopologyCanvas(f, self._select_topology_ref,
+                                            expand_label='放大查看', expand_region='feedback_loop')
+        self.topology_view.pack(fill='both', expand=True, padx=5)
 
     def _update_topology(self, op, p):
+        from feedback_topology import draw_feedback_stage
         from topology_diagram import draw_topology
-        rows = draw_topology(self.ax_topology, p,op)
+        hits, power_pins = {}, {}
+        rows = draw_topology(self.ax_topology, p, op, interactive=True, hits=hits,
+                             control_ports=True, control_anchors=power_pins)
         cot = op.get('cot')
         controller = f"{cot['phases']} 相 COT  ·  每相 " if cot else ''
-        self.topology_stats.set(f"{TOPO_LABEL.get(op['topology'], op['topology'])}  ·  "
-                                f"Vin={fmt_eng(op['V_in'], 'V')} → |Vout|={fmt_eng(op['V_out'], 'V')}  ·  "
-                                f"{fmt_eng(op['P_out'], 'W')}  ·  {controller}{fmt_eng(op['f_sw'], 'Hz')}")
-        self.topology_tree.delete(*self.topology_tree.get_children())
-        for row in rows:
-            self.topology_tree.insert('', 'end', iid=row['ref'], values=(row['ref'], row['role'], row['values']))
-        _draw_canvas(self.canvas_topology)
-        self._refresh_components()
+        voltage = -op['V_out'] if op['topology'] == 'BUCK-BOOST' else op['V_out']
+        self.topology_stats.set(f"{TOPO_LABEL.get(op['topology'], op['topology'])} · "
+                                f"输入 {_result_si(op['V_in'], 'V')} → 输出 {_result_si(voltage, 'V')} · "
+                                f"总输出 {_result_si(op['P_out'], 'W')} · {controller}开关频率 {_result_si(op['f_sw'], 'Hz')}")
+        self.topology_rows = {row['ref']: row for row in rows}
+        regions = draw_feedback_stage(self.ax_topology, p, op, self._comp_state(), hits,
+                                     self.topology_rows, power_pins)
+        self._topology_links.set_rows(rows)
+        self.topology_view.set_scene(self.ax_topology, hits, regions=regions)
+        self._show_topology_selection(self._topology_ref)
+
+    def _show_topology_selection(self, ref):
+        row = self.topology_rows.get(ref)
+        self._topology_ref = ref if row else None
+        self._topology_links.select(self._topology_ref)
+        self.topology_view.highlight(self._topology_ref)
+        self.topology_selection.set(f"{ref} · {row['role']} · {row['values']}" if row else '点击图中的器件或位号定位参数。')
+
+    def _select_topology_ref(self, ref, *, source='topology'):
+        if self._closing:
+            return False
+        if source == 'bom':
+            if not self._snapshot_valid:
+                return True  # Component metadata remains editable without a valid solve.
+            self._ensure_topology_scene()
+            if ref not in self.topology_rows:
+                self._show_topology_selection(None)
+                return True
+        if ref not in self.topology_rows:
+            return False
+
+        def locate():
+            if source != 'parameters':
+                return self._topology_links.locate(ref)
+
+        if source == 'bom' or self._bom_editor is None:
+            if locate() is False:
+                return False
+        else:
+            editor = self._bom_editor
+            if not editor.select_ref(ref if ref in editor.rows else None, before_commit=locate):
+                return False
+        self._show_topology_selection(ref)
+        if source == 'parameters' and self.nb.select() == str(self.tab_topology):
+            self.topology_view.reveal(ref)
+        return True
+
+    def _ensure_topology_scene(self):
+        index = self.nb.index(self.tab_topology)
+        if index not in self._rendered_tabs:
+            self._tab_updaters()[index]()
+            self._rendered_tabs.add(index)
+
+    def _view_bom_ref(self, ref):
+        if not self._snapshot_valid:
+            return
+        self._ensure_topology_scene()
+        if ref not in self.topology_rows:
+            self.status_var.set(f'{ref} 在当前拓扑图中无对应位号。')
+            return
+        self.nb.select(self.tab_topology)
+        self._isolated_result_book.select(self._isolated_result_pages[0])
+        self._show_topology_selection(ref)
+        self.topology_view.reveal(ref)
 
     def _component_context(self):
         if self._snapshot_valid and self._last:
@@ -2634,18 +2817,29 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             messagebox.showerror('COT 工程配置',str(exc),parent=self.root)
 
     def _refresh_components(self):
-        if hasattr(self, 'component_manager'):
-            if not self._snapshot_valid:
-                # A tab-change event may arrive while loading/solving a design.
-                # Do not reread partially edited inputs or show stale verdicts.
-                self.component_manager.mark_stale()
-                return
-            try: self.component_manager.refresh()
-            except (ValueError, tk.TclError): pass  # unfinished electrical inputs; no fake passing result
+        if self._bom_editor is None:
+            from component_ui import ComponentManager
+            from scrollable_results import ScrollableResults
+            self._bom_scroll = ScrollableResults(self.tab_bom)
+            self._bom_scroll.pack(fill='both', expand=True)
+            self._bom_editor = ComponentManager(
+                self._bom_scroll.content, self._component_context, self._component_changed,
+                viewport=self._bom_scroll.canvas,
+                on_select=lambda ref: self._select_topology_ref(ref, source='bom'),
+                on_view_topology=self._view_bom_ref,
+            )
+        editor = self._bom_editor
+        if not self._snapshot_valid:
+            editor.mark_stale()
+            return
+        editor.refresh()
+        if self._topology_ref in editor.rows and editor.current != self._topology_ref:
+            editor.select_ref(self._topology_ref)
 
     def _component_changed(self, data):
         import copy
         self._component_management = copy.deepcopy(data)
+        self._invalidate_tolerance_result()
         # Metadata-only changes reuse solved currents/voltages, avoiding a costly
         # coupled multi-winding solve. All projections and exports see new ratings.
         if self._last and self._snapshot_valid:
@@ -2653,20 +2847,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 if key in self._last:
                     self._last[key] = dict(self._last[key], component_management=copy.deepcopy(data))
             from design_checks import check_catalog
-            self._last['res']['checks'] = check_catalog(self._last['p'], self._last['res'], self._last['res'].get('loop'))
+            checks = check_catalog(self._last.get('calculation_params', self._last['p']),
+                                   self._last['res'], self._last['res'].get('loop'))
+            self._last['checks'] = self._last['res']['checks'] = checks
             self._rendered_tabs.discard(self.nb.index(self.tab_review))
+            self._rendered_tabs.discard(self.nb.index(self.tab_topology))
+            self._refresh_visible_tab()
         self.status_var.set('关键器件资料/降额规则已应用；请保存设计 JSON。未重复求解功率级。')
-
-    def _open_component_manager(self, _event=None):
-        self._isolated_result_book.select(self._component_page)
-        self._refresh_components()
-        selected = self.topology_tree.selection()
-        if selected and selected[0] in self.component_manager.rows:
-            self.component_manager.tree.selection_set(selected[0])
 
     # ============================================================ ② power tab
     def _build_power_tab(self):
         f = self._build_results_scroll(self.tab_power, 'power')
+        self.power_stats = tk.StringVar(value='待计算')
+        self._result_label(f, textvariable=self.power_stats, style='ResultConclusion.TLabel').pack(fill='x', pady=(2, 4))
         top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
         self.guide_power = self._result_label(top, text=STEP_GUIDE[0],
@@ -2676,24 +2869,18 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         options = ttk.Frame(f)
         options.pack(fill='x', padx=8)
         self.mos_real_time = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text='MOS 图使用真实时间轴（默认按阶段展开，便于查看短分段）',
+        ttk.Checkbutton(options, text='MOS 波形使用真实时间轴',
                         variable=self.mos_real_time, command=self._redraw_power).pack(side='left')
-
-        stats = ttk.Frame(f)
-        stats.pack(fill='x', pady=2)
-        self.power_stats = tk.StringVar(value='')
-        self._result_label(stats, textvariable=self.power_stats,
-                           style='Margin.TLabel').pack(fill='x')
 
         self.fig_power, self.ax_power = _subplots(2, 3, figsize=(11.5, 6.6))
         self.ax_power_drain = tuple(ax.twinx() for ax in self.ax_power.ravel()[-2:])
-        self.canvas_power = FigureCanvasTkAgg(self.fig_power, master=f)
+        self.canvas_power = self._create_result_canvas(self.fig_power, master=f)
         self.canvas_power.get_tk_widget().pack(fill='both', expand=True)
         self._bind_result_overview('power', self.canvas_power)
 
         chk = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         chk.pack(fill='x', pady=(4, 0))
-        ttk.Label(chk, text='设计检查 (Design checks):',
+        ttk.Label(chk, text='计算依据与选型参考',
                   style='Guide.TLabel').pack(anchor='w')
         self.power_checks = tk.StringVar(value='')
         self._result_label(chk, textvariable=self.power_checks, style='Guide.TLabel').pack(fill='x', padx=8)
@@ -2716,37 +2903,45 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             topo = op['topology']
             self._prepare_result_overview('power')
+            if topo == 'LLC':
+                from llc_design import draw_waveforms
+                for axis in self.ax_power_drain:
+                    axis.set_visible(False)
+                draw_waveforms(self.ax_power.ravel(), op, wf)
+                self._mos_voltage_data = None
+                x = op['llc']
+                self.guide_power.configure(text='谐振电流、整流换流和桥臂死区共用时间轴。')
+                self.power_stats.set(
+                    f"开通前残压 {x['v_zvs']:.2f} V · 谐振电流有效值 {op['I_L_rms']:.3f} A · "
+                    f"开关频率 {fmt_eng(op['f_sw'], 'Hz')} · 谐振频率 {fmt_eng(x['fr_Hz'], 'Hz')}")
+                self.mos_notes.set('\n'.join(x['notes']))
+                self.power_checks.set('')
+                _draw_canvas(self.canvas_power)
+                return
+            for axis in self.ax_power_drain:
+                axis.set_visible(True)
 
             cot = op.get('cot')
-            self.guide_power.configure(text=('功率级：各相电感电流、汇流电流、合计输入电流及输出纹波。后两图为代表相高侧 MOS 换流估算。'
+            self.guide_power.configure(text=('末两图是代表相的高侧 MOSFET 换流估算。'
                                              if cot else STEP_GUIDE[0]))
             if cot:
-                stats = (f"{cot['phases']} 相 COT · {'自适应导通时间' if cot['adaptive'] else '固定导通时间'}  |  "
-                         f"每相 fsw={fmt_eng(op['f_sw'], 'Hz')}  ·  相差 {cot['phase_shift_deg']:.4g}°  |  "
-                         f"ton={fmt_eng(cot['ton_s'], 's')}  toff={fmt_eng(cot['toff_s'], 's')}  |  "
-                         f"每相 ΔiL={fmt_eng(op['dI_L'], 'A')}  ·  汇流 ΔiL={fmt_eng(cot['total_output_current_ripple_A'], 'A')}  |  "
-                         f"η={res['eta']*100:.1f}%")
+                stats = (f"{cot['phases']} 相 COT · 每相开关频率 {_result_si(op['f_sw'], 'Hz')} · "
+                         f"汇流电流纹波 {_result_si(cot['total_output_current_ripple_A'], 'App')}")
                 if cot['reverse_current']:
                     stats += '  ·  强制同步，电感谷值为负'
             elif topo == 'QR-FLYBACK':
-                stats = (f"fsw(计算)={fmt_eng(op['f_sw'], 'Hz')}  变频·BCM  "
-                         f"D={op['D']:.3f}  I_pk={fmt_eng(op['I_L_pk'], 'A')}  "
-                         f"V_r={fmt_eng(op['V_r'], 'V')}  "
-                         f"T_ring={op['T_ring'] * 1e6:.2f} us  "
-                         f"η={res['eta'] * 100:.1f}% (模型估算, 未计附加损耗)")
+                stats = (f"BCM · 工作频率 {_result_si(op['f_sw'], 'Hz')} · "
+                         f"原边峰值电流 {_result_si(op['I_L_pk'], 'A')} · "
+                         f"{'频率超限' if op['f_sw'] > op['f_max'] else '频率在上限内'}")
             else:
-                stats = (f"D={op['D']:.3f}  mode={op['mode']}  "
-                         f"ΔiL={fmt_eng(op['dI_L'], 'A')}  I_L_pk={fmt_eng(op['I_L_pk'], 'A')}  "
-                         f"η={res['eta'] * 100:.1f}% (模型估算, 未计附加损耗)")
-                if op['mode'] == 'DCM':
-                    stats += '  ⚠ DCM (轻载或 L 偏小)'
+                stats = (f"{op['mode']} · 占空比 {op['D']:.1%} · "
+                         f"电感电流峰值 {_result_si(op['I_L_pk'], 'A')} · "
+                         f"电感电流纹波 {_result_si(op['dI_L'], 'App')}")
             has_curve = wf.get('ripple_impedance_model') == 'curve'
             ripple = wf['ripple_pp_total'] if has_curve else wf['ripple_pp']
             output = f"OUT{op['feedback_output']}" if res.get('outputs') else '输出'
-            stats += f" · {output}纹波 {fmt_eng(ripple, 'V')}pp" + ('（按导入阻抗）' if has_curve else '')
-            if res.get('outputs'):
-                stats += f" · 总输出 {op['P_out']:g} W / {len(res['outputs'])} 路"
-            self.power_stats.set(f"预设η={op['eta_guess']*100:.1f}%  " + stats)
+            ripple_text = f"{output}纹波 {_result_si(ripple, 'Vpp')}" + ('（阻抗曲线模型）' if has_curve else '')
+            self.power_stats.set(f"{ripple_text} · {stats}")
 
             from power_charts import draw_power_signals, draw_power_switching
             if res.get('outputs'):
@@ -2759,13 +2954,15 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 real_time=self.mos_real_time.get(), drain_axes=self.ax_power_drain)
             notes = list(self._mos_voltage_data['notes'])
             if cot:
+                notes.insert(0, f"{'自适应' if cot['adaptive'] else '固定'}导通时间 · 相差 {cot['phase_shift_deg']:.4g}° · "
+                                f"导通 {fmt_eng(cot['ton_s'], 's')} · 关断 {fmt_eng(cot['toff_s'], 's')}")
                 notes.append(cot['scope'])
             self.mos_notes.set('  '.join(notes))
             data=op.get('parasitics') or {}
             if data.get('edges'):
                 if self.fig_parasitic is None:
                     self.fig_parasitic=Figure(figsize=(10,5),dpi=100)
-                    self.canvas_parasitic=FigureCanvasTkAgg(self.fig_parasitic,master=self.parasitic_host)
+                    self.canvas_parasitic=self._create_result_canvas(self.fig_parasitic,master=self.parasitic_host)
                     self.canvas_parasitic.get_tk_widget().pack(fill='both',expand=True)
                 self.parasitic_host.pack(fill='both',expand=True,padx=8,pady=8)
                 self.parasitic_note.set(data['scope'])
@@ -2782,7 +2979,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.status_var.set(f'Power: {e}')
+            self.power_stats.set(f'功率级显示失败。{e}')
+            self.status_var.set('功率级显示失败。')
 
     @staticmethod
     def _power_checks(op, wf, res, p):
@@ -2817,10 +3015,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 f"反射电压 V_r={fmt_eng(op['V_r'], 'V')}  "
                 f"谷底延迟用 Coss={p['Coss'] * 1e12:.0f} pF (器件参数)")
             if np.isfinite(op['rhp_zero']):
-                out.append(f"RHP 零点 = {fmt_eng(op['rhp_zero'], 'Hz')} → 环路 fc 应 ≪ "
-                           f"{fmt_eng(op['rhp_zero'] / 5, 'Hz')}  (变频 COt 控制建议用峰值电流模式)")
+                out.append(f"右半平面零点 {fmt_eng(op['rhp_zero'], 'Hz')}。建议环路穿越频率远低于 "
+                           f"{fmt_eng(op['rhp_zero'] / 5, 'Hz')}。")
             else:
-                out.append("RHP 零点 = 无 (准谐振 BCM 无右半平面零点) → fc 不受 RHP 限制")
+                out.append('当前 BCM 环路模型无右半平面零点。')
         else:
             ok_mode = op['mode'] == 'CCM'
             L_check = catalog['L_min']
@@ -2879,11 +3077,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                    f"防反二极管(入/出) {res.get('P_din', 0.0):.3f}/{res.get('P_dout', 0.0):.3f})")
         out.append('η为模型估算: 未计附加损耗(温度/辅助电路/输入整流/EMI 等), '
                    '非最终实物效率, 见⑥页注')
-        return '   |   '.join(out)
+        return '\n'.join(out)
 
     # ============================================================ ② stress tab
     def _build_stress_tab(self):
         f = self._build_results_scroll(self.tab_stress, 'stress')
+        self.stress_conclusion = tk.StringVar(value='待计算')
+        self._result_label(f, textvariable=self.stress_conclusion,
+                           style='ResultConclusion.TLabel').pack(fill='x', pady=(2, 4))
         top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
         self.guide_stress = self._result_label(top, text=STEP_GUIDE[1],
@@ -2894,26 +3095,26 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         body.pack(fill='both', expand=True)
         for col in range(2):
             body.columnconfigure(col, weight=1)
-        self.sw_tree = self._make_stress_tree(body, 0, 'MOSFET switch (开关管)')
-        self.di_tree = self._make_stress_tree(body, 1, 'Rectifier diode (整流二极管)')
-        self.swl_tree = self._make_stress_tree(body, 2, 'Switch loss (开关管损耗)')
-        self.dil_tree = self._make_stress_tree(body, 3, 'Diode/SR loss (整流损耗)')
+        self.sw_tree = self._make_stress_tree(body, 0, '开关管应力')
+        self.di_tree = self._make_stress_tree(body, 1, '整流器件应力')
+        self.swl_tree = self._make_stress_tree(body, 2, '开关管损耗')
+        self.dil_tree = self._make_stress_tree(body, 3, '整流器件损耗')
 
         self.fig_stress, self.ax_stress = _subplots(1, 2, figsize=(11.5, 2.4))
         self.fig_stress.set_layout_engine('constrained')
-        self.canvas_stress = FigureCanvasTkAgg(self.fig_stress, master=f)
+        self.canvas_stress = self._create_result_canvas(self.fig_stress, master=f)
         self.canvas_stress.get_tk_widget().pack(fill='x', pady=(4, 0))
         self._bind_result_overview('stress', self.canvas_stress)
 
         self.stress_note = tk.StringVar(value='')
-        self._result_label(f, textvariable=self.stress_note, foreground=BAD).pack(fill='x', pady=3)
+        self._result_label(f, textvariable=self.stress_note, style='Muted.TLabel').pack(fill='x', pady=3)
         self._build_output_result_host(f, 'stress')
 
     def _make_stress_tree(self, parent, col, title):
         frame = ttk.LabelFrame(parent, text=title, padding=4)
         frame.grid(row=col//2, column=col%2, sticky='nsew', padx=3, pady=3)
         tree = ttk.Treeview(frame, columns=('v',), show='tree', height=9)
-        tree.heading('#0', text='quantity (参数)')
+        tree.heading('#0', text='指标')
         tree.column('#0', width=190)
         tree.column('v', width=120, anchor='e')
         tree.pack(fill='both', expand=True)
@@ -2923,13 +3124,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             self._prepare_result_overview('stress')
             stress = device_stress(op)
+            self.stress_conclusion.set(
+                f"主开关漏源电压峰值 {_result_si(stress['switch']['V_max'], 'V')} · "
+                f"主开关电流峰值 {_result_si(stress['switch']['I_pk'], 'A')} · "
+                f"半导体总损耗 {_result_si(res['semi']['P_total'], 'W')}")
             if op.get('cot'):
                 self._update_cot_stress(op, res, stress)
                 return
+            if op.get('llc'):
+                self._update_llc_stress(op, res, stress)
+                return
             self.guide_stress.configure(text=STEP_GUIDE[1])
             for tree, caption in zip((self.sw_tree, self.di_tree, self.swl_tree, self.dil_tree),
-                                     ('MOSFET switch (开关管)', 'Rectifier diode (整流二极管)',
-                                      'Switch loss (开关管损耗)', 'Diode/SR loss (整流损耗)')):
+                                     ('开关管应力', '整流器件应力', '开关管损耗', '整流器件损耗')):
                 tree.master.configure(text=caption)
             note_sw = stress['switch'].get('note', '')
             if op['topology'] in ('FLYBACK', 'QR-FLYBACK'):
@@ -2939,48 +3146,46 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                                 f"包络峰值 {op.get('clamp',{}).get('V_peak',op['V_sw_max']):.3g} V；"
                                 f"Kc 钳位上限 {op['clamp']['V_ceiling']:.3g} V（未叠加振铃裕度，另核实降额）")
             self._fill_tree(self.sw_tree, [
-                ('Vds max (最大漏源电压)', fmt_eng(stress['switch']['V_max'], 'V')),
-                ('Vds blocking (稳态阻断)', fmt_eng(stress['switch']['V_block'], 'V')),
-                ('Id rms (有效值)', fmt_eng(stress['switch']['I_rms'], 'A')),
-                ('Id peak (峰值)', fmt_eng(stress['switch']['I_pk'], 'A')),
-                ('Id avg (平均值)', fmt_eng(stress['switch']['I_avg'], 'A')),
-                ('note (说明)', note_sw),
+                ('漏源电压峰值 Vds', fmt_eng(stress['switch']['V_max'], 'V')),
+                ('稳态阻断电压', fmt_eng(stress['switch']['V_block'], 'V')),
+                ('漏极电流有效值', fmt_eng(stress['switch']['I_rms'], 'A')),
+                ('漏极电流峰值', fmt_eng(stress['switch']['I_pk'], 'A')),
+                ('漏极电流平均值', fmt_eng(stress['switch']['I_avg'], 'A')),
             ])
             self._fill_tree(self.di_tree, [
-                ('Vr max (反压，未计寄生尖峰)', fmt_eng(stress['diode']['V_max'], 'V')),
-                ('Vr blocking (稳态阻断)', fmt_eng(stress['diode']['V_block'], 'V')),
-                ('If rms (有效值)', fmt_eng(stress['diode']['I_rms'], 'A')),
-                ('If peak (峰值)', fmt_eng(stress['diode']['I_pk'], 'A')),
-                ('If avg (平均值)', fmt_eng(stress['diode']['I_avg'], 'A')),
-                ('note (说明)', stress['diode'].get('note', '')),
+                ('反向电压峰值 Vr', fmt_eng(stress['diode']['V_max'], 'V')),
+                ('稳态反向阻断电压', fmt_eng(stress['diode']['V_block'], 'V')),
+                ('正向电流有效值', fmt_eng(stress['diode']['I_rms'], 'A')),
+                ('正向电流峰值', fmt_eng(stress['diode']['I_pk'], 'A')),
+                ('正向电流平均值', fmt_eng(stress['diode']['I_avg'], 'A')),
             ])
             sw = res['semi']['switch']
             self._fill_tree(self.swl_tree, [
-                ('Miller model (平台模型)', sw['gate']['label']),
-                ('Id,on / Id,off (换流电流)', f"{sw['gate']['I_on']:.4g} / {sw['gate']['I_off']:.4g} A"),
-                ('Vgp,on / Vgp,off (当前平台)', f"{sw['gate']['Vgp_on']:.4g} / {sw['gate']['Vgp_off']:.4g} V"),
-                ('P cond (导通损耗)', f'{sw["P_cond"]:.3f} W'),
-                ('P sw(on) = Ptr (开通损耗)', f'{sw["P_sw_on"]:.3f} W'),
-                ('  t2+t3 (开通时间)', f'{((sw.get("t2", 0) + sw.get("t3", 0)) * 1e9):.1f} ns'),
-                ('P sw(off) = Ptf (关断损耗)', f'{sw["P_sw_off"]:.3f} W'),
-                ('  t6+t7 (关断时间)', f'{((sw.get("t6", 0) + sw.get("t7", 0)) * 1e9):.1f} ns'),
-                ('P coss (输出电容损耗)', f'{sw["P_coss"]:.3f} W'),
-                ('P gate (栅极驱动损耗)', f'{sw["P_gate"]:.3f} W'),
-                ('P total (总损耗)', f'{sw["P_total"]:.3f} W'),
+                ('米勒平台模型', sw['gate']['label']),
+                ('换流电流（开通 / 关断）', f"{sw['gate']['I_on']:.4g} / {sw['gate']['I_off']:.4g} A"),
+                ('平台电压（开通 / 关断）', f"{sw['gate']['Vgp_on']:.4g} / {sw['gate']['Vgp_off']:.4g} V"),
+                ('导通损耗', f'{sw["P_cond"]:.3f} W'),
+                ('开通损耗', f'{sw["P_sw_on"]:.3f} W'),
+                ('开通时间 t2 + t3', f'{((sw.get("t2", 0) + sw.get("t3", 0)) * 1e9):.1f} ns'),
+                ('关断损耗', f'{sw["P_sw_off"]:.3f} W'),
+                ('关断时间 t6 + t7', f'{((sw.get("t6", 0) + sw.get("t7", 0)) * 1e9):.1f} ns'),
+                ('输出电容损耗 Coss', f'{sw["P_coss"]:.3f} W'),
+                ('栅极驱动损耗', f'{sw["P_gate"]:.3f} W'),
+                ('总损耗', f'{sw["P_total"]:.3f} W'),
             ])
             di = res['semi']['diode']
             if di.get('sr'):
                 self._fill_tree(self.dil_tree, [
-                    ('SR conduction (同步整流导通)', f'{di["P_sr_cond"]:.3f} W'),
-                    ('Body diode, dead-time (体二极管/死区)', f'{di["P_body"]:.3f} W'),
-                    ('SR gate drive (栅极驱动)', f'{di["P_gate"]:.3f} W'),
-                    ('P total, 2×SR (总损耗)', f'{di["P_total"]:.3f} W'),
+                    ('同步整流导通损耗', f'{di["P_sr_cond"]:.3f} W'),
+                    ('死区体二极管损耗', f'{di["P_body"]:.3f} W'),
+                    ('栅极驱动损耗', f'{di["P_gate"]:.3f} W'),
+                    ('两颗同步管总损耗', f'{di["P_total"]:.3f} W'),
                 ])
             else:
                 self._fill_tree(self.dil_tree, [
-                    ('P cond (导通损耗)', f'{di["P_cond"]:.3f} W'),
-                    ('P rr (反向恢复损耗)', f'{di["P_rr"]:.3f} W'),
-                    ('P total (总损耗)', f'{di["P_total"]:.3f} W'),
+                    ('导通损耗', f'{di["P_cond"]:.3f} W'),
+                    ('反向恢复损耗', f'{di["P_rr"]:.3f} W'),
+                    ('总损耗', f'{di["P_total"]:.3f} W'),
                 ])
             # loss components bar chart
             ax1, ax2 = self.ax_stress
@@ -2989,7 +3194,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                    sw['P_coss'], sw['P_gate']]
             _loss_bars(ax1, swc, swv, f'主 MOSFET 损耗 · {sw["P_total"]:.3f} W', '#c0392b')
             if di.get('sr'):
-                dk = ['SR cond', 'body', 'gate']
+                dk = ['导通', '死区体二极管', '栅极驱动']
                 dv = [di['P_sr_cond'], di['P_body'], di['P_gate']]
                 diode_title = f'SR 损耗 · {di["P_total"]:.3f} W'
             else:
@@ -3020,22 +3225,52 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
             ns = res['semi']['n_switches']
             nd = res['semi']['n_diodes']
-            self.stress_note.set(
-                f'半导体总损耗: {res["semi"]["P_total"]:.3f} W '
-                f'({ns} 开关管 + {nd} 整流管). '
-                f'选型建议 (1.2~1.5× 裕量): MOSFET ≥ '
-                f'{fmt_eng(stress["switch"]["V_max"] * 1.2, "V")} / '
-                f'{fmt_eng(stress["switch"]["I_rms"] * 2, "A")} rms; '
-                f'整流管 ≥ {fmt_eng(stress["diode"]["V_max"] * 1.2, "V")} / '
-                f'{fmt_eng(stress["diode"]["I_avg"] * 2, "A")} avg.\n'
-                + __import__('stress_notes').DIODE_STRESS_NOTE)
-            if res.get('outputs'):
-                self.stress_note.set(self._multi_stress_note(res)+'\n'+__import__('stress_notes').DIODE_STRESS_NOTE)
+            from stress_notes import DIODE_STRESS_NOTE
+            notes = [self._multi_stress_note(res) if res.get('outputs') else f'{ns} 颗开关管 · {nd} 颗整流器件',
+                     note_sw.strip(), stress['diode'].get('note', ''), DIODE_STRESS_NOTE]
+            self.stress_note.set('\n'.join(filter(None, notes)))
             self._update_output_result_cards('stress', op, res)
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.status_var.set(f'Stress: {e}')
+            self.stress_conclusion.set(f'器件应力显示失败。{e}')
+            self.status_var.set('器件应力显示失败。')
+
+    def _update_llc_stress(self, op, res, stress):
+        x=op['llc']
+        self.guide_stress.configure(text='LLC 单颗器件应力与损耗。开通前残压来自连续死区换流计算。')
+        for tree,title in ((self.sw_tree,'单颗桥臂 MOS'),(self.di_tree,'单颗副边整流管'),
+                           (self.swl_tree,'单颗 MOS 损耗'),(self.dil_tree,'整流与 Cr')):
+            tree.master.configure(text=title)
+        self._fill_tree(self.sw_tree,[
+            ('稳态阻断平台',fmt_eng(stress['switch']['V_block'],'V')),
+            ('器件选型电压',fmt_eng(stress['switch']['V_max'],'V')),
+            ('沟道 RMS',fmt_eng(op['I_sw_rms'],'A')),
+            ('导通区峰流',fmt_eng(op['I_sw_pk'],'A')),
+            ('开通前 Vds 残压',fmt_eng(x['v_zvs'],'V')),
+        ])
+        self._fill_tree(self.di_tree,[
+            ('反向峰压',fmt_eng(op['V_d_max'],'V')),
+            ('导通电流 RMS',fmt_eng(op['I_d_rms'],'A')),
+            ('峰值正向电流',fmt_eng(op['I_d_pk'],'A')),
+            ('平均正向电流',fmt_eng(op['I_d_avg'],'A')),
+        ])
+        sw,di=(res['semi'][key] for key in ('switch','diode'))
+        fields=(('导通','P_cond'),('残压开通','P_coss'),('栅极驱动','P_gate'))
+        self._fill_tree(self.swl_tree,[(label,fmt_eng(sw[key],'W')) for label,key in fields])
+        self._fill_tree(self.dil_tree,[
+            ('单颗整流管传导损耗',fmt_eng(di['P_cond'],'W')),
+            ('Cr 端压绝对峰值',fmt_eng(x['cr_peak_V'],'V')),
+            ('Cr 纹波电流 RMS',fmt_eng(op['I_L_rms'],'A')),
+        ])
+        axis_mos,axis_diode=self.ax_stress
+        _loss_bars(axis_mos,[label for label,_ in fields],[sw[key] for _,key in fields],
+                   '单颗桥臂 MOS 估算损耗','#1558b0')
+        _loss_bars(axis_diode,['整流传导','谐振串联电阻'],[4*di['P_total'],res['P_tank']],
+                   '整流桥与谐振支路合计','#8e44ad')
+        self.stress_note.set(f"{x['switch_count']} 颗原边 MOS，4 颗整流管。"
+                             f"启动峰流、寄生尖峰与器件降额见开关仿真白盒。")
+        _draw_canvas(self.canvas_stress)
 
     def _update_cot_stress(self, op, res, stress):
         cot = op['cot']
@@ -3085,11 +3320,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.mag_nb.add(self.tab_mag_winding, text='变压器可绕制评估')
         self._build_winding_tab(self.tab_mag_winding)
         f = self.tab_mag_design
+        self.mag_check = tk.StringVar(value='待计算')
+        self._result_label(f, textvariable=self.mag_check, style='ResultConclusion.TLabel').pack(fill='x', pady=(2, 4))
         top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
-        self.mag_simulation_button = ttk.Button(top, text='仿真配置中心…',
-                                              command=lambda: self._open_simulation_center('field'))
-        self.mag_simulation_button.pack(side='right', padx=5)
         from transformer_preview_ui import open_preview
         self.mag_preview_button = ttk.Button(top, text='3D 结构预览…',
                                             command=lambda: open_preview(self))
@@ -3114,13 +3348,12 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.fig_mag, (self.ax_mag_b, self.ax_mag_loss) = _subplots(
             2, 1, figsize=(6.0, 6.0))
         self.fig_mag.set_layout_engine('constrained')
-        self.canvas_mag = FigureCanvasTkAgg(self.fig_mag, master=plot)
+        self.canvas_mag = self._create_result_canvas(self.fig_mag, master=plot)
         self.canvas_mag.get_tk_widget().pack(fill='both', expand=True)
         from magnetic_report_ui import MagneticReport
         self.mag_report = MagneticReport(right)
         self.mag_report.pack(fill='both', expand=True)
         self.mag_text = self.mag_report
-        self.mag_check = tk.StringVar(value='')
 
     def _set_magnetic_report(self, p, res):
         from magnetic_report_view import build_report
@@ -3144,6 +3377,10 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                             B_pk=ind['B_pk'], dT=ind.get('dT', 0.0)))
         xf = md.get('transformer')
         if xf and xf.get('ok'):
+            if op.get('llc'):
+                B = op['Lm']*wf['i_mag']/(xf['Np']*xf['Ae'])
+                out.append(dict(name='LLC 变压器励磁',t=wf['t'],B=B,
+                                B_pk=xf['B_pk'],dT=xf.get('dT',0.)))
             if op['topology'] == 'ACF-FORWARD':
                 B = op['Lm_forward']*wf['i_mag']/(xf['Np']*xf['Ae'])
                 out.append(dict(name='正激变压器 T', t=wf['t'], B=B,
@@ -3203,7 +3440,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             if parts:
                 labels, values = [], []
                 for name, core, copper in parts:
-                    prefix = '输出电感' if name.startswith('L') else '变压器'
+                    prefix = ('谐振电感' if op.get('llc') else '输出电感') if name.startswith('L') else '变压器'
                     labels.extend([prefix+' 磁芯', prefix+' 铜损'])
                     values.extend([core, copper])
                 _loss_bars(ax_loss, labels, values, '磁件损耗',
@@ -3215,7 +3452,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.status_var.set(f'Mag: {e}')
+            self.mag_check.set(f'磁件显示失败。{e}')
+            self.status_var.set('磁件显示失败。')
 
     # ============================================================ ④ loop tab
     def _build_loop_tab(self):
@@ -3228,7 +3466,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             variable=self.loop_view, value='反馈路负载阶跃', command=self._redraw_loop_view)
         self.loop_step_button.pack(side='left', padx=(4, 2))
         self.loop_bode_button = ttk.Radiobutton(
-            self.loop_view_row, text='Bode', style='LoopView.Toolbutton',
+            self.loop_view_row, text='频率响应（Bode）', style='LoopView.Toolbutton',
             variable=self.loop_view, value='主反馈 Bode', command=self._redraw_loop_view)
         self.loop_bode_button.pack(side='left', padx=2)
         self.loop_multi_button = ttk.Radiobutton(
@@ -3238,23 +3476,18 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self.loop_bode_controls = ttk.Frame(f)
         self.loop_bode_controls.pack(fill='x')
         controls = self.loop_bode_controls
+        self.loop_conclusion = tk.StringVar(value='待计算 · 环路裕度')
+        self._result_label(controls, textvariable=self.loop_conclusion,
+                           style='ResultConclusion.TLabel').pack(fill='x', pady=(2, 4))
         top = ttk.Frame(controls, style='Guide.TFrame', padding='8 4')
         top.pack(fill='x', pady=(2, 4))
-        self.guide_loop = ttk.Label(top, text=STEP_GUIDE[3],
+        self.guide_loop = self._result_label(top, text=STEP_GUIDE[3],
                                     style='Guide.TLabel')
-        self.guide_loop.pack(side='left')
-
-        margin_row = ttk.Frame(controls)
-        margin_row.pack(fill='x', pady=3)
-        ttk.Label(margin_row, text='稳定裕度',
-                  style='Muted.TLabel').pack(side='left')
-        for k in ('pm', 'gm', 'fc'):
-            ttk.Label(margin_row, textvariable=self.margin_info[k],
-                      style='Margin.TLabel').pack(side='left', padx=8)
+        self.guide_loop.pack(fill='x')
 
         # Reminder about the output-cap ESR zero (not modelled).
-        self.esr_note_label = ttk.Label(controls, textvariable=self.loop_esr_note,
-                                        wraplength=900, anchor='w',
+        self.esr_note_label = self._result_label(controls, textvariable=self.loop_esr_note,
+                                        anchor='w',
                                         style='Muted.TLabel')
         self.esr_note_label.pack(fill='x', pady=(0, 3))
 
@@ -3262,14 +3495,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                               padding=4)
         self.loop_tune_frame = tune
         tune.pack(fill='x', pady=2)
-        ttk.Label(tune, text='目标 fc / Hz').pack(side='left')
+        ttk.Label(tune, text='目标穿越频率 / Hz').pack(side='left')
         self.params['fc_target'] = tk.DoubleVar(value=10.)
         self.params['fc_target_unit'] = tk.StringVar(value='k')
         self.unit_opts['fc_target'] = ['', 'k', 'M']
         ttk.Entry(tune, textvariable=self.params['fc_target'], width=7).pack(side='left')
         ttk.Combobox(tune, textvariable=self.params['fc_target_unit'],
                      values=['', 'k', 'M'], width=3, state='readonly').pack(side='left')
-        ttk.Label(tune, text='PM / °').pack(side='left', padx=(12, 2))
+        ttk.Label(tune, text='整定目标 PM / °').pack(side='left', padx=(12, 2))
         self.params['pm_target'] = tk.DoubleVar(value=60.0)
         ttk.Entry(tune, textvariable=self.params['pm_target'], width=5).pack(side='left')
         self.tune_type_label = ttk.Label(tune, text='类型')
@@ -3300,13 +3533,13 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         response_note.pack(side='left', padx=8, fill='x', expand=True)
         response_note.bind('<Configure>', lambda e: response_note.configure(wraplength=max(100,e.width-10)))
         self.loop_step_caption = tk.StringVar()
-        self.loop_step_note = ttk.Label(f, textvariable=self.loop_step_caption,
-            style='Muted.TLabel', anchor='w')
+        self.loop_step_note = self._result_label(f, textvariable=self.loop_step_caption,
+            style='ResultConclusion.TLabel', anchor='w')
         self._loop_step_tooltip = Tooltip(self.loop_step_note, '')
         self.canvas_loop_step = None
 
         self.fig_loop, self.ax_loop = _subplots(2, 2, figsize=(11.5, 6.6))
-        self.canvas_loop = FigureCanvasTkAgg(self.fig_loop, master=f)
+        self.canvas_loop = self._create_result_canvas(self.fig_loop, master=f)
         self.canvas_loop.get_tk_widget().pack(fill='both', expand=True)
 
     def run_auto_tune(self):
@@ -3317,6 +3550,9 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         try:
             p = self.get_params()
             p.update(self._rcd_parameters())
+            if p['topology']=='LLC':
+                self._llc_auto_tune(p)
+                return
             if self._cot_active():
                 self._cot_auto_tune(p)
                 return
@@ -3440,6 +3676,25 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             f"   Ki={candidate['cot_ki_hz_per_s']:.4g} Hz/s")
         self.schedule_update()
 
+    def _llc_auto_tune(self,p):
+        from input_voltage_range import calculate_input_operating_point
+        from llc_model import controller_gains
+        from loop_tuning import analyze_loop
+        from plants import build_loop_models
+
+        snapshot=calculate_input_operating_point(p)
+        op=snapshot['op']
+        kp,ki=controller_gains(snapshot['p'],op['llc'],fc=p['fc_target'],pm=p['pm_target'])
+        updated=dict(snapshot['p'],llc_kp=kp,llc_ki=ki)
+        models,_=build_loop_models(updated,op)
+        checked=analyze_loop(updated,models,op)
+        if not checked['closed_loop_stable'] or checked['fc'] is None:
+            raise ValueError('LLC PI 候选未通过闭环极点和 0 dB 检查')
+        self.set_param('llc_kp',kp)
+        self.set_param('llc_ki',ki)
+        self.tune_result.set(f"LLC PI  fc={checked['fc']:.0f} Hz / PM={checked['pm']:.1f}°；两端沿用同一组 PI。")
+        self.schedule_update()
+
     def _redraw_loop_view(self):
         if self._snapshot_valid and self._last:
             self._update_loop(self._last['p'])
@@ -3452,7 +3707,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         if canvas is self.canvas_loop_step:
             self.loop_bode_controls.pack_forget()
             if not self.loop_step_note.winfo_manager():
-                self.loop_step_note.pack(side='bottom', fill='x', padx=4)
+                self.loop_step_note.pack(fill='x', padx=4, after=self.loop_view_row)
         else:
             self.loop_step_note.pack_forget()
             if not self.loop_bode_controls.winfo_manager():
@@ -3469,15 +3724,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
         if self.canvas_loop_step is None:
             self.fig_loop_step, self.ax_loop_step = _subplots(1, 2, figsize=(11.5, 4.4))
-            self.canvas_loop_step = FigureCanvasTkAgg(self.fig_loop_step, master=self.loop_view_row.master)
-        self.loop_step_caption.set(
-            (data.get('warning') or '平均小信号估算 · 计算说明')
-            if data.get('available') else '')
+            self.canvas_loop_step = self._create_result_canvas(self.fig_loop_step, master=self.loop_view_row.master)
+        if data.get('available'):
+            rise, fall = data['rise'], data['fall']
+            self.loop_step_caption.set(
+                f"OUT{data['feedback_output']} · 升载压降 {_result_si(rise['droop_V'], 'V')} · "
+                f"降载过冲 {_result_si(fall['overshoot_V'], 'V')}")
+        else:
+            self.loop_step_caption.set(f"待复核 · {data.get('reason', '本工况没有有效的负载阶跃结果。')}")
         self.loop_esr_note.set((
             '平均小信号估算 · 只扰动并显示所选反馈路。'
             '恢复容差为额定点端口电压的 0.1% 与本次峰值偏移的 2% 取较大值。'
             + data.get('notes', '')) if data.get('available') else data['reason'])
-        self._loop_step_tooltip.text = self.loop_esr_note.get()
+        self._loop_step_tooltip.text = '\n'.join(filter(None, (data.get('warning'), self.loop_esr_note.get())))
         draw_feedback_load_step(self.ax_loop_step, data)
         self.fig_loop_step.tight_layout()
         self._show_loop_canvas(self.canvas_loop_step)
@@ -3560,13 +3819,22 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 current['loop'] = loop
                 current['res']['loop'] = loop
                 current['checks'] = check_catalog(current.get('calculation_params', p), current['res'], loop)
-                if hasattr(self, 'review_tree'):
-                    self._update_review()
+                if self.nb.select() == str(self.tab_review):
+                    self._refresh_acceptance()
             fc, pm, gm = loop['fc'], loop['pm'], loop['gm_db']
-            self.margin_info['pm'].set(f'相位裕度: {pm:.1f}°' if pm is not None else '相位裕度: 未定义')
-            self.margin_info['gm'].set(f'增益裕度: {gm:.1f} dB' if gm is not None else
-                '增益裕度: 扫描范围内未检出' if loop.get('gm_scan_limited') or loop.get('gm_band_limited') else '增益裕度: 无有限值')
-            self.margin_info['fc'].set(f'穿越频率: {fc:.1f} Hz' if fc is not None else '穿越频率: 未检出')
+            self.margin_info['pm'].set(f'相位裕度 {pm:.1f}°' if pm is not None else '相位裕度未定义')
+            self.margin_info['gm'].set(f'增益裕度 {gm:.1f} dB' if gm is not None else
+                '增益裕度未检出' if loop.get('gm_scan_limited') or loop.get('gm_band_limited') else '增益裕度无有限值')
+            self.margin_info['fc'].set(f'穿越频率 {_result_si(fc, "Hz")}' if fc is not None else '穿越频率未检出')
+            minimum = loop['min_pm']
+            if minimum is None or not np.isfinite(minimum):
+                verdict = '待复核 · 相位裕度未定义'
+            else:
+                state = '满足' if phase_margin_passes(minimum) else '未达标'
+                verdict = f'最小相位裕度 {minimum:.6g}° · {state}（验收 > {MIN_PHASE_MARGIN_DEG:g}°）'
+            if loop.get('closed_loop_stable') is False:
+                verdict = '模型闭环不稳定 · '+verdict
+            self.loop_conclusion.set(' · '.join((verdict, self.margin_info['fc'].get(), self.margin_info['gm'].get())))
             note = '理想电容模型未包含 ESR 零点；低频平均模型结果须经仿真和 FRA 复核。'
             if op.get('outputs'):
                 note += f" 当前为 OUT{op['feedback_output']}，采用刚性匝比能量等效，不验证各路独立负载动态。"
@@ -3582,7 +3850,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 note = self._last_plant.model_note
             if p['topology'] == 'ACF-FORWARD':
                 note = f"正激采用低频 Buck 派生模型，不含钳位完整动态。建议 fc ≤ {fmt_eng(op['fc_recommended_max'], 'Hz')}。"
-            if op['mode'] != 'CCM' and not self._cot_active() and not op.get('coupled_solution') and not uses_dcm_peak_energy(p,op):
+            if op['mode'] != 'CCM' and not self._cot_active() and not op.get('llc') and not op.get('coupled_solution') and not uses_dcm_peak_energy(p,op):
                 note += ' 当前采用低频单极点 DCM 近似。'
             if fc is None:
                 note += ' 扫描范围内无下降穿越，不能用扫描末端作为 fc。'
@@ -3648,7 +3916,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             self.fig_loop.tight_layout()
             _draw_canvas(self.canvas_loop)
         except Exception as e:
-            self.status_var.set(f'环路计算失败: {e}')
+            self.loop_conclusion.set('环路计算失败。')
+            self.status_var.set(f'环路计算失败。{e}')
             self._loop_result = None
             # A failed current numerical model is a completed error, not a
             # reason to resubmit the same job on every tab refresh.
@@ -3667,7 +3936,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 self._last['loop'] = None
                 self._last['res']['loop'] = None
                 self._last['checks'] = check_catalog(self._last.get('calculation_params', p), self._last['res'], loop_error=str(e))
-                if hasattr(self, 'review_tree'): self._update_review()
+                if self.nb.select() == str(self.tab_review):
+                    self._refresh_acceptance()
 
     @staticmethod
     def _find_crossover(mag, omega, fc_target=None):
@@ -3690,18 +3960,19 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         from capacitor_ui import CapacitorResultsTable
 
         f = self._build_results_scroll(self.tab_cap, 'cap')
+        self.cap_summary = tk.StringVar(value='待计算')
+        self._result_label(f, textvariable=self.cap_summary,
+                           style='ResultConclusion.TLabel').pack(fill='x', pady=(2, 4))
         guide = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
         guide.pack(fill='x', pady=(2, 4))
         self._result_label(guide,
-                  text='电容纹波：整周期 DFT，全频点复阻抗分流；RMS 与损耗、评审及报告共用一份结果。',
+                  text='下表列出每颗电容的纹波电流与损耗。并联支路按各频点的复阻抗分流。',
                   style='Guide.TLabel').pack(fill='x')
-        self.cap_summary = tk.StringVar(value='')
-        self._result_label(f, textvariable=self.cap_summary, foreground='#1a5fb4').pack(fill='x', pady=3)
         self.cap_results_table = CapacitorResultsTable(f)
         self.cap_results_table.pack(fill='x', padx=6, pady=(3, 6))
         self.fig_cap, (self.ax_cap_tot, self.ax_cap_band) = _subplots(
             2, 1, figsize=(11.5, 7.0))
-        self.canvas_cap = FigureCanvasTkAgg(self.fig_cap, master=f)
+        self.canvas_cap = self._create_result_canvas(self.fig_cap, master=f)
         self.canvas_cap.get_tk_widget().pack(fill='both', expand=True)
         self._bind_result_overview('cap', self.canvas_cap)
         self._build_output_result_host(f, 'cap')
@@ -3712,19 +3983,21 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             multiple = bool(res.get('outputs'))
             self.cap_results_table.refresh(res)
             lead = '共享输入' if multiple else '输入'
-            parts = [f"{lead} {ra['total_in']:.4g} A rms / {res['P_cap_in']:.4g} W"]
+            parts = [f"{lead}电容组 {_result_si(ra['total_in'], 'A')} RMS / {_result_si(res['P_cap_in'], 'W')}"]
             if multiple:
-                parts.extend(f"OUT{row['id']}{' ★' if row['id']==op['feedback_output'] else ''}：{row['capacitors']['total_out']:.4g} A rms / {row['P_cap']:.4g} W"
+                parts.extend(f"OUT{row['id']}{'（反馈路）' if row['id']==op['feedback_output'] else ''} "
+                             f"{_result_si(row['capacitors']['total_out'], 'A')} RMS / {_result_si(row['P_cap'], 'W')}"
                              for row in res['outputs'])
             else:
-                parts.append(f"输出 {ra['total_out']:.4g} A rms / {ra['output']['loss_W']:.4g} W")
-            self.cap_summary.set('   |   '.join(parts))
+                parts.append(f"输出电容组 {_result_si(ra['total_out'], 'A')} RMS / {_result_si(ra['output']['loss_W'], 'W')}")
+            self.cap_summary.set(' · '.join(parts))
             self._draw_cap(ra, shared_only=multiple)
             self._update_output_result_cards('cap', op, res)
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.status_var.set(f'Cap: {e}')
+            self.cap_summary.set(f'电容纹波显示失败。{e}')
+            self.status_var.set('电容纹波显示失败。')
 
     def _draw_cap(self, ra, shared_only=False):
         # Separate panels retain every harmonic value without squeezing four
@@ -3787,31 +4060,24 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
 
     # ============================================================ RCD (RC) clamp
     def _build_rcd_tab(self):
-        f = self.tab_rcd
-        top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
-        top.pack(fill='x', pady=(2, 4))
-        self.guide_rcd = ttk.Label(top,
-            text='RCD (RC) 吸收钳位 (反激/准谐振反激原边漏感) — 输入 Kc, K, ΔC, 其余取当前设计',
-                                   style='Guide.TLabel')
-        self.guide_rcd.pack(side='left')
+        from scrollable_results import ScrollableResults
 
-        inp = ttk.LabelFrame(f,
-                             text='输入 Inputs (其余量取当前运行点: V_reflect / Lm / I_pk / f_sw)',
-                             padding=4)
-        inp.pack(fill='x', pady=2)
-        self.rcd_input_frame = inp
-        ttk.Label(inp, text='所有拓扑配置请在左侧列编辑；本页展示钳位计算与波形。',
-                  style='Muted.TLabel', wraplength=900).pack(fill='x')
+        scroll = ScrollableResults(self.tab_rcd)
+        scroll.pack(fill='both', expand=True)
+        f = scroll.content
+        self.rcd_result = tk.StringVar(value='待计算')
+        headline = self._result_label(f, textvariable=self.rcd_result, style='ResultConclusion.TLabel')
+        headline.pack(fill='x', pady=(2, 4))
+        self.fig_rcd, self.ax_rcd = _subplots(1, 2, figsize=(11.2, 5.4))
+        self.canvas_rcd = self._create_result_canvas(self.fig_rcd, master=f)
+        self.canvas_rcd.get_tk_widget().pack(fill='x', pady=(0, 4))
+        _expand_paired_plots(scroll, self.canvas_rcd, self.ax_rcd, headline)
 
-        self.rcd_result = tk.StringVar(value='')
-        res = ttk.LabelFrame(f, text='输出 Outputs', padding=4)
-        res.pack(fill='x', pady=2)
-        ttk.Label(res, textvariable=self.rcd_result, style='Result.TLabel',
-                  wraplength=980).pack(side='left', fill='x', expand=True)
-
-        self.fig_rcd, self.ax_rcd = _subplots(1, 2, figsize=(11.2, 3.8))
-        self.canvas_rcd = FigureCanvasTkAgg(self.fig_rcd, master=f)
-        self.canvas_rcd.get_tk_widget().pack(fill='both', expand=True)
+        self.guide_rcd = self._result_label(f,
+            text='波形显示原边漏感尖峰和钳位电容电压。参数见左侧「功率级与钳位」。', style='Muted.TLabel')
+        self.guide_rcd.pack(fill='x', padx=8, pady=3)
+        self.rcd_detail = tk.StringVar()
+        self._result_label(f, textvariable=self.rcd_detail, style='Muted.TLabel').pack(fill='x', padx=8, pady=3)
 
     def _update_rcd(self, op, p):
         """Standalone RCD (RC) clamp tab.  Inputs from the tab (K/Kc/dC); the
@@ -3825,33 +4091,31 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 self._update_active_clamp(op, p)
                 return
             if topo not in ('FLYBACK', 'QR-FLYBACK'):
-                self.rcd_result.set(
-                    f'RCD 仅适用于反激 / 准谐振反激 (当前拓扑: {topo})')
-                self.fig_rcd.tight_layout()
+                self.rcd_result.set('当前拓扑无 RCD 钳位结果。')
+                self.rcd_detail.set('')
                 _draw_canvas(self.canvas_rcd)
                 return
             from flyback_clamp import rcd_components
             rcd = rcd_components(op,p)
-            self.guide_rcd.configure(text='矩阵换流 / Kc / ΔC；kij 在左栏⑦编辑，旧 K 不参与本模型。' if op.get('coupled_model') else
-                                     '快速漏感包络 / Kc / 旧 K / ΔC；与周期波形及功耗使用同一模型。')
+            guide = ('按耦合矩阵计算换流。耦合系数见左侧「磁件与温升」。' if op.get('coupled_model') else
+                     '按漏感包络估算钳位电压与损耗。')
+            self.guide_rcd.configure(text=guide + '钳位参数见左侧「功率级与钳位」。')
             dC = p.get('dC',.1)
             leakage = '由矩阵求解' if rcd['L_leak'] is None else f"{rcd['L_leak']*1e6:.4g} µH"
             self.rcd_result.set(
-                f"V_reflect = {rcd['V_reflect']:.1f} V   |   "
-                f"V_clamp = {rcd['V_clamp']:.1f} V   |   "
-                f"L_leak = {leakage}   |   "
-                f"P_res = {rcd['P_res']:.3f} W   |   "
-                f"R_snub = {rcd['R_snub'] / 1e3:.2f} kΩ   |   "
-                f"C_snub = {rcd['C_snub'] * 1e9:.1f} nF   |   "
-                f"ΔV_c = {rcd['dV_clamp']:.3g} V ({dC * 100:.0f}% of V_clamp)\n"
+                f"钳位电压 {rcd['V_clamp']:.1f} V · 电阻损耗 {rcd['P_res']:.3f} W · "
+                f"电阻 {rcd['R_snub'] / 1e3:.2f} kΩ · 电容 {rcd['C_snub'] * 1e9:.1f} nF")
+            self.rcd_detail.set(
+                f"反射电压 {rcd['V_reflect']:.1f} V · 漏感 {leakage} · "
+                f"钳位电容纹波 {rcd['dV_clamp']:.3g} V（钳位电压的 {dC:.0%}）\n"
                 + ' '.join(rcd['notes']))
             self._plot_rcd_waveform(ax, op, rcd, dC)
-            self.fig_rcd.tight_layout()
             _draw_canvas(self.canvas_rcd)
         except Exception as e:
             import traceback; traceback.print_exc()
             try:
-                self.rcd_result.set(f'RCD error: {e}')
+                self.rcd_result.set(f'钳位计算失败。{e}')
+                self.rcd_detail.set('')
             except Exception:
                 pass
 
@@ -3871,14 +4135,14 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         ax_i.set(title='双极性励磁电流与钳位复位', xlabel='时间 / µs', ylabel='A')
         ax_i.legend(fontsize=9)
         self.rcd_result.set(
-            f"D={op['D']:.3f} / 上限 {op['forward_d_max']:.2f}  | "
-            f"V_reset={op['V_reset']:.2f} V  |  低侧 C_clamp 电压={op['V_clamp']:.2f} V  | "
-            f"隆起≈{op['V_clamp_hump']:.2f} V  |  主/辅助 MOSFET 峰值估算={op['V_sw_max']:.2f} V\n"
-            f"I_mag(pk)=±{op['I_mag_pk']:.3f} A  |  I_clamp(rms)={op['I_clamp_rms']:.3f} A  | "
-            f"C_clamp ≥ {fmt_eng(op['C_clamp_min'],'F')} (隆起≤5%)  | "
-            f"f_res={fmt_eng(op['f_clamp'],'Hz')}  |  建议 fc≤{fmt_eng(op['fc_recommended_max'],'Hz')}\n"
+            f"钳位电压 {op['V_clamp']:.2f} V · MOS 漏源电压峰值估算 {op['V_sw_max']:.2f} V · "
+            f"占空比 {op['D']:.1%} / 上限 {op['forward_d_max']:.1%}")
+        self.rcd_detail.set(
+            f"复位电压 {op['V_reset']:.2f} V · 钳位电压隆起约 {op['V_clamp_hump']:.2f} V · "
+            f"励磁电流峰值 ±{op['I_mag_pk']:.3f} A · 钳位电流有效值 {op['I_clamp_rms']:.3f} A\n"
+            f"钳位电容 ≥ {fmt_eng(op['C_clamp_min'], 'F')}（隆起 ≤ 5%）· "
+            f"谐振频率 {fmt_eng(op['f_clamp'], 'Hz')} · 建议穿越频率 ≤ {fmt_eng(op['fc_recommended_max'], 'Hz')}\n"
             + ' '.join(op['warnings']))
-        self.fig_rcd.tight_layout()
         _draw_canvas(self.canvas_rcd)
 
     def _plot_rcd_waveform(self, ax, op, rcd, dC):
@@ -3902,7 +4166,7 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                            alpha=0.15, color='#1558b0',
                            label=f"ΔV_c={rcd['dV_clamp']:.2f} V")
         ax[0].set_title('钳位电容电压（按钳位电流的小纹波 RC 重建）')
-        ax[0].set_xlabel('time, us'); ax[0].set_ylabel('V')
+        ax[0].set_xlabel('时间 / µs'); ax[0].set_ylabel('电压 / V')
         ax[0].legend(fontsize=9); ax[0].grid(True)
         ax[1].plot(t * 1e6, Vd, lw=1.2, color='#c0392b')
         ax[1].axhline(V_spike, color='g', ls='--', lw=0.8,
@@ -3910,21 +4174,16 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         ax[1].axhline(V_plateau, color='b', ls=':', lw=0.8,
                       label=f'平台 V_in+V_reflect={V_plateau:.1f} V')
         ax[1].set_title('Q1 漏源电压（与功率级及应力同一模型）')
-        ax[1].set_xlabel('time, us'); ax[1].set_ylabel('V')
+        ax[1].set_xlabel('时间 / µs'); ax[1].set_ylabel('电压 / V')
         ax[1].legend(fontsize=9); ax[1].grid(True)
 
     # ==================================================== ⑧ compensation RC
     COMP_TOPOS = [
-        ('opamp3', '普通运放补偿网络（跟随⑤页类型）'),
-        ('gm3', '跨导运放补偿网络（跟随⑤页类型）'),
+        ('opamp3', '普通运放补偿网络（跟随环路页类型）'),
+        ('gm3', '跨导运放补偿网络（跟随环路页类型）'),
         ('tl431nf', 'TL431+光耦 — 无快车道 (LED 接独立偏置)'),
         ('tl431f', 'TL431+光耦 — 快车道 (LED 接 Vout)'),
     ]
-    # reference figure per topology, shown on the tab (file in comp_images/)
-    COMP_IMAGES = {
-        'opamp3': 'opamp3_clean.png', 'gm3': 'gm3.png',
-        'tl431nf': 'tl431nf.png', 'tl431f': 'tl431f_clean.png',
-    }
     # per-topology user inputs: key -> (label, default, unit options)
     COMP_INPUTS = {
         'opamp3': [('R1', '上分压电阻 R1 (Vo→FB, Ω)', 10e3, ['', 'k']),
@@ -3974,88 +4233,154 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                    ('Copto', 'C_opto (F)', 2e-9, ['n', 'p']),
                    ('R1', 'R1 上分压 (Ω)', 40e3, ['', 'k']),
                    ('C1', 'C1 (FB→阴极) (F)', 4e-9, ['n', 'p', 'u']),
-                   ('R_pz', 'R_pz (FB→阴极第二支路) (Ω)', 15.0, ['', 'k']),
-                   ('C_pz', 'C_pz (第二支路串联) (F)', 790e-9, ['n', 'p', 'u']),
+                   ('R_pz', 'R_pz (并联 R_LED 的快车道支路) (Ω)', 15.0, ['', 'k']),
+                   ('C_pz', 'C_pz (与 R_pz 串联) (F)', 790e-9, ['n', 'p', 'u']),
                    ('C2', 'C2 并联光耦 (F)', 1e-9, ['n', 'p', 'u'])],
     }
 
     def _build_comp_tab(self):
-        f = self.tab_comp
-        top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
-        top.pack(fill='x', pady=(2, 4))
-        self.guide_comp = ttk.Label(top, wraplength=1400, justify='left',
-            text='⑨ 环路补偿电路参数: 由⑤页算出的 KP / 零点 fz / 极点 fp 反推阻容值。'
-                 '只需填少量初始阻容 (分压/LED 等), 其余全部解出; '
-                 '正向自动跟随⑤页二型/三型；二型保留有限高频极点，忽略未启用的第二零极点。'
-                 '参考: TND381-D (TL431), Venable K-factor。',
-            style='Guide.TLabel')
-        self.guide_comp.pack(side='left', fill='x', expand=True)
+        from scrollable_results import ScrollableResults
+        from topology_canvas import TopologyCanvas
 
-        sel = ttk.LabelFrame(f, text='参考网络与计算方向', padding=4)
-        sel.pack(fill='x', pady=2)
-        choices = ttk.Frame(sel); choices.pack(fill='x')
-        actions = ttk.Frame(sel); actions.pack(fill='x',pady=3)
+        network = ttk.Frame(self.tab_comp, padding=(6, 4))
+        network.pack(fill='x')
+        ttk.Label(network, text='补偿网络').pack(side='left', padx=(0, 8))
         self.comp_type = tk.StringVar(value='opamp3')
-        ttk.Combobox(choices, textvariable=self.comp_type, width=42,
-                     values=[label for _k, label in self.COMP_TOPOS],
-                     state='readonly').pack(side='left', padx=4)
+        self._comp_selector = ttk.Combobox(network, textvariable=self.comp_type, width=38,
+            values=[label for _k, label in self.COMP_TOPOS], state='readonly')
+        self._comp_selector.pack(side='left', fill='x', expand=True)
+
+        panes = ttk.Panedwindow(self.tab_comp, orient='vertical')
+        panes.pack(fill='both', expand=True, padx=5, pady=(0, 4))
+        self._comp_scroll = ScrollableResults(panes)
+        self._comp_scroll.canvas.configure(height=335)
+        panes.add(self._comp_scroll, weight=1)
+        self.fig_comp, self.ax_comp = _subplots()
+        self._comp_diagram_view = TopologyCanvas(
+            panes, fit_label='适合窗口', preferred_height=205, expand_label='放大查看')
+        panes.add(self._comp_diagram_view, weight=1)
+        f = self._comp_scroll.content
+        self.comp_result = tk.StringVar(value='待计算')
+        res = self._comp_result_frame = ttk.LabelFrame(f, text='计算结果与回代校验', padding=6)
+        res.pack(fill='x', pady=2)
+        self._comp_result_label = self._result_label(res, textvariable=self.comp_result,
+                                                      style='ResultConclusion.TLabel')
+        self._comp_result_label.pack(fill='x')
+
+        sel = self._comp_direction_frame = ttk.LabelFrame(f, text='计算方向', padding=4)
+        sel.pack(fill='x', pady=2)
+        actions = self._comp_actions = ttk.Frame(sel)
+        actions.pack(fill='x', pady=3)
         self.comp_type2 = tk.BooleanVar(value=False)
-        self.chk_comp_t2 = ttk.Checkbutton(choices,text='旧版简化（不含高频极点）',variable=self.comp_type2)
-        self.chk_comp_t2.pack(side='left', padx=10)
+        self.chk_comp_t2 = ttk.Checkbutton(sel, text='旧版简化（不含高频极点）', variable=self.comp_type2)
+        self.chk_comp_t2.pack(anchor='w', padx=4)
         # design direction: forward = constants -> parts, reverse = parts ->
-        # constants (written back to tab 4, Bode plot follows)
+        # Constants written back to the loop page.
         self.comp_dir = tk.StringVar(value='fwd')
-        ttk.Radiobutton(actions, text='正向：参数→阻容',
-                        variable=self.comp_dir, value='fwd',
-                        command=self._on_comp_dir_change).pack(
-            side='left', padx=(10, 2))
-        ttk.Radiobutton(actions, text='反向：阻容→参数',
-                        variable=self.comp_dir, value='rev',
-                        command=self._on_comp_dir_change).pack(
-            side='left', padx=2)
+        self._comp_directions = tuple(
+            ttk.Radiobutton(actions, text=label, variable=self.comp_dir, value=value,
+                            command=self._on_comp_dir_change)
+            for value, label in (('fwd', '由环路参数计算阻容'), ('rev', '由阻容反推环路参数')))
         self.btn_comp_fwd = ttk.Button(actions, text='计算阻容',
                                        style='Accent.TButton',
                                        command=self._run_comp_calc)
-        self.btn_comp_fwd.pack(side='left', padx=8)
-        self.btn_comp_rev = ttk.Button(actions, text='反推并写入⑤页',
+        self.btn_comp_rev = ttk.Button(actions, text='反推并写入环路页',
                                        style='Accent.TButton',
                                        command=self._run_comp_reverse)
+        actions.bind('<Configure>', self._layout_comp_actions)
         self.comp_type.trace('w', lambda *a: self._rebuild_comp_inputs())
 
-        self.comp_inframe = ttk.LabelFrame(f, text='用户初始阻容 (其余阻容由 KP/fz/fp 反推)', padding=4)
+        self.comp_inframe = ttk.LabelFrame(f, text='已知阻容与参考参数', padding=4)
         self.comp_inframe.pack(fill='x', pady=2)
+        self.comp_inframe.bind('<Configure>', self._layout_comp_inputs)
         self.comp_vars = {}
+
+        guidance = ttk.LabelFrame(f, text='计算依据', padding=6)
+        guidance.pack(fill='x', pady=2)
+        self._comp_notes = self._result_label(guidance, style='Muted.TLabel')
+        self.guide_comp = self._result_label(guidance,
+            text='正向计算由环路页的 KP、零点和极点换算阻容。'
+                 '二型补偿保留高频极点，使用一个有限零点。'
+                 '参考 TND381-D（TL431）与 Venable K-factor。',
+            style='Guide.TLabel')
+        self.guide_comp.pack(fill='x', pady=(2, 0))
+
         self._on_comp_dir_change()
+        self.comp_type2.trace_add('write', self._schedule_feedback_redraw)
+        self._comp_llc_mode = False
+        self._comp_classic_guide = self.guide_comp.cget('text')
 
-        self.comp_result = tk.StringVar(value='')
-        res = ttk.LabelFrame(f, text='计算结果 (Results — 与⑤页一致性与设计提示)', padding=4)
-        res.pack(fill='x', pady=2)
-        ttk.Label(res, textvariable=self.comp_result, style='Result.TLabel',
-                  wraplength=1000, justify='left').pack(side='left', fill='x', expand=True)
+    def _sync_compensation_editor(self, llc):
+        if llc and self._comp_key() not in ('tl431f', 'tl431nf'):
+            from example_catalog import tl431_network_key
+            try:
+                voltage = self.get_param('V_out')
+            except (tk.TclError, ValueError):
+                voltage = DEFAULT_PARAMS['V_out']
+            self.comp_type.set(dict(self.COMP_TOPOS)[tl431_network_key(voltage)])
+        if llc == self._comp_llc_mode:
+            return
+        self._comp_llc_mode = llc
+        options = [label for key, label in self.COMP_TOPOS if not llc or key.startswith('tl431')]
+        self._comp_selector.configure(values=options)
+        if llc:
+            from feedback_topology import LLC_FEEDBACK_NOTE
+            self.guide_comp.configure(text=LLC_FEEDBACK_NOTE)
+            self._comp_direction_frame.pack_forget()
+            self.comp_inframe.pack_forget()
+        else:
+            self.guide_comp.configure(text=self._comp_classic_guide)
+            self._comp_direction_frame.pack(fill='x', pady=2, after=self._comp_result_frame)
+            self.comp_inframe.pack(fill='x', pady=2, after=self._comp_direction_frame)
 
-        # schematic view of the selected topology
-        self.fig_comp, self.ax_comp = _subplots(figsize=(11.0, 3.2))
-        self.canvas_comp = FigureCanvasTkAgg(self.fig_comp, master=f)
-        self.canvas_comp.get_tk_widget().pack(fill='both', expand=True, pady=(2, 4))
-        self.comp_type.trace('w', lambda *a: self._draw_comp_schematic())
-        self.comp_type2.trace('w', lambda *a: self._draw_comp_schematic())
-        self._draw_comp_schematic()
+    def _schedule_feedback_redraw(self, *_args):
+        if self._building or self._closing:
+            return
+        self._invalidate_tolerance_result()
+        self._rendered_tabs.difference_update(self.nb.index(page) for page in (self.tab_topology, self.tab_comp))
+        if self._feedback_redraw_job is not None:
+            self.root.after_cancel(self._feedback_redraw_job)
+        if (self.nb.select() in (str(self.tab_topology), str(self.tab_comp))
+                or self.topology_view.large_view_open or self._comp_diagram_view.large_view_open):
+            self._feedback_redraw_job = self.root.after(100, self._refresh_feedback_view)
+        else:
+            self._feedback_redraw_job = None
+
+    def _refresh_feedback_view(self):
+        self._feedback_redraw_job = None
+        self._refresh_visible_tab()
 
     def _on_comp_dir_change(self):
         """Direction switch: rebuild inputs and swap the action button."""
         rev = self.comp_dir.get() == 'rev'
         self.comp_inframe.configure(
-            text=('输入补偿电路阻容值 (图上命名, 省略支路电容填 0)'
-                  if rev else '用户初始阻容 (其余阻容由 KP/fz/fp 反推)'))
+            text=('补偿器阻容值（省略支路填 0）' if rev else '已知阻容与参考参数'))
         if rev:
-            self.btn_comp_fwd.pack_forget()
-            self.btn_comp_rev.pack(side='left', padx=8)
+            self.btn_comp_fwd.grid_remove()
             self.chk_comp_t2.state(['disabled'])
+            self.comp_result.set('填写下方阻容参数，再点“反推并写入环路页”。')
+            self._set_comp_notes(())
         else:
-            self.btn_comp_rev.pack_forget()
-            self.btn_comp_fwd.pack(side='left', padx=8)
+            self.btn_comp_rev.grid_remove()
             self.chk_comp_t2.state(['!disabled'])
+        self._layout_comp_actions()
         self._rebuild_comp_inputs()
+
+    def _layout_comp_actions(self, event=None):
+        width = event.width if event is not None else self._comp_actions.winfo_width()
+        button = self.btn_comp_rev if self.comp_dir.get() == 'rev' else self.btn_comp_fwd
+        forward, reverse = self._comp_directions
+        direction_width = sum(widget.winfo_reqwidth() + 8 for widget in self._comp_directions)
+        if direction_width > width:
+            rows = ((forward,), (reverse,), (button,))
+        elif direction_width + button.winfo_reqwidth() + 8 > width:
+            rows = ((forward, reverse), (button,))
+        else:
+            rows = ((forward, reverse, button),)
+        for row, widgets in enumerate(rows):
+            for column, widget in enumerate(widgets):
+                widget.grid(row=row, column=column, columnspan=3 if len(widgets) == 1 else 1,
+                            sticky='w', padx=4, pady=2)
 
     def _rebuild_comp_inputs(self):
         for w in self.comp_inframe.winfo_children():
@@ -4064,28 +4389,40 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         key = self._comp_key()
         specs = (self.COMP_REV_INPUTS[key] if self.comp_dir.get() == 'rev'
                  else self.COMP_INPUTS[key])
-        r, c = 0, 0
         for pkey, label, default, units in specs:
-            ttk.Label(self.comp_inframe, text=label).grid(
-                row=r, column=c, sticky='w', padx=(10, 2), pady=2)
+            entry_group = ttk.Frame(self.comp_inframe)
+            ttk.Label(entry_group, text=label).grid(row=0, column=0, columnspan=2, sticky='w')
             v = tk.DoubleVar(value=default)
-            ent = ttk.Entry(self.comp_inframe, textvariable=v, width=8)
-            ent.grid(row=r, column=c + 1, padx=2)
+            ttk.Entry(entry_group, textvariable=v, width=10).grid(row=1, column=0, sticky='w')
             self.comp_vars[pkey] = v
             if units:
                 u = tk.StringVar(value=('k' if default >= 1e3 and 'k' in units
                                         else ('n' if default >= 1e-9 and 'n' in units
                                               else ('m' if default < 1e-3 and 'm' in units else units[0]))))
-                ttk.Combobox(self.comp_inframe, textvariable=u, width=3,
-                             values=units, state='readonly').grid(row=r, column=c + 2, padx=(0, 8))
+                ttk.Combobox(entry_group, textvariable=u, width=3,
+                             values=units, state='readonly').grid(row=1, column=1, padx=4, sticky='w')
                 self.comp_vars[pkey + '_unit'] = u
                 v.set(default/self.units[u.get()])
             else:
                 self.comp_vars[pkey + '_unit'] = tk.StringVar(value='')
-            c += 3
-            if c >= 9:
-                c = 0
-                r += 1
+        for variable in self.comp_vars.values():
+            variable.trace_add('write', self._schedule_feedback_redraw)
+        self._comp_input_columns = None
+        self._layout_comp_inputs()
+        self._schedule_feedback_redraw()
+
+    def _layout_comp_inputs(self, event=None):
+        fields = self.comp_inframe.winfo_children()
+        if not fields:
+            return
+        width = event.width if event is not None else self.comp_inframe.winfo_width()
+        column_width = max(180, *(field.winfo_reqwidth() + 14 for field in fields))
+        columns = max(1, min(3, (width - 12) // column_width))
+        if columns != self._comp_input_columns:
+            self._comp_input_columns = columns
+            for index, field in enumerate(fields):
+                row, column = divmod(index, columns)
+                field.grid(row=row, column=column, sticky='nw', padx=7, pady=(1, 4))
 
     def _comp_key(self):
         from compensation_report import network_key
@@ -4099,30 +4436,54 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         mult = self.units.get(u.get() if u else '', 1.0)
         return v * mult
 
-    def _run_comp_calc(self):
+    def _set_comp_notes(self, notes):
+        self._comp_notes.configure(text='\n'.join(notes))
+        if notes:
+            self._comp_notes.pack(fill='x', pady=(0, 4), before=self.guide_comp)
+        else:
+            self._comp_notes.pack_forget()
+
+    def _run_comp_calc(self, p=None, op=None):
         """Use the same active-order RC calculation as Web and reports."""
-        p = self.get_params()
+        if p is None:
+            p = self.get_params()
         if p.get('feedback_mode') == 'PSR-MP6005':
-            self.comp_result.set('MP6005 使用①页物理 COMP 网络；不使用 SSR 参考电路。')
+            self.comp_result.set('MP6005 原边反馈使用实际 COMP 网络。参数见左侧「反馈与补偿」。')
+            self._set_comp_notes(())
             return
         try:
-            from compensation_report import compensation_snapshot, snapshot_lines
+            from compensation_report import PARTS, compensation_snapshot, snapshot_lines
             state = self._comp_state()
             state['dir'] = 'fwd'
-            if self._snapshot_valid and self._last and self._last['p'] == p:
-                op = self._last['op']
-            else:
-                from voltage_nodes import output_drop
-                op = dict(V_out=p['V_out'], V_feedback=p['V_out']+output_drop(p))
+            if op is None:
+                if self._snapshot_valid and self._last and self._last['p'] == p:
+                    op = self._last['op']
+                else:
+                    from voltage_nodes import output_drop
+                    op = dict(V_out=p['V_out'], V_feedback=p['V_out']+output_drop(p))
             data = compensation_snapshot(p, op, state)
-            self.comp_result.set('   |   '.join(snapshot_lines(data)))
+            lines = snapshot_lines(data)
+            fields = [name for name in PARTS if name in data['parts']]
+            calculated, reference = [], []
+            for name, line in zip(fields, lines[1:1 + len(fields)]):
+                if name in data['inputs'] or name in ('Vref', 'Vout', 'C2_tot', 'R_LED_max') or '不装（' in line:
+                    reference.append(line)
+                else:
+                    calculated.append(line)
+            notes = data['notes']
+            summary = lines[:1] + (['  ·  '.join(calculated)] if calculated else [])
+            summary += lines[1 + len(fields):len(lines) - len(notes)]
+            self.comp_result.set('\n'.join(summary))
+            self._set_comp_notes((['  ·  '.join(reference)] if reference else []) + notes)
         except Exception as exc:
-            self.comp_result.set('补偿计算 error: '+str(exc))
+            self.comp_result.set(f'补偿计算失败。{exc}')
+            self._set_comp_notes(())
 
     def _run_comp_reverse(self):
         """Reverse mode: enter the compensator RC values (figure naming) ->
-        derive KP / fz / fp -> write them back into the tab-4 controller
+        derive KP / fz / fp -> write them back into the loop controller
         entries so the loop Bode plot, margins and auto-tune fields follow."""
+        self._set_comp_notes(())
         if self.get_params().get('feedback_mode')=='PSR-MP6005':
             self.comp_result.set('MP6005 请在①页输入 Rcomp/Ccomp/Cpole；不把 SSR 电路参数写入 PSR。')
             return
@@ -4156,11 +4517,11 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 for name in ('KP','fz1','fp1'):
                     self.set_param(name, updates[name])
                 self.schedule_update()
-                self.comp_result.set(f"标准二型已写入⑤页：KP={updates['KP']:.6g}，"
+                self.comp_result.set(f"标准二型已写入环路页：KP={updates['KP']:.6g}，"
                     f"fz1={fmt_eng(updates['fz1'],'Hz')}，fp1={fmt_eng(updates['fp1'],'Hz')}；"
                     '第二零极点未启用，无需远端抵消。')
                 return
-            # write back to the tab-4 controller entries.  A missing corner
+            # write back to the loop controller entries. A missing corner
             # (type-II network) maps to a very high frequency; the matching
             # zero/pole pair then cancels inside the 3P3Z form.
             FAR = 1e9
@@ -4181,101 +4542,73 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
             hint = ('二型网络: fz2/fp2 已同置 1e9 Hz 相互抵消 (等效 type 2)'
                     if cancelled else '三型网络: 四个零极点已全部写入')
             self.comp_result.set(
-                f"反推结果 → 已写入⑤页:  KP = {ev['KP']:.4g}   "
+                f"反推结果 → 已写入环路页:  KP = {ev['KP']:.4g}   "
                 f"fz1 = {fmt_eng(corners['fz1'], 'Hz')}   "
                 f"fz2 = {fmt_eng(corners['fz2'], 'Hz')}   "
                 f"fp1 = {fmt_eng(corners['fp1'], 'Hz')}   "
                 f"fp2 = {fmt_eng(corners['fp2'], 'Hz')}   |   {hint}   |   "
-                "环路 Bode 图/裕度已更新 (切到⑤页查看)")
+                "环路 Bode 图与裕度已更新，可在环路页查看。")
         except Exception as e:
-            self.comp_result.set(f'反推 error: {e}')
+            self.comp_result.set(f'补偿参数反推失败。{e}')
 
     def _update_comp(self, op, p):
-        """Tab ⑧ auto-refresh: forward mode recomputes from the tab-4
-        constants; reverse mode only redraws the reference figure (the
-        entered RC values and the last reverse result are kept)."""
-        try:
-            if self.comp_vars:
-                if self.comp_dir.get() != 'rev':
-                    self._run_comp_calc()
-                self._draw_comp_schematic()
-        except Exception:
-            pass
+        """Show the same circuit on both pages for the current input endpoint."""
+        if p['topology'] == 'LLC':
+            model = (self._last['res'].get('loop') or {}).get('model') or {}
+            ki = model.get('llc_ki', p.get('llc_ki', 0.))
+            kp = model.get('llc_kp', p.get('llc_kp', 0.))
+            gains = f'Kp={kp:.5g}，Ki={ki:.5g}。' if ki > 0. else '环路页给出自动 PI 增益。'
+            self.comp_result.set('LLC 外环 · '+gains+'实物补偿阻容取决于光耦接口及控制器增益。')
+            self._set_comp_notes(())
+        elif self.comp_dir.get() != 'rev':
+            self._run_comp_calc(p, op)
+        self._draw_comp_schematic(p, op)
 
-    # ------------------------------------------ reference figure view (⑧)
-    def _draw_comp_schematic(self):
-        """Show the reference figure of the selected topology (naming on the
-        figure matches the solved part names)."""
+    # ------------------------------------------ compensation reference view
+    def _draw_comp_schematic(self, p=None, op=None):
+        """Render the current compensation network with native symbols."""
+        from textwrap import wrap
+
+        from feedback_topology import compensation_view, draw_compensation_view
+        from topology_diagram import _Schematic
+        from voltage_nodes import output_drop
+
+        if p is None:
+            p = self._last['p'] if self._snapshot_valid and self._last else self.get_params(check_curve_sources=False)
+        if op is None:
+            op = (self._last['op'] if self._snapshot_valid and self._last else
+                  dict(V_out=p['V_out'], V_feedback=p['V_out']+output_drop(p)))
         ax = self.ax_comp
         ax.clear()
-        ax.axis('off')
-        key = self._comp_key()
-        fn = resource_path(os.path.join('comp_images',
-                                        self.COMP_IMAGES[key]))
-        try:
-            img = imread(fn)
-            ax.imshow(img)
-        except Exception as e:
-            ax.text(0.5, 0.5, f'参考图加载失败: {fn}\n{e}', ha='center',
-                    va='center', transform=ax.transAxes, color=BAD)
-        self.fig_comp.tight_layout(pad=0.4)
-        _draw_canvas(self.canvas_comp)
+        ax.set_axis_off()
+        key, data, note = compensation_view(p, op, self._comp_state())
+        (x0, x1, y0, y1), _ = draw_compensation_view(_Schematic(ax), p, key, data)
+        ax.set_xlim(x0, x1)
+        if note and p['topology'] != 'LLC':
+            lines = wrap(note, 36)
+            ax.text(x0+.2, y0-.3, '\n'.join(lines), fontsize=8, color=BAD, va='top')
+            y0 -= .35+.58*len(lines)
+        ax.set_ylim(y0, y1)
+        self._comp_diagram_view.set_scene(ax, {})
 
     # ============================================================ efficiency
     def _build_eff_tab(self):
-        f = self.tab_eff
-        top = ttk.Frame(f, style='Guide.TFrame', padding='8 4')
-        top.pack(fill='x', pady=(2, 4))
-        self.guide_eff = ttk.Label(top, text=STEP_GUIDE[4],
-                                   style='Guide.TLabel')
-        self.guide_eff.pack(side='left')
+        from scrollable_results import ScrollableResults
 
+        scroll = ScrollableResults(self.tab_eff)
+        scroll.pack(fill='both', expand=True)
+        f = scroll.content
+        self.loss_summary = tk.StringVar(value='待计算')
+        headline = self._result_label(f, textvariable=self.loss_summary, style='ResultConclusion.TLabel')
+        headline.pack(fill='x', pady=(2, 4))
         self.fig_loss, (self.ax_lbreak, self.ax_eta) = _subplots(
-            1, 2, figsize=(11.5, 3.4))
-        self.fig_loss.set_layout_engine('constrained')
-        self.canvas_loss = FigureCanvasTkAgg(self.fig_loss, master=f)
+            1, 2, figsize=(11.5, 5.4))
+        self.canvas_loss = self._create_result_canvas(self.fig_loss, master=f)
         self.canvas_loss.get_tk_widget().pack(fill='x', pady=(2, 4))
-        self.loss_summary = tk.StringVar(value='')
-        ttk.Label(f, textvariable=self.loss_summary, foreground='#1a5fb4',
-                  wraplength=1500, justify='left').pack(fill='x')
-        ttk.Label(f, text=ETA_NOTE, style='Warn.TLabel', wraplength=1500,
-                  justify='left').pack(fill='x')
-
-        sweep = ttk.LabelFrame(f, text='Parameter sweep (参数扫描)', padding=4)
-        sweep.pack(fill='x', pady=4)
-        ttk.Label(sweep, text='Variable (变量):').pack(side='left')
-        self.sweep_combo = ttk.Combobox(sweep, width=26, state='readonly')
-        self.sweep_combo.pack(side='left', padx=4)
-        self.sweep_combo.bind('<<ComboboxSelected>>', lambda e: self.on_sweep_var_change())
-        ttk.Label(sweep, text='from (从):').pack(side='left')
-        ttk.Entry(sweep, textvariable=self.params['sweep_min'], width=7).pack(side='left')
-        ttk.Combobox(sweep, textvariable=self.params['sweep_min_unit'],
-                     values=['n', 'u', 'm', '', 'k', 'M'], width=3,
-                     state='readonly').pack(side='left')
-        ttk.Label(sweep, text='to (到):').pack(side='left', padx=(8, 2))
-        ttk.Entry(sweep, textvariable=self.params['sweep_max'], width=7).pack(side='left')
-        ttk.Combobox(sweep, textvariable=self.params['sweep_max_unit'],
-                     values=['n', 'u', 'm', '', 'k', 'M'], width=3,
-                     state='readonly').pack(side='left')
-        ttk.Label(sweep, text='pts (点数):').pack(side='left', padx=(8, 2))
-        ttk.Entry(sweep, textvariable=self.params['sweep_n'], width=4).pack(side='left')
-        ttk.Button(sweep, text='Run sweep (运行扫描)', style='Accent.TButton',
-                   command=self.run_sweep).pack(side='left', padx=8)
-        ttk.Button(sweep, text='Find target (查找目标)', command=self.find_target).pack(side='left', padx=2)
-        ttk.Button(sweep, text='Optimize, max η (效率优化)', style='Accent.TButton',
-                   command=self.run_optimize).pack(side='left', padx=8)
-        ttk.Button(sweep, text='取消计算', command=self.cancel_calculation).pack(side='left', padx=2)
-        ttk.Label(sweep, text='load (负载):').pack(side='left', padx=(8, 2))
-        ttk.Entry(sweep, textvariable=self.params['load_frac'], width=4).pack(side='left')
-        ttk.Label(sweep, text='target η:').pack(side='left', padx=(8, 2))
-        ttk.Entry(sweep, textvariable=self.params['target_eta'], width=5).pack(side='left')
-
-        self.fig_opt, self.ax_opt = _subplots(figsize=(11.5, 3.0))
-        self.canvas_opt = FigureCanvasTkAgg(self.fig_opt, master=f)
-        self.canvas_opt.get_tk_widget().pack(fill='both', expand=True)
-        self.opt_result = tk.StringVar(value='')
-        ttk.Label(f, textvariable=self.opt_result, foreground='#1a5fb4',
-                  wraplength=1500, justify='left').pack(fill='x', pady=2)
+        _expand_paired_plots(scroll, self.canvas_loss, (self.ax_lbreak, self.ax_eta), headline)
+        self.loss_details = tk.StringVar()
+        self._result_label(f, textvariable=self.loss_details, style='Muted.TLabel').pack(fill='x', padx=8, pady=2)
+        self._result_label(f, text=ETA_NOTE, style='Muted.TLabel').pack(fill='x', padx=8, pady=2)
 
     def _update_eff(self, op, p, res):
         try:
@@ -4307,26 +4640,17 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                 self._ensure_calculation_poll()
             self._render_efficiency_curve()
 
-            topo = op['topology']
-            if True:
-                rhp_s = (fmt_eng(op['rhp_zero'], 'Hz')
-                         if np.isfinite(op['rhp_zero']) else '无')
-                extra = (f"D={op['D']:.3f}, mode={op['mode']}, "
-                         f"RHP zero (右半平面零点) = {rhp_s}")
-            self.loss_summary.set(
-                f"预设 η={op['eta_guess']*100:.2f}% → 最终计算 η={res['eta']*100:.2f}% "
-                f"(差值 {res['eta_delta']*100:+.2f} 个百分点) | "
-                f"预估/损耗反算 Pin={op['P_in_est']:.3f}/{res['P_in']:.3f} W | 总损耗 {res['P_total']:.3f} W | "
-                f"半导体 {res['P_semi']:.3f} + 磁件 {res['P_mag']:.3f} + 电容(入/出) {res['P_cap_in']:.3f}/{res['P_cap']:.3f} "
-                f"+ 采样 {res['P_sense']:.3f} + RCD {res.get('P_rcd', 0.0):.3f}"
-                f" + 防反二极管(入/出) {res.get('P_din', 0.0):.3f}/{res.get('P_dout', 0.0):.3f} W"
-                f" + 有源钳位电容 ESR {res.get('P_clamp',0):.3f} W"
-                f"   |   {extra}")
+            major = max(range(len(vals)), key=vals.__getitem__)
+            self.loss_summary.set(f"计算效率 {res['eta']:.2%} · 总损耗 {res['P_total']:.3f} W · "
+                                  f"最大损耗项 {names[major]} {vals[major]:.3f} W")
+            self.loss_details.set(f"预设效率 {op['eta_guess']:.2%} · 差值 {res['eta_delta']*100:+.2f} 个百分点 · "
+                                  f"按预设效率估算输入功率 {op['P_in_est']:.3f} W · 按损耗计算输入功率 {res['P_in']:.3f} W")
             _draw_canvas(self.canvas_loss)
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.status_var.set(f'Loss: {e}')
+            self.loss_summary.set(f'效率显示失败。{e}')
+            self.status_var.set('效率显示失败。')
 
     def _render_efficiency_curve(self):
         ax = self.ax_eta
@@ -4356,39 +4680,6 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         ax.tick_params(labelsize=8)
         ax.grid(True)
 
-    def on_sweep_var_change(self):
-        """Reset sweep bounds around the current value of the chosen variable."""
-        var = self._sweep_key()
-        try:
-            base = self.get_param(var)
-        except KeyError:
-            return
-        if base <= 0:
-            return
-        units = ['p', 'n', 'u', 'm', '', 'k', 'M']
-        for key, scale in (('sweep_min', 0.5), ('sweep_max', 2.0)):
-            v = base * scale
-            exp = int(np.floor(np.log10(abs(v)) / 3))
-            exp = max(-4, min(2, exp))
-            u = units[exp + 4]
-            self.params[key].set(v / self.units[u])
-            self.params[key + '_unit'].set(u)
-
-    def _sweep_bounds(self):
-        lo = self.params['sweep_min'].get() * self.units[self.params['sweep_min_unit'].get()]
-        hi = self.params['sweep_max'].get() * self.units[self.params['sweep_max_unit'].get()]
-        n = max(3, int(self.params['sweep_n'].get()))
-        return lo, hi, n
-
-    def run_sweep(self):
-        self._start_optimization_job('sweep')
-
-    def find_target(self):
-        self._start_optimization_job('target')
-
-    def run_optimize(self):
-        self._start_optimization_job('optimize')
-
     def cancel_calculation(self):
         self._calculation_worker.invalidate()
         if self._design_ready_job is not None:
@@ -4400,9 +4691,8 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
         self._eff_curve_signature = None
         self._eff_curve_result = None
         self._export_after_calculation = False
-        self.opt_result.set('后台计算已取消；已完成的当前设计保持不变。')
         self.status_var.set('计算已取消；尚未完成的新参数没有可用结果。' if not self._snapshot_valid
-                            else '后台扫描 / 负载曲线已取消。')
+                            else '后台负载曲线已取消。')
         if self._snapshot_valid:
             self._rendered_tabs.discard(self.nb.index(self.tab_eff))
             self.ax_eta.clear()
@@ -4410,92 +4700,3 @@ class PowerSupplyAnalyzer(WindingUI, IsolatedUI, ParameterPanelUI, MultiOutputRe
                              ha='center', va='center', transform=self.ax_eta.transAxes,
                              fontsize=9)
             _draw_canvas(self.canvas_loss)
-
-    def _start_optimization_job(self, kind):
-        try:
-            if not self._snapshot_valid:
-                self.opt_result.set('当前参数仍待计算，请先等待设计计算完成。')
-                self.request_update()
-                return
-            p = self.get_params()
-            p.update(self._rcd_parameters())
-            lo, hi, n = self._sweep_bounds()
-            request = dict(kind=kind, p=p, var=self._sweep_key(), lo=lo, hi=hi,
-                           n=n, frac=self.params['load_frac'].get(),
-                           target=self.params['target_eta'].get())
-            self._export_after_calculation = False
-            if str(self.cross_button.cget('state')) == 'disabled':
-                self._mark_cross_regulation_stale()
-            self._calculation_worker.submit(kind, request, calculate_optimization)
-            if self._eff_curve_result is None:
-                self._eff_curve_signature = None
-                self._rendered_tabs.discard(self.nb.index(self.tab_eff))
-                self.ax_eta.clear()
-                self.ax_eta.text(.5, .5, '负载曲线已暂停，让位于参数分析；\n完成后重新进入本页可更新',
-                                 ha='center', va='center', transform=self.ax_eta.transAxes,
-                                 fontsize=9)
-                _draw_canvas(self.canvas_loss)
-            self.opt_result.set('正在后台优化… 可继续编辑或取消。' if kind == 'optimize'
-                                else f'正在后台逐点扫描 {n} 个参数点… 可继续编辑或取消。')
-            self._ensure_calculation_poll()
-        except Exception as error:
-            self.opt_result.set(f'分析参数: {error}')
-
-    def _finish_optimization_job(self, job):
-        request = job.parameters
-        if not self._snapshot_valid or self._last is None or request['p'] != self._last['p']:
-            return
-        if job.error is not None:
-            self.opt_result.set(f'后台分析失败: {job.error}')
-            return
-        if job.kind == 'optimize':
-            result = job.value
-            msg = [f"最大效率 max η = {result['eta'] * 100:.2f}% (负载 {request['frac'] * 100:.0f}%)"]
-            msg.extend(f"{key} = {fmt_eng(value, '')}" for key, value in result['best'].items())
-            self.opt_result.set('   |   '.join(msg))
-            self.ax_opt.clear()
-            self.ax_opt.text(.05, .5, '\n'.join(msg), transform=self.ax_opt.transAxes,
-                             fontsize=13, va='center')
-            self.ax_opt.axis('off')
-            _draw_canvas(self.canvas_opt)
-            return
-        self._show_sweep_result(request, job.value, find=job.kind == 'target')
-
-    def _show_sweep_result(self, request, result, *, find=False):
-        try:
-            var, frac = request['var'], request['frac']
-            values, etas = result['values'], result['etas']
-            ax = self.ax_opt
-            ax.clear()
-            if var in opt._LOG_VARS:
-                ax.semilogx(values, etas * 100, 'o-', lw=1.2)
-            else:
-                ax.plot(values, etas * 100, 'o-', lw=1.2)
-            target = request['target']
-            ax.axhline(target * 100, color='r', ls='--', lw=1,
-                       label=f'target {target * 100:.0f}% (目标)')
-            ax.set_title(f'Efficiency vs {var} (效率-参数曲线, 负载 {frac * 100:.0f}%)')
-            ax.set_xlabel(var); ax.set_ylabel('η, % (效率)')
-            ax.legend(); ax.grid(True)
-            _draw_canvas(self.canvas_opt)
-            ok = np.isfinite(etas)
-            if find:
-                found = opt.find_target(values, etas, target)
-                if found is not None:
-                    ax.axvline(found, color='g', ls='--', lw=1)
-                    _draw_canvas(self.canvas_opt)
-                    self.opt_result.set(f'{var} = {fmt_eng(found, "")} 达到 η = {target * 100:.1f}% '
-                                        f'(负载 {frac * 100:.0f}%)')
-                    self.set_param(var, found)
-                else:
-                    self.opt_result.set(f'目标 {target * 100:.0f}% 未达到' +
-                        (f' — 范围内最大 η={etas[ok].max()*100:.1f}%' if ok.any() else '：所有点无效'))
-                return
-            if ok.any():
-                self.opt_result.set(
-                    f'扫描 {var}: η {etas[ok].min() * 100:.1f}..{etas[ok].max() * 100:.1f}% '
-                    f'(在 {var} = {fmt_eng(values[ok][np.argmax(etas[ok])], "")} 处最大)')
-            else:
-                self.opt_result.set('扫描失败: 所有点无效')
-        except Exception as error:
-            self.opt_result.set(f'显示扫描: {error}')

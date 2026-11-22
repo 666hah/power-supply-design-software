@@ -4,6 +4,8 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 PATH=ROOT/'examples/96W_BUCK_COT_4PH.json'
+INPUT_CAP_MODEL='GWC1V331MCO1GS'
+INPUT_CAP_SOURCE='https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/'
 
 
 def build():
@@ -13,8 +15,8 @@ def build():
              Rds_on=.0053,Rds_aux=.0024,Qg=13e-9,Qg_aux=25e-9,Coss=208e-12,Coss_aux=389e-12,
              Vgs=4.5,Vth=1.4,Vgp_on=2.8,Vgp_off=2.8,Qg_th=2.5e-9,Qgs=5.1e-9,Qgd=2.8e-9,
              gfs=76.,mos_miller_mode='gfs',mos_charge_mode='manual',
-             fc_target=20000.,pm_target=80.,cot_kp_hz=2450332.0777366706,cot_ki_hz_per_s=9.367015802142029e10,
-             input_capacitors=[dict(C=330e-6,ESR=.014,ESL=2e-9) for _ in range(4)],
+             fc_target=16000.,pm_target=80.,cot_kp_hz=2153906.6556584374,cot_ki_hz_per_s=66289977908.3486,
+             input_capacitors=[dict(C=330e-6,ESR=.015,ESL=2e-9) for _ in range(4)],
              output_capacitors=[dict(C=330e-6,ESR=.009,ESL=2e-9) for _ in range(16)])
     phases=[dict(L_scale=l,dcr_scale=r,rhigh_scale=1.,rlow_scale=1.,ton_scale=1.,sense_gain=g,sense_offset_A=o)
             for l,r,g,o in zip([.95,1.05,1.,1.],[.95,1.05,1.02,.98],[1.005,.995,1.01,.99],[.1,-.1,.05,-.05])]
@@ -45,8 +47,10 @@ def build():
                   '每相。Document863-1：0.30µH±20%，DCR典型1.75mΩ/最大1.92mΩ；Isat41A对应L下降30%；Irms27.6A对应40K温升。'),
     }
     for i in range(4):
-        items[f'C_IN{i+1}']=item('Panasonic','25SVPF330M','330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。',
-                                 capacitor_type='other',voltage_V=25.,ripple_A=5.)
+        items[f'C_IN{i+1}']=item('Nichicon',INPUT_CAP_MODEL,
+                                 '330 µF ±20%，35 V。ESR 最大 15 mΩ（20 °C、100 kHz）。额定纹波 5.3 Arms（125 °C、100 kHz）或 3.6 Arms（135 °C、100 kHz）。',
+                                 capacitor_type='other',voltage_V=35.,ripple_A=5.3,package='SMD Ø10×12.5 mm',
+                                 note=f'沿用聚合物电容 0.8 项目降额，纹波采用 125 °C 额定。ESL 2 nH 为工程占位。原厂资料：{INPUT_CAP_SOURCE}')
     # Native registry uses A/B followed by C... for the output bank.
     from sys import path
     path.insert(0,str(ROOT))
@@ -62,7 +66,7 @@ def build():
         'high_mos':'https://www.ti.com/lit/ds/symlink/csd17577q3a.pdf',
         'low_mos':'https://www.ti.com/lit/ds/symlink/csd17576q5b.pdf',
         'inductor':'https://www.coilcraft.com/getmedia/0d05a05e-d55d-4a0c-911d-46bd73686633/xal7030.pdf',
-        'input_cap':'https://na.industrial.panasonic.com/products/capacitors/polymer-capacitors/series/91057/model/91095',
+        'input_cap':INPUT_CAP_SOURCE,
         'output_cap':'https://util01.industrial.panasonic.com/ww/utilities/ds/chr-vw/2R5TPE330M9',
         'assumptions':'每颗ESL2nH、电感附加损耗0.15W、源R/L、采样误差、死区及所有控制增益/保护/验收阈值为工程配置；Coss按15V单点，未拟合非线性曲线。'}
     PATH.write_text(json.dumps(p,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

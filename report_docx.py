@@ -20,13 +20,14 @@ from waveforms import make_waveforms
 from capripple import capacitor_ripple_analysis
 from semiconductor import device_stress
 from loss_model import compute_design
+from loop_acceptance import MIN_PHASE_MARGIN_DEG
 from plants import resolve_controller_type
 from power_charts import draw_power_signals, draw_power_switching
 from switching_transients import switching_voltage_data, STAGE_NAMES
 
 TOPOLOGY = {'BUCK':'降压 Buck','BOOST':'升压 Boost','BUCK-BOOST':'反相升降压 Buck-Boost',
             'FLYBACK':'反激 Flyback','QR-FLYBACK':'准谐振反激 QR-Flyback',
-            'ACF-FORWARD':'有源钳位正激 Active-Clamp Forward'}
+            'ACF-FORWARD':'有源钳位正激 Active-Clamp Forward','LLC':'LLC 谐振变换器'}
 COLORS = ['#2068A0','#D18532','#4C8A79','#8677B2']
 PARAMS = {
     'inductor_design_enabled':('启用电感磁芯与绕组设计',''),
@@ -368,7 +369,8 @@ def export_design_docx(path,p,op,wf,res,models=None,loop_error=None,corners=None
         ('控制方式','COT · 同步 Buck' if cot else p['control_mode'],
          '每相同规格、共用一个输出' if cot else '当前补偿器：'+resolve_controller_type(p.get('controller_type','auto'),p['control_mode'])),
         ('纹波目标',value(p['ripple_target']*p['V_out'],'V'),'输出低频峰峰值目标'),
-        ('环路目标',value(p.get('fc_target'),'Hz')+' / '+value(p.get('pm_target'),'°'),'导出不进行自动整定'),
+        ('环路整定目标',value(p.get('fc_target'),'Hz')+' / '+value(p.get('pm_target'),'°'),'用于自动整定'),
+        ('相位裕度验收线',f'> {MIN_PHASE_MARGIN_DEG:g}°','按全部穿越的最小相位裕度及原始精度判定'),
         ('效率目标',f"{p['target_eta']*100:.1f}%",'仅比较已建模损耗口径'),
         ('预设设计效率',f"{op['eta_guess']*100:.2f}%",'仅用于功耗预算，占空比由实际导通压降求解' if cot else
          '工作点与波形的设计假设；不被最终效率覆盖'),

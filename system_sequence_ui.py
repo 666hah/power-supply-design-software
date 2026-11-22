@@ -117,6 +117,23 @@ LIST_NOTES = {
 }
 
 
+def _observed_limits(summary):
+    """Summarize available comparisons without counting unknown results as passes."""
+    if not isinstance(summary, dict):
+        return ''
+    source_checks = [row.get('current_limit_exceeded') for row in summary.get('sources') or ()]
+    unit_checks = [((row.get('ocp') or {}).get('cycle_limit') or {}).get('hit') for row in summary.get('units') or ()]
+    phrases = []
+    for title, values in (('输入源超过限流门限', source_checks), ('单元观察到逐周期限流', unit_checks)):
+        known = [value for value in values if isinstance(value, bool)]
+        if known:
+            text = f'{title} {sum(known)}/{len(known)}（已判定）'
+            if len(known) < len(values):
+                text += f'，另有 {len(values)-len(known)} 项待复核'
+            phrases.append(text)
+    return ' · '.join(phrases)
+
+
 def _display(value, scale=1.):
     return '' if value is None else format(float(value) / scale, '.10g')
 
@@ -201,15 +218,17 @@ class SequenceListEditor:
         self.win.bind('<Destroy>', self._destroyed, add='+')
         self.win.bind('<Escape>', lambda _event: self.cancel())
         self.win.bind('<Control-Return>', lambda _event: self.save())
-        self.status = tk.StringVar(self.win, '编辑行 → 加入/更新 → 保存列表。')
+        self.status = tk.StringVar(self.win, '草稿 · 加入或更新条目后，点击「保存列表」。')
         body = ttk.Frame(self.win, padding=12)
         body.pack(fill='both', expand=True)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
+        _wrap(ttk.Label(body, textvariable=self.status, style='ResultConclusion.TLabel', wraplength=850,
+                       justify='left')).grid(row=0, column=0, sticky='ew', pady=(0, 5))
         _wrap(ttk.Label(body, text=LIST_SUMMARIES[key], style='System.TLabel', foreground='#5c6e83',
-                       wraplength=850, justify='left')).grid(row=0, column=0, sticky='ew', pady=(0, 8))
+                       wraplength=850, justify='left')).grid(row=1, column=0, sticky='ew', pady=(0, 8))
         self.panes = ttk.Panedwindow(body, orient='vertical')
-        self.panes.grid(row=1, column=0, sticky='nsew')
+        self.panes.grid(row=2, column=0, sticky='nsew')
         self._pane_size = None
         self.panes.bind('<Configure>', self._layout_panes)
         table_box = ttk.Frame(self.panes)
@@ -240,7 +259,7 @@ class SequenceListEditor:
         _wrap(ttk.Label(self.scroll.content, text=LIST_NOTES[key], style='System.TLabel',
                        foreground='#5c6e83', wraplength=850, justify='left')).pack(fill='x', pady=10)
         controls = ttk.Frame(body)
-        controls.grid(row=2, column=0, sticky='ew', pady=(8, 0))
+        controls.grid(row=3, column=0, sticky='ew', pady=(8, 0))
         actions = (('加入新行', self.add), ('更新选中', self.update), ('删除选中', self.delete),
                    ('保存列表', self.save), ('取消', self.cancel))
         self.buttons = []
@@ -250,8 +269,6 @@ class SequenceListEditor:
             button.grid(row=i//3, column=i%3, sticky='ew', padx=3, pady=3)
             controls.columnconfigure(i%3, weight=1)
             self.buttons.append(button)
-        _wrap(ttk.Label(body, textvariable=self.status, style='System.TLabel', wraplength=850,
-                       justify='left')).grid(row=3, column=0, sticky='ew', pady=(5, 0))
         from ui_preferences import apply_studio_fonts
         apply_studio_fonts(self.win, int(self.dialog.font_choice.get()))
         self._refresh()
@@ -591,7 +608,7 @@ class SystemSequenceDialog:
             win.geometry(f'{width}x{height}')
             win.minsize(min(780, width), min(520, height))
             win.protocol('WM_DELETE_WINDOW', self.close)
-        self.status = tk.StringVar(win, '编辑后应用保存；点击开始运行 LTspice。')
+        self.status = tk.StringVar(win, '未运行 · 确认设置后，点击「开始启停仿真」。')
         self.output = tk.StringVar(win, str(Path.home()/'系统联合启停仿真'))
         from spice_runtime import find_ltspice
         self.executable = settings_context.executable if settings_context else tk.StringVar(win, find_ltspice() or '')
@@ -601,14 +618,16 @@ class SystemSequenceDialog:
         self.lifecycle.bind('<Destroy>', self._destroyed, add='+')
         body.pack(fill='both', expand=True)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
         heading = ttk.Frame(body)
         heading.grid(row=0, column=0, sticky='ew', pady=(0, 7))
         ttk.Label(heading, text='系统联合启停仿真', style='System.TLabel').pack(side='left')
         from ui_preferences import font_control, font_size
         self.font_choice = font_control(heading, self.choose_font)
+        _wrap(ttk.Label(body, textvariable=self.status, style='ResultConclusion.TLabel', wraplength=1000,
+                       justify='left')).grid(row=1, column=0, sticky='ew', pady=(0, 7))
         self.tabs = ttk.Notebook(body)
-        self.tabs.grid(row=1, column=0, sticky='nsew')
+        self.tabs.grid(row=2, column=0, sticky='nsew')
         self._build_run_page()
         sources = [('sources', row['id'], row['name']) for row in self.project.get('sources', [])]
         units = [('units', row['id'], row['name']) for row in self.project.get('units', [])]
@@ -628,7 +647,7 @@ class SystemSequenceDialog:
             RecordEditor(self, '支路', edges, EDGE_FIELDS, '连接、二极管方式与画布一致。支路内阻默认 10 mΩ 为工程假设，寄生电感须用户声明。'),
         ]
         footer = ttk.Frame(body)
-        footer.grid(row=2, column=0, sticky='ew', pady=(9, 0))
+        footer.grid(row=3, column=0, sticky='ew', pady=(9, 0))
         self.apply_button = ttk.Button(footer, text='应用并保存', command=self.apply, style='SystemPrimary.TButton')
         self.run_button = ttk.Button(footer, text='开始启停仿真', command=self.start, style='SystemPrimary.TButton')
         self.cancel_button = ttk.Button(footer, text='取消运行', command=self.cancel, state='disabled', style='System.TButton')
@@ -636,7 +655,6 @@ class SystemSequenceDialog:
         self.footer, self.action_buttons = footer, (self.apply_button, self.run_button, self.cancel_button, close_button)
         self.action_columns = 0
         footer.bind('<Configure>', self._layout_actions)
-        _wrap(ttk.Label(body, textvariable=self.status, style='System.TLabel', wraplength=1000, justify='left')).grid(row=3, column=0, sticky='ew', pady=(7, 0))
         self._apply_fonts(font_size())
         self._layout_actions()
 
@@ -656,17 +674,19 @@ class SystemSequenceDialog:
 
     def _build_run_page(self):
         page = ttk.Frame(self.tabs)
-        self.tabs.add(page, text='运行、设置与结果')
+        self.tabs.add(page, text='运行与结果')
         self.run_scroll = ScrollableResults(page)
         self.run_scroll.pack(fill='both', expand=True)
         content = self.run_scroll.content
         content.columnconfigure(0, weight=1)
-        _wrap(ttk.Label(content, text='真实开关电路联合瞬态：复用各单元功率级与控制器，不使用平均电压源代替电源。'
-                  '\n当前控制器偏置为显式理想 VCC；未配置的输入 UVLO、软启动、PG 或限流能力标记未知，不能据此判通过。'
-                  '\n外部源默认不吸收回流；启用吸流后理想源可吸收电容能量，须核实实际电源能力。'
-                  '\n默认源内阻 50 mΩ、支路内阻 10 mΩ 仅为工程假设。所有输出负载和下级输入连接在防反后端口。',
-                  style='System.TLabel', foreground='#925511', wraplength=950, justify='left')).grid(row=0, column=0, sticky='ew', padx=6, pady=10)
-        paths = ttk.LabelFrame(content, text='本机运行路径（不写入电气工程）', padding=10)
+        actions = ttk.Frame(content)
+        actions.grid(row=0, column=0, sticky='ew', pady=(4, 6))
+        self.open_report = ttk.Button(actions, text='打开报告', command=self.view_report, state='disabled', style='System.TButton')
+        self.open_report.pack(side='left', padx=(0, 6))
+        self.open_folder = ttk.Button(actions, text='打开运行目录', command=self.view_folder, state='disabled', style='System.TButton')
+        self.open_folder.pack(side='left')
+
+        paths = ttk.LabelFrame(content, text='本机运行路径', padding=10)
         paths.grid(row=1, column=0, sticky='ew', pady=5)
         paths.columnconfigure(0, weight=1)
         paths_to_configure = [('结果保存目录', self.output, self.pick_output)]
@@ -683,13 +703,13 @@ class SystemSequenceDialog:
         settings = ttk.LabelFrame(content, text='联合瞬态设置', padding=8)
         settings.grid(row=2, column=0, sticky='ew', pady=6)
         self.setting_variables = _form(settings, SETTINGS, self.draft['settings'])
-        actions = ttk.Frame(content)
-        actions.grid(row=3, column=0, sticky='ew', pady=6)
-        self.open_report = ttk.Button(actions, text='打开结果报告', command=self.view_report, state='disabled', style='System.TButton')
-        self.open_report.pack(side='left', padx=4)
-        self.open_folder = ttk.Button(actions, text='打开结果目录', command=self.view_folder, state='disabled', style='System.TButton')
-        self.open_folder.pack(side='left', padx=4)
-        ttk.Label(content, text='进度、结果与未覆盖项', style='System.TLabel').grid(row=4, column=0, sticky='w', pady=5)
+        scope = ttk.LabelFrame(content, text='模型范围', padding=8)
+        scope.grid(row=3, column=0, sticky='ew', pady=6)
+        _wrap(ttk.Label(scope, text='各单元用实际开关拓扑与控制器行为模型，VCC 采用理想偏置。缺少 UVLO、软启动、PG 或限流配置时标为未知。'
+                       '\n负载和下级电源接在防反后端口。源内阻 50 mΩ、支路内阻 10 mΩ 为默认工程初值。'
+                       '源默认阻断回流，使用吸流模式前请核对实物能力。',
+                       style='Muted.TLabel', wraplength=950, justify='left')).pack(fill='x')
+        ttk.Label(content, text='运行记录', style='System.TLabel').grid(row=4, column=0, sticky='w', pady=5)
         logbox = ttk.Frame(content)
         logbox.grid(row=5, column=0, sticky='ew')
         logbox.columnconfigure(0, weight=1)
@@ -743,15 +763,15 @@ class SystemSequenceDialog:
             labels = {field[0]: field[1] for field in SOURCE_FIELDS}
             notes = [identity+' · '+labels[key] for editor in self.editors
                      for identity, key in editor._source_text_drafts]
-            message = '配置已保存；随系统工程导出。尚未仿真。'
+            message = '设置已保存 · 可随系统工程导出。'
             if not value['settings']['include_switching_capacitance']:
-                message += ' 已沿用单元独立仿真模式；若 Buck/Boost 未保留寄生电容，DCM 归零时可能发生数值卡顿。'
+                message += ' Buck/Boost 沿用单元的寄生电容设置。缺少寄生电容时，DCM 电流归零可能卡顿。'
             if notes:
-                message += ' 未启用参数的无效草稿未应用，沿用上次合法值；切回对应保护模式可修正：'+'、'.join(notes)
+                message += '\n无效草稿未应用。切回对应保护模式可修正下列字段。\n'+'、'.join(notes)
             self.status.set(message)
             return True
         except (ValueError, TypeError, KeyError) as error:
-            self.status.set('配置未保存：' + str(error))
+            self.status.set('保存失败 · ' + str(error))
             return False
 
     def pick_output(self):
@@ -777,7 +797,7 @@ class SystemSequenceDialog:
             return
         output = self.output.get().strip()
         if not output:
-            self.status.set('请选择结果保存目录。')
+            self.status.set('未运行 · 请选择结果保存目录。')
             return
         snapshot = copy.deepcopy(self.project)
         executable = self.executable.get().strip() or None
@@ -789,7 +809,7 @@ class SystemSequenceDialog:
         self.open_folder.configure(state='disabled')
         self.run_button.configure(state='disabled')
         self.cancel_button.configure(state='normal')
-        self.status.set('后台运行冻结快照；首个页签显示日志和结果。')
+        self.status.set('运行中 · 已固定本次仿真输入。')
         self.append('开始联合启停仿真。当前画布后续编辑不会改变本次冻结输入。')
         self.tabs.select(0)
 
@@ -813,7 +833,9 @@ class SystemSequenceDialog:
                 kind, payload = self.mailbox.get_nowait()
                 if kind == 'progress':
                     self.append(payload)
-                    self.status.set(str(payload.get('message', payload)) if isinstance(payload, dict) else str(payload))
+                    message = payload.get('message', payload) if isinstance(payload, dict) else payload
+                    state = '正在取消' if self.stop_event.is_set() else '运行中'
+                    self.status.set(f'{state} · {message}')
                 elif kind == 'done':
                     self.terminal_received = True
                     self.result = payload if isinstance(payload, dict) else {'summary': str(payload)}
@@ -822,17 +844,29 @@ class SystemSequenceDialog:
                     if not self.directory and path:
                         self.directory = str(Path(path).parent)
                     status = self.result.get('status', 'unknown')
-                    label = {'complete': '运行完成，判定与模型边界见报告', 'completed': '运行完成，判定与模型边界见报告',
-                             'cancelled': '已取消，保留已生成的日志', 'failed': '运行失败，请检查日志',
-                             'partial': '部分完成，存在未完成或未覆盖项'}.get(status, '运行结束，状态：'+str(status))
+                    label = {'complete': '已完成 · 报告包含启停时序、电流峰值和限流判定。',
+                             'completed': '已完成 · 报告包含启停时序、电流峰值和限流判定。',
+                             'cancelled': '已取消 · 可查看已生成的运行记录。', 'failed': '失败 · 请查看运行记录。',
+                             'partial': '部分完成 · 请核对未完成或未覆盖项目。'}.get(status, '待复核 · '+str(status))
+                    if status in ('complete', 'completed'):
+                        observations = _observed_limits(self.result.get('summary'))
+                        if observations:
+                            label += '\n' + observations
+                    if self.result.get('report_error'):
+                        if status in ('complete', 'completed'):
+                            label = '部分完成 · 仿真已完成，报告导出失败。'
+                        label += '\n' + str(self.result['report_error'])
                     self.status.set(label)
                     self.append(label)
-                    self.append(json.dumps(self.result, ensure_ascii=False, indent=2, default=str))
+                    if isinstance(self.result.get('summary'), str) and self.result['summary']:
+                        self.append(self.result['summary'])
+                    if self.result.get('result_path'):
+                        self.append('结果数据 · ' + str(self.result['result_path']))
                     self.open_report.configure(state='normal' if path and Path(path).is_file() else 'disabled')
                 elif kind == 'error':
                     self.terminal_received = True
                     self.directory = payload.get('directory')
-                    self.status.set('运行失败：' + payload['message'])
+                    self.status.set('失败 · ' + payload['message'])
                     self.append(self.status.get())
         except queue.Empty:
             pass
@@ -846,7 +880,7 @@ class SystemSequenceDialog:
             return
         if self.job is not None:
             if not self.terminal_received and self.mailbox.empty():
-                self.status.set('任务已结束；请检查日志，未获得有效结果。')
+                self.status.set('失败 · 未取得有效结果，请查看运行记录。')
             self.job.join(timeout=0)
             self.job = None
         self.run_button.configure(state='normal')
@@ -859,7 +893,7 @@ class SystemSequenceDialog:
         if self.job is not None:
             self.stop_event.set()
             self.cancel_button.configure(state='disabled')
-            self.status.set('正在停止本次 LTspice 及其子进程；日志将保留。')
+            self.status.set('正在取消 · 等待 LTspice 停止。')
 
     def view_report(self):
         path = self.result.get('report_path') or self.result.get('readme_path') or self.result.get('result_path')

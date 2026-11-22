@@ -11,7 +11,8 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from docx import Document
 from docx_layout import new_document,table,equation,paragraph
 from report_architecture import (comparison_rows,capture_document,write_paired_modules,
-    add_acceptance_report,add_paired_figure,available_width,acceptance_columns,report_cases)
+    add_acceptance_report,add_paired_figure,available_width,acceptance_columns,acceptance_findings,
+    report_cases)
 
 
 class ReportArchitectureChecks(unittest.TestCase):
@@ -49,8 +50,46 @@ class ReportArchitectureChecks(unittest.TestCase):
         self.assertIs(result,snapshot)
         cells='\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells)
         self.assertIn('仿真待补，实测待补','\n'.join(p.text for p in doc.paragraphs))
-        self.assertIn('待补目标或证据',cells)
+        from engineering_acceptance import STATE_LABELS
+        self.assertIn(STATE_LABELS['undefined'],cells)
         self.assertNotIn('仿真 0',cells)
+
+    def test_acceptance_groups_preserve_each_limit_and_show_history_separately(self):
+        from engineering_workbook import page
+        from report_xlsx import write_acceptance_details
+
+        review = dict(label='超限', state='review', counts={'review': 1, 'pass': 1})
+        passed = dict(label='满足', state='pass', counts={'pass': 2})
+        device_case = dict(comparison='<=', limit=40., calculation=39.,
+                           states={'calculation': 'pass'}, status='pass')
+        ripple_case = dict(comparison='<=', limit=.1, calculation=.12,
+                           states={'calculation': 'review'}, status='review')
+        snapshot = dict(summary=review, groups=[
+            dict(id='components', title='器件规格', summary=passed),
+            dict(id='performance', title='电源外特性', summary=review),
+        ], issues=[dict(id='I1', title='历史记录', effective_status='open')], rows=[
+            dict(id='vds', name='Q1 阻断电压', group='components', unit='V', comparison='<=', limit=40.,
+                 cases={case: device_case for case in ('Vinmin', 'Vinmax')}),
+            dict(id='ripple', name='输出纹波', group='performance', unit='V', limits_vary=True,
+                 cases={'Vinmin': ripple_case, 'Vinmax': dict(ripple_case, limit=.15, status='pass',
+                                                            states={'calculation': 'pass'})}),
+        ])
+        doc = new_document('工程验收', '两组限值与证据', '测试')
+        add_acceptance_report(doc, {}, snapshot=snapshot)
+        headings = [p.text for p in doc.paragraphs if p.style.name.startswith('Heading')]
+        self.assertEqual(headings, ['工程验收', '器件规格', '电源外特性', '补充记录 · 整改'])
+        cells = [[c.text for c in t.rows[1].cells] for t in doc.tables]
+        self.assertIn('Q1 阻断电压', cells[0])
+        self.assertIn('限值 <= 100 mV', cells[1][2])
+        self.assertIn('限值 <= 150 mV', cells[1][3])
+        labels, rows = acceptance_columns(snapshot, None)
+        self.assertEqual(acceptance_findings(snapshot, labels), [('输出纹波', 'Vinmin 计算 120 mV，要求 <= 100 mV')])
+        sheet = page('工程验收', '工程验收', widths=(12,) * 17)
+        write_acceptance_details(sheet, 5, snapshot, labels, rows)
+        values = [str(cell[0]) for cell in sheet.cells.values()]
+        self.assertIn('器件规格  满足', values)
+        self.assertIn('电源外特性  超限', values)
+        self.assertIn('补充记录 · 整改', values)
 
     def test_missing_figure_is_explicit_and_not_duplicated(self):
         from PIL import Image

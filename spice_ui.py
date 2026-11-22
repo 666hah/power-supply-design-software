@@ -9,6 +9,30 @@ from tkinter import ttk,filedialog,messagebox
 from spice_export import SETTINGS,CHOICES,setting_group,ordered_setting_keys,normalize_settings,mp6005_preset,export_project
 
 
+_FORM_LABELS = {
+    'load_after': 'ASC 阶跃后负载比例',
+    'simulation_reuse': '标称结果复用方式',
+    'line_load_enabled': '输入与负载联合跳变',
+    'qr_cds_pf': '漏极等效谐振电容',
+    'qr_aux_ratio': 'ZCD 辅助绕组匝比',
+    'qr_zcd_winding': 'ZCD 取样位置',
+    'qr_zcd_c_pf': 'ZCD 等效输入电容',
+    'qr_zcd_delay_ns': 'ZCD 附加延时',
+    'qr_zcd_arm_v': 'ZCD 上升沿预备阈值',
+    'qr_zcd_trigger_v': 'ZCD 下降沿触发阈值',
+    'qr_off_light_us': '轻载关断消隐时间',
+    'qr_vff_v': '输入电压前馈 VFF',
+    'qr_max_on_us': '看门狗最大导通时间',
+    'acf_dead_ns': 'GATE／SYNC 死区',
+    'niso_profile': '控制器原型',
+    'niso_ramp_ratio': '斜坡幅值与输入电压比',
+    'niso_ith_gain': 'ITH 至 CS 等效增益',
+    'niso_lm_cs_resistor': 'LM5022 CS 滤波电阻',
+    'niso_inductor_dcr': '仿真电感 DCR',
+    'niso_edge_model': '开关边沿模型',
+}
+
+
 def _choice_labels(key):
     from controller_logic import SHORT_CHOICES
     short = {
@@ -22,25 +46,27 @@ def _choice_labels(key):
 
 def comparison_feedback(result):
     """A diagnostic report is not a successfully simulated comparison."""
-    counts=(f"瞬态完成 {result['successful']}/{result['total']}；"
-        f"有效 FRA {result['fra_successful']}/{result['fra_total']}；"
-        f"完整交叉调整率 {result['cross_successful']}/{result['cross_total']}。\n")
-    if result.get('cached_nominal'):counts+=f"其中 {result['cached_nominal']} 个标称工况复用已有有效结果。\n"
+    counts=(f"瞬态 {result['successful']}/{result['total']} · "
+        f"环路 FRA {result['fra_successful']}/{result['fra_total']} · "
+        f"交叉调整率 {result['cross_successful']}/{result['cross_total']}\n")
+    if result.get('cached_nominal'):counts+=f"复用 {result['cached_nominal']} 个有效标称工况。\n"
     if not result['successful']:
-        return 'warning','仿真未完成','所有工况均未完成，已保存诊断报告与工程 ZIP。\n'+counts+'报告中没有有效仿真对比数据，请查看各工况日志与失败原因。\n'
+        return 'warning','仿真未完成','没有有效仿真对比数据。诊断报告与工程 ZIP 已保存。\n'+counts+'请查看各工况的日志与失败原因。\n'
     if result['incomplete']:
-        return 'warning','对比部分完成','已保存报告与同名工程 ZIP。\n'+counts+'存在未完成或待复核项目，请查看报告状态和原因。\n'
-    return 'info','对比已完成','Word 报告与同名仿真工程 ZIP 已输出。\n'+counts
+        return 'warning','对比部分完成','部分项目待复核。请查看报告中的状态和原因。\n'+counts+'报告与同名工程 ZIP 已保存。\n'
+    formats = 'Word、Excel 报告' if result.get('xlsx_path') else 'Word 报告'
+    return 'info','对比已完成',formats+'与同名仿真工程 ZIP 已输出。\n'+counts
 
 
 def supports_design(parameters):
-    return (parameters.get('topology') in ('FLYBACK','QR-FLYBACK','ACF-FORWARD','BUCK','BOOST')
+    return (parameters.get('topology') in ('FLYBACK','QR-FLYBACK','ACF-FORWARD','BUCK','BOOST','LLC')
             and parameters.get('feedback_mode','SSR') == 'SSR')
 
 
 def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,initial_tab=None,
                        container=None,settings_context=None,navigate=None):
     qr=parameters.get('topology')=='QR-FLYBACK'
+    llc=parameters.get('topology')=='LLC'
     forward=parameters.get('topology')=='ACF-FORWARD'
     from cot_settings import active as cot_active
     cot=cot_active(parameters)
@@ -52,6 +78,10 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     from acf_spice import preset as acf_preset
     from qr_spice_settings import applicable_keys,l6565_preset
     keys=applicable_keys(parameters.get('topology'))
+    if llc:
+        keys=('enable_delay_ms','step_ms','stop_ms','simulation_threads','simulation_timeout_s',
+              'comparison_tolerance_pct','include_cap_esl','fra_enabled','fra_start_hz',
+              'fra_stop_hz','fra_oct','fra_amplitude_pct','fra_timeout_s')
     if cot:
         from cot_buck_spice import FRA_KEYS, normalize_cot_settings
         keys=('enable_delay_ms','soft_start_ms','step_ms','stop_ms','load_after','line_load_enabled','cross_timeout_s',
@@ -59,9 +89,9 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     if parameters.get('parasitic_config'):
         keys=[k for k in keys if k not in ('diode_cj_pf','qr_cds_pf')]
     if not supports_design(parameters):
-        messagebox.showinfo('LTspice 闭环','支持固定频率反激、有源钳位正激与准谐振反激的 SSR 闭环。',parent=parent);return
+        messagebox.showinfo('电路仿真','当前拓扑或反馈模式暂未接入 LTspice 闭环对比。',parent=parent);return
     if container is None:
-        window=tk.Toplevel(parent);window.title('通用电源控制器配置与仿真对比')
+        window=tk.Toplevel(parent);window.title('电路仿真与设计对比')
         window.geometry(f'{min(1580,parent.winfo_screenwidth()-60)}x{min(920,parent.winfo_screenheight()-100)}')
         window.transient(parent)
         window.minsize(1000,620)
@@ -78,16 +108,21 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     field_font=(family,-max(12,min(18,ui_size)))
     section_font=(family,-compact_size,'bold')
     ttk.Style(window).configure('Controller.TButton',font=compact_font,padding=(9,5))
-    heading=(f"Buck COT · {int(parameters.get('buck_phases',1))} 相同步交错" if cot else
-             profile(parameters)['name'] if noniso else '准谐振反激 · L6565 逻辑参考 / ZCD / CS' if qr else
-             '有源钳位正激 · MP6005 / GATE / SYNC / 死区' if forward else '反激控制器 · 频率 / 软启动 / Vcs / 短路逻辑')
-    ttk.Label(window,text=heading,font=(family,-max(16,compact_size+2),'bold')).grid(
-        row=0,column=0,sticky='w',padx=14,pady=(9,7))
+    heading=(f"LLC {'半桥' if parameters['llc_bridge']=='half' else '全桥'} · "
+             f"{'混合滞环' if parameters['control_mode']=='Hybrid Hysteretic' else '电压变频'}" if llc else
+             f"Buck COT · {int(parameters.get('buck_phases',1))} 相同步交错" if cot else
+             profile(parameters)['name'] if noniso else '准谐振反激 · L6565 逻辑参考' if qr else
+             '有源钳位正激 · MP6005 逻辑参考' if forward else '反激 · 控制器与测试配置')
+    header=ttk.Frame(window);header.grid(row=0,column=0,sticky='ew',padx=14,pady=(8,6))
+    ttk.Label(header,text=heading,font=(family,-max(16,compact_size+2),'bold')).pack(anchor='w')
+    status=tk.StringVar(value='未运行 · 选择试验范围后，可运行并导出对比报告。')
+    status_label=ttk.Label(header,textvariable=status,style='ResultConclusion.TLabel',wraplength=970,justify='left')
+    status_label.pack(fill='x',pady=(4,0))
     toolbar=ttk.Frame(window,padding=(14,0));toolbar.grid(row=1,column=0,sticky='ew')
     settings=(normalize_cot_settings(parameters.get('spice_config'),parameters.get('f_sw',100e3))
               if cot else normalize_settings(parameters.get('spice_config')))
     variables={};groups={};traces=[];choice_labels={}
-    from spice_planning import recommend_settings,execution_plan,plan_text
+    from spice_planning import recommend_settings,execution_plan,plan_text,resource_text
     planbar=ttk.Frame(window,padding=(14,6));planbar.grid(row=2,column=0,sticky='ew')
     actions=ttk.Frame(planbar);actions.pack(fill='x')
     plan_label=ttk.Label(planbar,wraplength=1400,justify='left',font=compact_font);plan_label.pack(fill='x',pady=(6,0))
@@ -99,9 +134,13 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     ttk.Style(window).configure('Controller.TNotebook.Tab',font=compact_font,padding=(4,5))
     notebook=ttk.Notebook(left,style='Controller.TNotebook');notebook.grid(row=1,column=0,sticky='nsew')
     body.add(left,weight=0)
-    from spice_logic_ui import ControllerLogicPanel
-    logic=ControllerLogicPanel(body,values=lambda:{k:v.get() for k,v in variables.items()},
-                               design=parameters,available_keys=keys)
+    if llc:
+        from llc_ui import SimulationLogicPanel
+        logic=SimulationLogicPanel(body,parameters)
+    else:
+        from spice_logic_ui import ControllerLogicPanel
+        logic=ControllerLogicPanel(body,values=lambda:{k:v.get() for k,v in variables.items()},
+                                   design=parameters,available_keys=keys)
     body.add(logic,weight=1)
 
     manual_split=False
@@ -120,7 +159,7 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     def control_group(key):
         return '开关 FRA' if cot and key in FRA_KEYS else setting_group(key)
     compact_tabs={
-        '准谐振与 ZCD':'ZCD', '频率与 PWM':'PWM', '软启动逻辑':'软启',
+        '准谐振与 ZCD':'ZCD', '频率与 PWM':'PWM', '软启动逻辑':'软启动',
         '短路与过载保护':'保护', '测试与对比报告':'测试', '环路与交叉调整率':'环路',
         '补偿与寄生':'补偿', 'Buck / Boost 原型':'原型', '有源钳位与 SYNC':'SYNC',
         '开关 FRA':'FRA',
@@ -145,7 +184,7 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
         group=control_group(key)
         form,index,_,form_labels,form_editors=groups[group];groups[group][1]+=1
         row,col=index,0
-        label_widget=ttk.Label(form,text=label+(' / '+unit if unit else ''),wraplength=175,
+        label_widget=ttk.Label(form,text=_FORM_LABELS.get(key,label)+(' / '+unit if unit else ''),wraplength=175,
                                justify='left',font=field_font)
         label_widget.grid(row=row,column=col,sticky='w',padx=(8,10),pady=7)
         form_labels.append(label_widget)
@@ -189,14 +228,15 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
             if cot:
                 from spice_boundary import load_definition
                 step=load_definition(parameters,chosen)
-                plan_label.configure(text=f"{int(parameters.get('buck_phases',1))} 相，满载从零启动。独立双向阶跃 "
+                text=(f"{int(parameters.get('buck_phases',1))} 相，满载从零启动。独立双向阶跃 "
                     f"{step['low_fraction']:.0%} ↔ {step['high_fraction']:.0%}，仿真至 {step['stop_s']*1000:g} ms。"+
                     (f"每个输入端点另运行 {chosen['fra_start_hz']:g}–{chosen['fra_stop_hz']:g} Hz 开关 FRA 和半幅复核。"
                      "上限受单相实际开关频率限制。" if chosen['fra_enabled'] else "未选择开关 FRA。")+
                     ('另做一次线载联合长时试验，输入每档 500 ms。' if chosen['line_load_enabled'] else ''))
             else:
-                plan_label.configure(text=plan_text(execution_plan(parameters,chosen)))
-        except (ValueError,tk.TclError) as exc:plan_label.configure(text='任务计划：'+str(exc))
+                text=plan_text(execution_plan(parameters,chosen)).replace('；',' · ')
+            plan_label.configure(text=text+'\n'+resource_text(parameters,chosen))
+        except (ValueError,tk.TclError) as exc:plan_label.configure(text='试验范围待确认 · '+str(exc))
     def settings_changed():
         logic.refresh()
         if plan_job[0] is not None:window.after_cancel(plan_job[0])
@@ -207,9 +247,9 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
     def choose_plan(scope):
         try:
             put(recommend_settings(parameters,read(),scope))
-            status.set('已设置任务范围与观察时间，点击“运行并导出对比报告”。未改变控制器、器件、开关步长或 FRA 分辨率；时序建议仍需实际稳态检查。')
+            status.set('试验范围与观察时间已更新 · 运行后按波形检查稳态。')
         except (ValueError,tk.TclError) as exc:messagebox.showerror('请检查仿真设置',str(exc),parent=window)
-    ttk.Label(actions,text='仿真任务',font=section_font).pack(side='left',padx=(0,12))
+    ttk.Label(actions,text='试验范围',font=section_font).pack(side='left',padx=(0,12))
     if cot:
         def select_cot_fra(enabled):
             put({'fra_enabled': enabled,'line_load_enabled':0})
@@ -222,13 +262,11 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
         ttk.Button(actions,text='快速预检（推荐）',command=lambda:choose_plan('quick'),style='Controller.TButton').pack(side='left',padx=(0,8))
         ttk.Button(actions,text='完整对比',command=lambda:choose_plan('full'),style='Controller.TButton').pack(side='left',padx=(0,8))
         ttk.Button(actions,text='仅建议观察时间',command=lambda:choose_plan(None),style='Controller.TButton').pack(side='left')
-    window.bind('<Configure>',lambda e:plan_label.configure(wraplength=max(480,e.width-42))
-                if e.widget is window else None,add='+')
     refresh_plan()
     def apply_only():
         try:
             apply_settings(read())
-            status.set('已应用本次仿真设置。' if cot else '参数已应用；更换原型后请重新检查环路整定。仅导出工程不运行仿真；对比报告会运行 LTspice。')
+            status.set('设置已应用。' if cot else '设置已应用 · 若更换了控制器原型，请复核环路整定。')
         except (ValueError,tk.TclError) as exc:messagebox.showerror('请检查控制器参数',str(exc),parent=window)
     def fill_reference():
         try:
@@ -242,16 +280,15 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
                 put(acf_preset())
             else:
                 put(mp6005_preset())
-            status.set('已填入控制器参考值；保留 DCR、软启动、补偿与测试设置。请应用到计算器。' if noniso else '已填入参考值，请应用到计算器。')
+            status.set('参考值已填入 · 点击「应用到计算器」保存当前设置。')
         except (ValueError,tk.TclError) as exc:messagebox.showerror('请检查控制器参数',str(exc),parent=window)
     ttk.Button(toolbar,text='应用到计算器',command=apply_only,style='Controller.TButton').pack(side='right')
-    if not cot:
+    if not cot and not llc:
         ttk.Button(toolbar,text='填入控制器参考值' if noniso else '填入 L6565 QR 参考配置' if qr else '填入 MP6005 正激参考配置' if forward else '填入 MP6005 SSR 参考配置',command=fill_reference,style='Controller.TButton').pack(side='left')
         ttk.Button(toolbar,text='恢复全部默认' if noniso else '恢复 QR 参考默认' if qr else '恢复通用默认',command=lambda:put(preset(profile(parameters)['id']) if noniso else l6565_preset() if qr else normalize_settings()),style='Controller.TButton').pack(side='left',padx=8)
-    ttk.Label(toolbar,text=('导通时间、标称单相频率和相数取自设计参数' if cot else
-        '原创可配置模型，不含独立原厂模型验证' if noniso else 'L6565 参考 · ZCD 事件驱动行为模型' if qr else 'MP6005 参考 · 可配置行为模型'),style='Muted.TLabel',font=compact_font).pack(side='left',padx=10)
-    if parameters.get('parasitic_config'):
-        ttk.Label(toolbar,text='Coss / Cj 在主界面「寄生参数与吸收」设置',style='Muted.TLabel',font=compact_font).pack(side='left')
+    if not llc:
+        ttk.Label(toolbar,text=('相数、频率与导通时间取自设计参数' if cot else '控制器行为模型'),
+                  style='Muted.TLabel',font=compact_font).pack(side='left',padx=10)
     from spice_runtime import find_ltspice,set_ltspice
     runtime=ttk.Frame(window,padding=(14,0));runtime.grid(row=4,column=0,sticky='ew')
     if settings_context is None:
@@ -266,17 +303,29 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
         executable=settings_context.executable
         ttk.Button(runtime,text='设备与模型…',command=lambda:navigate('tools'),style='Controller.TButton').pack(side='right')
     ttk.Label(runtime,textvariable=executable,wraplength=830,font=compact_font).pack(side='left',fill='x',expand=True)
-    ttk.Label(window,text=('对比报告包含各相瞬态波形。启用 FRA 后在电容反馈端注入，按半幅复核计算环路裕度。' if cot else
-        '单路无交叉调整率。默认快速闭环不验证结电容尖峰；LM5022 限流包含斜坡。Boost 关闭 MOS 不会切断输入至输出的短路通路。' if noniso else 'QR：f_sw 为设计频率上限；ZCD 决定实际周期。异常 CS 锁存至 VCC 欠压；理想供电不模拟自动打嗝。' if qr else 'Vcs 为原始采样端阈值，实际峰值含消隐与延时超调。保护后重启会复位软启动；340 ms 打嗝若超过观察时间，不宣称已观察到重启。'),wraplength=970,font=compact_font).grid(row=5,column=0,sticky='w',padx=14,pady=5)
-    status=tk.StringVar(value='仅导出 ASC 工程不运行仿真。对比报告会运行各输入端点，可取消。' if cot else
-        '已加载示例时可直接导出。仅导出 ASC 工程不运行仿真；运行对比报告会依次仿真输入端点及 FRA，可取消。')
+    model_scope=('启用 FRA 后在电容反馈端注入，并以半幅复测核对各相开关模型的环路裕度。' if cot else
+                 '电路仿真复用当前桥式结构与控制模式。按选定范围运行瞬态或环路测试。' if llc else
+                 '快速闭环省略结电容尖峰。LM5022 限流包含斜坡。Boost 关断 MOS 后仍有输入到输出的短路通路。' if noniso else
+                 'ZCD 决定实际周期。f_sw 为设计频率上限。异常 CS 锁存至 VCC 欠压，理想 VCC 模型下无自动打嗝。' if qr else
+                 'Vcs 是采样端阈值，峰值还受消隐与延时影响。保护重启会复位软启动，打嗝重启须由观察窗口覆盖。')
+    if parameters.get('parasitic_config'):
+        model_scope += ' Coss、Cj 在「寄生参数与吸收」设置。'
+    scope_label=ttk.Label(window,text=model_scope,wraplength=970,font=compact_font,style='Muted.TLabel',justify='left')
+    scope_label.grid(row=5,column=0,sticky='ew',padx=14,pady=(4,2))
+
+    def wrap_notes(event):
+        if event.widget is window:
+            for label in (status_label,plan_label,scope_label):
+                label.configure(wraplength=max(400,event.width-42))
+    window.bind('<Configure>',wrap_notes,add='+')
     bar=ttk.Frame(window,padding=(14,8));bar.grid(row=6,column=0,sticky='ew')
-    ttk.Label(bar,textvariable=status,wraplength=460,font=compact_font).pack(side='left',fill='x',expand=True)
+    ttk.Label(bar,text='导出 ASC 可单独查看或运行工程。',font=compact_font,style='Muted.TLabel').pack(side='right')
     cancellation=threading.Event()
     panel_job=[None]
 
     def circuit_identity(p):
-        return p.get('topology'),p.get('feedback_mode','SSR'),p.get('control_mode'),cot_active(p)
+        return (p.get('topology'),p.get('feedback_mode','SSR'),p.get('control_mode'),
+                cot_active(p),p.get('llc_bridge') if llc else None)
 
     def start(compare=False):
         try:chosen=read();p=copy.deepcopy(get_parameters() if get_parameters else parameters)
@@ -294,13 +343,13 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
                     navigate('tools')
                 messagebox.showerror('尚未检测到 LTspice',str(exc),parent=owner)
                 return
-        path=filedialog.asksaveasfilename(parent=window,title='仿真与设计计算对比报告' if compare else '导出 LTspice 工程',
-            defaultextension='.docx' if compare else '.zip',filetypes=[('Word 对比报告','*.docx')] if compare else [('LTspice 工程','*.zip')],
-            initialfile='仿真与设计计算对比报告.docx' if compare else 'Buck_COT_LTspice.zip' if cot else parameters['topology']+'_LTspice.zip' if noniso else '有源钳位正激_LTspice.zip' if forward else '反激闭环_LTspice.zip')
+        path=filedialog.asksaveasfilename(parent=window,title='保存仿真对比报告 · Word 与 Excel' if compare else '导出 LTspice 工程',
+            defaultextension='.docx' if compare else '.zip',filetypes=[('Word 对比报告','*.docx'),('Excel 对比报告','*.xlsx')] if compare else [('LTspice 工程','*.zip')],
+            initialfile='仿真与设计计算对比报告.docx' if compare else 'Buck_COT_LTspice.zip' if cot else parameters['topology']+'_LTspice.zip' if noniso or llc else '有源钳位正激_LTspice.zip' if forward else '反激闭环_LTspice.zip')
         if not path:return
         apply_settings(chosen);p['spice_config']=chosen;cancellation.clear()
         for button in (export_button,compare_button):button.configure(state='disabled')
-        cancel_button.configure(state='normal');latest=['正在后台准备…'];status.set(latest[0])
+        cancel_button.configure(state='normal');latest=['准备输入'];status.set('运行中 · '+latest[0])
         started=time.monotonic()
         executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='spice-operation')
         def operation():
@@ -317,7 +366,9 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
         executor.shutdown(wait=False)
         def poll():
             if not future.done():
-                if window.winfo_exists():status.set(latest[0]+f' · 已用时 {int(time.monotonic()-started)} s')
+                if window.winfo_exists():
+                    state='正在取消' if cancellation.is_set() else '运行中'
+                    status.set(f'{state} · {latest[0]} · {int(time.monotonic()-started)} s')
                 if parent.winfo_exists():parent.after(150,poll)
                 return
             panel_job[0]=None
@@ -328,14 +379,24 @@ def open_export_dialog(parent,parameters,apply_settings,*,get_parameters=None,in
                 result=future.result()
                 if compare:
                     level,title,message=comparison_feedback(result)
-                    status.set(title+'：'+str(path))
-                    (messagebox.showwarning if level=='warning' else messagebox.showinfo)(title,message+str(path),parent=window)
+                    status.set(title+' · '+str(path))
+                    from pathlib import Path
+                    names = [result[k] for k in ('report_path','xlsx_path') if result.get(k)]
+                    saved = ('\n'.join(Path(name).name for name in names)+'\n'+str(Path(path).parent)) if names else str(path)
+                    (messagebox.showwarning if level=='warning' else messagebox.showinfo)(title,message+saved,parent=window)
                 else:
-                    status.set('工程已导出：'+str(path))
-                    description=('使用 LTspice 打开 Flyback.asc 查看相位结构。功率级和控制电路可在对应 INCLUDE 文件中编辑。'
+                    status.set('工程已导出 · '+str(path))
+                    description=('在 Vinmin / Vinmax 子文件夹中运行 LLC.asc。' if llc else
+                                 '使用 LTspice 打开 Flyback.asc 查看相位结构。功率级和控制电路可在对应 INCLUDE 文件中编辑。'
                                  if cot else '使用 LTspice 打开 Flyback.asc，可看到功率级与控制器连接。')
                     messagebox.showinfo('工程已导出',description+'\n'+str(path),parent=window)
-            except Exception as exc:status.set('操作未完成');messagebox.showerror('仿真与导出',str(exc) or '已取消',parent=window)
+            except Exception as exc:
+                if cancellation.is_set():
+                    status.set('已取消 · '+(str(exc) or '请查看运行记录。'))
+                    messagebox.showinfo('已取消',str(exc) or '本次操作已取消。',parent=window)
+                else:
+                    status.set('失败 · '+(str(exc) or type(exc).__name__))
+                    messagebox.showerror('仿真与导出',str(exc) or type(exc).__name__,parent=window)
         parent.after(150,poll)
     export_button=ttk.Button(bar,text='导出 ASC 工程…',command=lambda:start(False),style='Controller.TButton');export_button.pack(side='left',padx=4)
     compare_button=ttk.Button(bar,text='运行并导出对比报告…',command=lambda:start(True),style='Controller.TButton');compare_button.pack(side='left',padx=4)

@@ -20,7 +20,7 @@ def check(folder):
     sys.path.insert(0,str(source))
     from app_resources import resource_path
     resources=folder/'_internal'
-    paths=[Path('计算方法与公式说明.docx'),Path('多路反激电源设计入门教程.docx'),Path('自动计算参数依据.docx'),
+    paths=[Path('计算方法与公式说明.docx'),Path('开关电源介绍与计算方法.docx'),Path('多路反激电源设计入门教程.docx'),Path('自动计算参数依据.docx'),
            Path('MANUAL_ZH.md'),Path('examples/40W_CCM_FLYBACK.json'),
            Path('examples/40W_ACF_FORWARD.json'),Path('examples/6_OUTPUT_FLYBACK_SSR.json'),
            Path('examples/MP6005_PSR_FLYBACK.json'),Path('docs/PARAMETER_PANEL.md'),
@@ -72,7 +72,7 @@ def check(folder):
             assert process.poll() is None,f'Package exited during startup: {process.returncode}'
             for hwnd,title in get_owned_windows():
                 assert 'unhandled exception' not in title.lower(),title
-                if title.startswith(('Switching Power Supply Design & Loop Analyzer', '开关电源系统设计')):
+                if title.startswith(('Switching Power Supply Design & Loop Analyzer', '开关电源系统设计', '开关电源设计 · 系统工作台')):
                     result=ctypes.c_size_t()
                     if user32.SendMessageTimeoutW(hwnd,0,0,0,2,500,ctypes.byref(result)):
                         owned_window=hwnd

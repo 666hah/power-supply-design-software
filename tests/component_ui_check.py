@@ -35,23 +35,33 @@ class ComponentUIChecks(unittest.TestCase):
         app=self.app;root=self.root
         app._apply_config(copy.deepcopy(self.original))
         self.assertTrue(app.update_all(),app.status_var.get())
-        app._isolated_result_book.select(app._component_page)
-        root.update();editor=app.component_manager
+        app.nb.select(app.tab_bom)
+        root.update();editor=app._bom_editor
+        self.assertIs(editor.winfo_toplevel(), root)
         editor.tree.selection_set('Q1');editor.select();root.update()
-        for key,value in dict(manufacturer='测试厂家',model='TEST-200V',package='DFN5x6',voltage_V='200').items():editor.draft[key].set(value)
+        self.assertTrue(editor.editors['current_rms_A'].winfo_ismapped())
+        self.assertTrue(editor.editors['current_peak_A'].winfo_ismapped())
+        self.assertFalse(editor.editors['current_avg_A'].winfo_ismapped())
+        for key,value in dict(manufacturer='测试厂家',model='TEST-200V',package='DFN5x6',
+                              voltage_V='200',current_rms_A='20',current_peak_A='40').items():editor.draft[key].set(value)
         eta=app._last['res']['eta']
         with patch('loss_model.compute_design',side_effect=AssertionError('metadata must not resolve')):
             self.assertTrue(editor.apply_item())
         self.assertEqual(app._last['res']['eta'],eta)
         self.assertEqual(app.get_params()['component_management']['items']['Q1']['voltage_V'],200)
+        self.assertEqual(app.get_params()['component_management']['items']['Q1']['current_rms_A'],20)
         saved=json.loads(json.dumps(app._config_dict(),ensure_ascii=False,allow_nan=False))
         app._apply_config(saved);self.assertEqual(app._component_management['items']['Q1']['model'],'TEST-200V')
+        self.assertEqual(app._component_management['items']['Q1']['current_peak_A'],40)
         self.assertTrue(app.update_all(),app.status_var.get())
-        app._isolated_result_book.select(app._component_page);root.update()
+        app.nb.select(app.tab_bom);root.update()
+        editor=app._bom_editor
         editor.tree.selection_set('Q1');editor.select();root.update()
         out=ROOT/'artifacts/qa/component-management';out.mkdir(parents=True,exist_ok=True)
         capture(root,out/'desktop-bom.png')
         self.assertTrue(editor.tree.winfo_ismapped())
+        full_rows = int(editor.tree.cget('height'))
+        self.assertGreaterEqual(full_rows, 14)
         self.assertGreater(editor.detail.winfo_height(),60)
         editor.draft['model'].set('未应用草稿')
         editor.mark_stale()
@@ -59,10 +69,22 @@ class ComponentUIChecks(unittest.TestCase):
         editor.refresh()
         self.assertEqual(editor.draft['model'].get(),'未应用草稿')
         editor.draft['model'].set('TEST-200V')
-        root.geometry('1000x650');root.update();app._component_scroll.sync();root.update()
+        app._parameter_pane_width = 350
+        root.geometry('1040x620')
+        root.update()
+        app._resize_left()
+        root.update()
+        canvas = app._bom_scroll.canvas
+        self.assertTrue(app.left.winfo_ismapped())
         self.assertEqual(editor._form_columns,2)
-        self.assertLess(app._component_scroll.canvas.yview()[1],1)
-        app._component_scroll.canvas.yview_moveto(1);root.update()
+        compact_rows = int(editor.tree.cget('height'))
+        self.assertGreaterEqual(compact_rows, 10)
+        self.assertLess(compact_rows, full_rows)
+        self.assertLess(canvas.yview()[1],1)
+        canvas.yview_moveto(1);root.update()
+        self.assertAlmostEqual(canvas.yview()[1], 1.)
+        detail_bottom = editor.detail.winfo_rooty() + editor.detail.winfo_height()
+        self.assertLessEqual(detail_bottom, canvas.winfo_rooty() + canvas.winfo_height())
         capture(root,out/'desktop-bom-small.png')
         # Invalid input is rejected without corrupting saved ratings.
         editor.draft['voltage_V'].set('-1')

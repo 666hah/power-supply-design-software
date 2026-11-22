@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from custom_cores import DIMENSIONS, DISPLAY_UNITS, INPUT_DIMENSIONS
+from numeric_input import limit_numeric_input
 
 
 class CoreGeometryEditor:
@@ -20,13 +21,15 @@ class CoreGeometryEditor:
         for row,(key,(label,choices)) in enumerate(INPUT_DIMENSIONS.items(),2):
             self.values[key]=tk.StringVar();self.units[key]=tk.StringVar()
             ttk.Label(self.frame,text=label,style='Param.TLabel',wraplength=170).grid(row=row,column=0,sticky='w',pady=3)
-            ttk.Entry(self.frame,textvariable=self.values[key],width=10).grid(row=row,column=1,sticky='ew',padx=3)
+            entry=ttk.Entry(self.frame,textvariable=self.values[key],width=10)
+            limit_numeric_input(entry)
+            entry.grid(row=row,column=1,sticky='ew',padx=3)
             combo=ttk.Combobox(self.frame,textvariable=self.units[key],values=list(choices)[:2],state='readonly',width=5)
             combo.grid(row=row,column=2,sticky='w',padx=3)
             combo.bind('<<ComboboxSelected>>',lambda _e,k=key:self.change_unit(k))
             self.values[key].trace_add('write',lambda *_:self.edit())
         self.name.trace_add('write',lambda *_:self.edit())
-        ttk.Label(self.frame,text='填写厂家有效参数 Ae、Ve、Wa。平均匝长由磁件设计结果给出。',
+        ttk.Label(self.frame,text='按规格书填写 Ae、Ve 和 Wa。平均匝长在磁件设计中计算。',
                   style='Muted.TLabel',wraplength=330,justify='left').grid(row=5,column=0,columnspan=3,sticky='ew',pady=(4,0))
         self.variable.trace_add('write',lambda *_:self.load())
         self.load()

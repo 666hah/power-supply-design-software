@@ -3,6 +3,8 @@ import copy
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+from numeric_input import limit_numeric_input
+
 class MosCurveUI:
     def _mos_resolved_mode(self):
         mode=self.params['mos_miller_mode'].get()
@@ -34,9 +36,10 @@ class MosCurveUI:
 
     def _select_mos_curve(self, candidates):
         if len(candidates)==1:return candidates[0]
-        dialog=tk.Toplevel(self.root);dialog.title('选择一条测试条件明确的曲线')
+        dialog=tk.Toplevel(self.root);dialog.title('选择 MOS 测试曲线')
         dialog.transient(self.root)
-        ttk.Label(dialog,text='不同温度或 Vds 的曲线不自动混合，请明确选择一条。',padding=10).pack(fill='x')
+        ttk.Label(dialog, text='按电压和温度选一条曲线作为计算依据。', style='ResultConclusion.TLabel',
+                  padding=10).pack(fill='x')
         box=tk.Listbox(dialog,width=90,height=min(10,len(candidates)),exportselection=False)
         box.pack(fill='both',expand=True,padx=10,pady=6)
         for c in candidates:
@@ -80,7 +83,7 @@ class MosCurveUI:
     def _build_manual_events(self,frame,row):
         self._manual_event_vars={};self._manual_event_entries={};self._manual_loading=False
         panel=ttk.Frame(frame);panel.grid(row=row,column=0,columnspan=4,sticky='ew',pady=6)
-        ttk.Label(panel,text='手动四事件：电流由对应工况计算',style='Param.TLabel').grid(row=0,column=0,columnspan=3,sticky='w')
+        ttk.Label(panel,text='手动四事件 · 米勒平台与栅电荷',style='Param.TLabel').grid(row=0,column=0,columnspan=3,sticky='w')
         for col,text in enumerate(('输入 / 事件','Vgp / V','零伏至平台\nQgs / nC')):
             ttk.Label(panel,text=text,justify='center').grid(row=1,column=col,padx=3,pady=4)
         from power_stage import DEFAULT_PARAMS
@@ -89,13 +92,16 @@ class MosCurveUI:
             for col,key in enumerate(('Vgp','Qgs'),1):
                 val=DEFAULT_PARAMS['Vgp_'+edge] if key=='Vgp' else DEFAULT_PARAMS['Qgs']*1e9
                 var=tk.StringVar(value=f'{val:.7g}');self._manual_event_vars[case,edge,key]=var
-                entry=ttk.Entry(panel,textvariable=var,width=8);entry.grid(row=index,column=col,padx=3,sticky='ew')
+                entry=ttk.Entry(panel,textvariable=var,width=8)
+                limit_numeric_input(entry)
+                entry.grid(row=index,column=col,padx=3,sticky='ew')
                 self._manual_event_entries[case,edge,key]=entry
                 var.trace_add('write',self._manual_event_changed)
         panel.columnconfigure(1,weight=1);panel.columnconfigure(2,weight=1)
         self._manual_event_note=tk.StringVar()
         ttk.Label(panel,textvariable=self._manual_event_note,wraplength=300,style='Muted.TLabel').grid(row=6,column=0,columnspan=3,sticky='ew',pady=4)
-        self._register_param_extra(frame,[panel],('Vgp_on','Vgp_off','Qgs'),'MOS 手动 四事件 Vinmin Vinmax Qgs 平台',lambda:self._mos_resolved_mode()=='manual')
+        self._register_param_extra(frame,[panel],('Vgp_on','Vgp_off','Qgs'),'MOS 手动 四事件 Vinmin Vinmax Qgs 平台',
+                                   lambda:self._topo_key() != 'LLC' and self._mos_resolved_mode()=='manual')
         self._sync_manual_events()
         return row+1
 
@@ -104,7 +110,9 @@ class MosCurveUI:
         curve=self.params['mos_charge_mode'].get()=='curve'
         for (case,edge,key),entry in self._manual_event_entries.items():
             entry.configure(state='disabled' if curve and key=='Qgs' else 'normal')
-        self._manual_event_note.set('Qgs 由栅电荷曲线按四个平台读取，表内电荷草稿不参与计算。' if curve else '四行独立生效。Qg(th)、Qgd 与总 Qg 使用公共器件参数。对应电流见 Q1 的“四工况”核算。')
+        self._manual_event_note.set('Qgs 按四个平台从栅电荷曲线读取。' if curve else
+                                    '每个事件分别使用本行平台电压和 Qgs。Qg(th)、Qgd 和总 Qg 使用公共器件参数。'
+                                    '对应电流见 Q1 的「四工况」核算。')
 
     def _manual_event_changed(self,*_):
         if self._manual_loading or self._building:return

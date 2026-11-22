@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -10,19 +11,44 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from runtime_resources import configure_numeric_threads
 configure_numeric_threads()
-from example_catalog import EXAMPLES
+from compensation_report import network_key
+from example_catalog import EXAMPLES, PERSONAL_QR, PUBLIC_QR, available_examples, example_feedback_defaults
 from web_app.metadata import read_example,bootstrap
 from design_engine.service import calculate_parameters
 from design_engine.specification import load_spec
 
 
+SSR_NETWORKS = {
+    '33W_3OUT_ACF_MP6005_COMPACT.json': 'tl431f',
+    '40W_CCM_3OUT_FLYBACK.json': 'tl431f',
+    PUBLIC_QR: 'tl431nf',
+    PERSONAL_QR: 'tl431nf',
+    '300W_LLC_HALF_HHC.json': 'tl431nf',
+    '300W_LLC_FULL_VCO.json': 'tl431nf',
+}
+
+
 class CatalogChecks(unittest.TestCase):
     def test_curated_isolated_and_nonisolated_examples(self):
-        self.assertEqual(len(EXAMPLES),8)
-        self.assertEqual(bootstrap()['examples'],EXAMPLES)
+        self.assertEqual(bootstrap()['examples'],available_examples())
         self.assertEqual([load_spec(read_example(n))['topology'] for n in EXAMPLES],
-                         ['ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BUCK','BOOST','BUCK'])
+                         ['ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BUCK','LLC','LLC','BOOST','BUCK'])
         with self.assertRaises(ValueError):read_example('../main.py')
+
+    def test_personal_qr_replaces_only_the_menu_entry_when_installed(self):
+        with TemporaryDirectory() as temporary, patch('example_catalog.ROOT',Path(temporary)):
+            self.assertEqual(available_examples(),EXAMPLES)
+            with self.assertRaises(ValueError):
+                read_example(PERSONAL_QR)
+            local = Path(temporary)/'examples'/PERSONAL_QR
+            local.parent.mkdir()
+            local.write_text(json.dumps(dict(Np=42, outputs=[dict(Ns=21),dict(Ns=5)])),encoding='utf-8')
+            selected = available_examples()
+            self.assertEqual(list(selected),[PERSONAL_QR if key==PUBLIC_QR else key for key in EXAMPLES])
+            example=read_example(PERSONAL_QR)
+            self.assertEqual([example['Np'],*(r['Ns'] for r in example['outputs'])],[42,21,5])
+            public=read_example(PUBLIC_QR)
+            self.assertEqual([public['Np'],*(r['Ns'] for r in public['outputs'])],[56,28,8])
 
     def test_flyback_preserves_user_requirements_and_winding_structure(self):
         data=(ROOT/'examples/40W_CCM_3OUT_FLYBACK.json').read_bytes()
@@ -87,29 +113,51 @@ class CatalogChecks(unittest.TestCase):
             layout=assess_winding_window(transformer_windings(case['result']),winding)
             self.assertTrue(layout['fits'])
 
+    def test_ssr_network_uses_selected_rail_and_includes_31_volts_in_fast_lane(self):
+        data = dict(topology={'v': 'QR-FLYBACK'}, feedback_mode={'v': 'SSR'},
+                    V_out=60., outputs=[dict(V_out=60.), dict(V_out={'v': .031, 'u': 'k'})],
+                    feedback_output={'v': 2}, __comp=dict(topo='opamp3'))
+        before = copy.deepcopy(data)
+        self.assertEqual(network_key(example_feedback_defaults(data)['__comp']['topo']), 'tl431f')
+        self.assertEqual(data, before)
+        data['outputs'][1]['V_out'] = 31.001
+        self.assertEqual(network_key(example_feedback_defaults(data)['__comp']['topo']), 'tl431nf')
+        self.assertIs(example_feedback_defaults(dict(data, feedback_mode='PSR-MP6005'))['__comp'],
+                      data['__comp'])
+        self.assertIs(example_feedback_defaults(dict(data, topology='BUCK'))['__comp'], data['__comp'])
+
     def test_desktop_menu_callbacks_load_their_own_example(self):
         import tkinter as tk
         import main
         root=tk.Tk();root.withdraw()
         try:
-            with patch.object(main.PowerSupplyAnalyzer,'schedule_update',return_value=None):
+            with patch.object(main.PowerSupplyAnalyzer,'schedule_update',return_value=None), \
+                    patch.object(main.PowerSupplyAnalyzer,'request_update',return_value=None):
                 app=main.PowerSupplyAnalyzer(root)
+                self.assertEqual(app._comp_key(), 'tl431f')
                 bar=root.nametowidget(root.cget('menu'))
                 example_index=next(i for i in range(bar.index('end')+1)
                                    if bar.type(i)=='cascade' and bar.entrycget(i,'label')=='示例')
                 menu=root.nametowidget(bar.entrycget(example_index,'menu'))
                 entries=[i for i in range(menu.index('end')+1)
                          if menu.type(i)=='command']
-                self.assertEqual(len(entries),8)
-                self.assertEqual([menu.entrycget(i,'label') for i in entries],list(EXAMPLES.values()))
+                catalog=available_examples()
+                self.assertEqual(len(entries),len(catalog))
+                self.assertEqual([menu.entrycget(i,'label') for i in entries],list(catalog.values()))
                 with patch.object(app,'load_isolated_example') as loader:
-                    for index,name in zip(entries,EXAMPLES):
+                    for index,name in zip(entries,catalog):
                         menu.invoke(index)
                         loader.assert_called_with(name)
-                for name,topology in zip(EXAMPLES,('ACF-FORWARD','FLYBACK','QR-FLYBACK','BUCK','BUCK','BUCK','BOOST','BUCK')):
+                for name in catalog:
+                    example=load_spec(read_example(name))
+                    topology=example['topology']
                     app.load_isolated_example(name)
                     p=app.get_params()
                     self.assertEqual(p['topology'],topology)
+                    self.assertEqual(app._comp_key(), SSR_NETWORKS.get(name, 'opamp3'))
+                    if name==PERSONAL_QR:
+                        self.assertEqual(p['Np'],example['Np'])
+                        self.assertEqual([r['Ns'] for r in p['outputs']],[r['Ns'] for r in example['outputs']])
                     if topology in ('ACF-FORWARD','FLYBACK'):
                         self.assertEqual(len(p['outputs']),3)
                     if topology=='ACF-FORWARD':

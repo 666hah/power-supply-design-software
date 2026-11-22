@@ -65,6 +65,37 @@ class CliChecks(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 self.assertIn('xl/workbook.xml', archive.namelist())
 
+    def test_review_exports_bound_acceptance_and_report_without_overwriting_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            source = folder/'工程.json'
+            seed = (ROOT/'examples/40W_CCM_FLYBACK.json').read_text(encoding='utf-8-sig')
+            source.write_text(seed, encoding='utf-8-sig')
+            before = source.read_bytes()
+            destination = folder/'review'
+            result = self.call('review', '--spec', source, '--output-dir', destination, '--report', 'xlsx')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            outcome = json.loads(result.stdout.splitlines()[-1])
+            self.assertTrue(outcome['ok'])
+            self.assertEqual(source.read_bytes(), before)
+
+            snapshot = read_snapshot(outcome['snapshot'])
+            self.assertEqual(snapshot['snapshot_id'], outcome['snapshot_id'])
+            self.assertEqual([case['id'] for case in snapshot['cases']], ['Vinmin', 'Vinmax'])
+            acceptance = json.loads(Path(outcome['acceptance']).read_text(encoding='utf-8'))
+            self.assertTrue(acceptance['calculation_matched'])
+            self.assertEqual(acceptance['summary']['state'], outcome['acceptance_state'])
+            row = next(row for row in acceptance['rows'] if row['id'] == 'phase_margin')
+            self.assertEqual((row['comparison'], row['limit']), ('>', 45.))
+            with ZipFile(outcome['report']) as archive:
+                self.assertIsNone(archive.testzip())
+                self.assertIn('xl/workbook.xml', archive.namelist())
+
+            repeated = self.call('review', '--spec', source, '--output-dir', destination)
+            self.assertEqual(repeated.returncode, 2)
+            self.assertEqual(json.loads(repeated.stdout)['error'], 'io_error')
+            self.assertEqual(read_snapshot(outcome['snapshot'])['snapshot_id'], outcome['snapshot_id'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

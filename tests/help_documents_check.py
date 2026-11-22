@@ -12,6 +12,7 @@ from main import PowerSupplyAnalyzer
 
 TUTORIAL = '多路反激电源设计入门教程.docx'
 REFERENCE = '计算方法与公式说明.docx'
+DERIVATIONS = '开关电源介绍与计算方法.docx'
 BASIS = '自动计算参数依据.docx'
 
 
@@ -19,7 +20,7 @@ class HelpDocuments(unittest.TestCase):
     def setUp(self):
         self.app = object.__new__(PowerSupplyAnalyzer)
 
-    def test_tutorial_immediately_follows_reference(self):
+    def test_help_document_order(self):
         tree = ast.parse((ROOT/'main.py').read_text(encoding='utf-8-sig'))
         entries = []
         for node in ast.walk(tree):
@@ -31,7 +32,12 @@ class HelpDocuments(unittest.TestCase):
                 if arg.arg == 'label' and isinstance(arg.value, ast.Constant):
                     entries.append((node.lineno, arg.value.value))
         labels = [label for _, label in sorted(entries)]
-        self.assertEqual(labels, [REFERENCE[:-5], TUTORIAL[:-5], BASIS[:-5]])
+        self.assertEqual(labels, [REFERENCE[:-5], DERIVATIONS[:-5], TUTORIAL[:-5], BASIS[:-5], '关于'])
+
+    def test_derivations_open_exact_shipped_document(self):
+        with patch('main.os.startfile') as launch:
+            self.app.open_switching_power_supply_guide()
+            self.assertEqual(Path(launch.call_args.args[0]).resolve(), resource_path(DERIVATIONS).resolve())
 
     def test_design_basis_opens_exact_shipped_document(self):
         with patch('main.os.startfile') as launch:
@@ -65,7 +71,7 @@ class HelpDocuments(unittest.TestCase):
     def test_both_documents_are_bundled_without_build_scripts(self):
         from runpy import run_path
         DATA = run_path(str(ROOT/'packaging/bundle_common.py'))['DATA']
-        for name in (REFERENCE, TUTORIAL, BASIS):
+        for name in (REFERENCE, DERIVATIONS, TUTORIAL, BASIS):
             self.assertIn((str(resource_path(name)), '.'), DATA)
         self.assertFalse(any('tutorials' in source and not source.endswith('.docx') for source, _ in DATA))
 

@@ -1,10 +1,35 @@
 # 示例器件初选与数据依据
 
+## 2026-11-21 裕量更新
+
+本轮复算启动默认、桌面示例菜单及对应的本地 Python 网页算例。器件工作应力和降额线使用双端点的同一套硬件。表中数值是设计计算，所列器件规格来自原厂资料。
+
+| 算例 | 器件更新 | 校核结果 |
+| --- | --- | --- |
+| L6565 准谐振反激 | Q1 采用 STP15N95K5，额定 950 V。输入采用两颗 B32774P6106K000，10 µF、630 V（85 °C）。 | 双端点满载的选定容差角点中，公开参考算例的 Q1 峰值约 746.4 V，降额线为 807.5 V。输入电容约 442.3 V，按 85 °C 额定值计算的降额线为 567 V。 |
+| 单路与三路 CCM 反激、三路有源钳位正激 | 330 µF 和 100 µF 输入电容采用 Panasonic EEUFR1J331 和 EEH-AZS1J101B，额定 63 V。 | 选定容差角点中，输入电容最大纹波利用率分别约为 56%、59%、54%，原配置约为 82%、85%、78%。 |
+| 单相 Buck / Boost | 成品电感采用 Coilcraft XGL1010-473MED，保留 47 µH，DCR 最大值 46.9 mΩ。两款 Buck 的主输入电容和 Boost 的主输出电容采用 Nippon Chemi-Con HHXF500ARA221MJH0G。 | 满载两端的关键电容最小纹波电流裕量，Buck 约 2.0 A，Boost 约 1.7 A。Boost 峰值电流约 4.04 A，超过该电感典型降感 10% 的 3.7 A 工况，还需核对工作电流下的有效电感。 |
+| 四相 COT Buck | 四颗 330 µF 输入电容改用 Nichicon GWC1V331MCO1GS，额定 35 V。标称环路穿越频率由 20 kHz 调到 16 kHz。 | 输入电容高压端约 21.6 V，降额线 28 V，电压裕量由约 −1.6 V 提高到 +6.4 V。 |
+| 半桥 HHC 与全桥电压变频 LLC | 输入采用 TDK B43544C7157M060（550 V），输出采用 B41693D0477Q001（75 V）。 | 两端的最小输入和输出电容电压裕量分别约 74 V 和 19 V。 |
+
+本机 QR 从示例菜单加载时应用符合原位号和旧型号的替换。工程保存后使用当时的器件配置。半导体开关电荷、Coss、输入电容 ESR 和成品电感 DCR 按新器件更新。QR 输入电容在 125 °C 时的厂家工作电压上限为 450 V，实际工作温度需纳入降额核算。隔离算例的绕组及磁件温升限值继续沿用原设计，温升等其他超限仍列在计算结果中。
+
+软件预填的截断正态电容模型仍采用 ±10% 的研究边界。多款换入电容的厂家容量公差为 ±20%，应按器件资料选择正式校核边界。另将 COT 输入和输出电容量同时下调 20% 时，器件规格未见超限。最小相位裕度约 78.2°，低于 79° 目标，闭环平均偏差约 60.4 mV，略高于 60 mV 目标。
+
+四相 COT 的 14 V 满载 LTspice 工况在 5.5 ms 窗口内运行至稳态。仿真输入电流峰值约 18.60 A，低于 20 A 限值，稳态端口纹波约 3.84 mV。完整 8 ms 工况、FRA 以及更新后 QR 的启动尖峰仍待仿真复核。
+
+- [ST STP15N95K5](https://www.st.com/resource/en/datasheet/stp15n95k5.pdf)、[TDK B3277*P](https://www.tdk-electronics.tdk.com/inf/20/20/db/fc_2009/b3277xp.pdf)。
+- [Panasonic EEUFR1J331](https://industrial.panasonic.com/ww/products/pt/aluminum-cap-lead/models/EEUFR1J331)、[Panasonic EEH-AZS1J101B](https://na.industrial.panasonic.com/products/capacitors/aluminum-electrolytic-capacitors/lineup/conductive-polymer-hybrid-aluminum-electrolytic/series/135824/model/135931)。
+- [Coilcraft XGL1010-473MED](https://www.coilcraft.com/en-us/products/power/shielded-inductors/molded-inductor/xgl/xgl1010/xgl1010-473/)、[Nippon Chemi-Con HHXF500ARA221MJH0G](https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=HHXF500ARA221MJH0G)、[Nichicon GWC](https://www.nichicon.co.jp/english/series_items/catalog_pdf/e-gwc.pdf)。
+- [TDK B43544](https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/snap-in/data_sheet/20/30/db/aec/b43544.pdf)、[TDK B41693D0477Q001](https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/axial-lead/info?part_no=B41693D0477Q001)。
+
+## 历史选型记录
+
 2026-11-08：覆盖 `examples/` 内19份JSON，包括6个菜单示例、其他回归/兼容示例和两份系统工程内的单元。修改的是随软件交付的示例，不自动覆盖用户已保存的画布或工程。
 
 ## 在哪里看
 
-加载示例后，在“关键器件BOM与降额”查看各位号厂家、订货型号、封装、耐压/纹波/功率及依据。Word/Excel的关键器件表消费同一份资料。新补的 `U_CTRL` 是控制器型号参考；图中独立框说明未展开引脚、驱动和偏置。PSR已有 `U_PSR` 不重复计件。
+加载示例后，桌面版打开「② 器件 BOM 与规格」，本地网页版打开「关键器件与降额」。按位号查看厂家、订货型号、封装、耐压/纹波/功率及依据。Word/Excel的关键器件表消费同一份资料。新补的 `U_CTRL` 是控制器型号参考；图中独立框说明未展开引脚、驱动和偏置。PSR已有 `U_PSR` 不重复计件。
 
 型号与计算标量一起更新：Q1的Rds、Qg/Qgs/Qgd、Vth、门限电荷、平台参考、内栅阻、Coss；正激Q2的辅助参数；各路二极管Vf及已知Qrr；每颗电容C/ESR/ESL；采样电阻；成品电感DCR/额定电流。输入两端采用同一份器件资料，不能在Vinmin/Vinmax悄悄换一组器件。
 
@@ -47,7 +72,7 @@
 
 公式说明、教程与历史报告中的已冻结算例保留原输入和原结果；本次更换器件后，应从当前示例重新计算，不能直接套用历史数值。新示例的规格和绕组需求保持，派生电压、损耗、纹波与环路随真实参考参数变化。
 
-数据维护入口：`resources/components/example_semiconductor_parts.json`、`example_passive_parts.json`、`example_support_parts.json`保存逐型号来源和条件；`tools/populate_example_parts.py`用于维护时显式生成，不在程序启动时更改用户工程。原厂PDF不混入程序包。
+`resources/components/example_semiconductor_parts.json`、`example_passive_parts.json`、`example_support_parts.json` 保存逐型号来源和条件。维护脚本 `tools/populate_example_parts.py` 需通过 `--example` 指定已支持的算例。写入前可先生成草稿并比较 JSON。四相 COT 与 LLC 的选型由对应算例维护。程序包记录规格来源链接。
 
 ## 原厂资料入口
 

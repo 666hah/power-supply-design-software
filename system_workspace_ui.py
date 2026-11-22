@@ -22,6 +22,8 @@ LOCAL_ARCHITECTURE = 'SYSTEM_PCS_DAB_AUX.json'
 
 
 class SystemWorkspace:
+    _MAX_EDITORS = 2
+
     def __init__(self, root, *, recovery=True):
         self.root, self.use_recovery = root, recovery
         self.project = model.fresh_project()
@@ -29,6 +31,7 @@ class SystemWorkspace:
         self.path, self.selected, self.link, self.drag, self.removal = None, None, None, None, None
         self.calculator = None
         self._editor = None
+        self._editors = {}
         self._opening_unit = None
         self._unit_page_states = {}
         self._unit_detached = set()
@@ -54,7 +57,7 @@ class SystemWorkspace:
         menubar = tk.Menu(root)
         filemenu = tk.Menu(menubar, tearoff=False)
         filemenu.add_command(label='新建工程', command=self.new)
-        filemenu.add_command(label='打开工程 / 原配置', command=self.open_file)
+        filemenu.add_command(label='打开工程或导入配置…', command=self.open_file)
         filemenu.add_command(label='保存工程', command=self.save, accelerator='Ctrl+S')
         filemenu.add_command(label='另存为…', command=lambda: self.save(save_as=True))
         menubar.add_cascade(label='文件', menu=filemenu)
@@ -88,6 +91,9 @@ class SystemWorkspace:
             style.theme_use('clam')
         style.configure('System.TFrame', background=BG)
         style.configure('System.TLabel', background=BG, foreground=INK, font=('Microsoft YaHei UI', -14))
+        from ui_preferences import style_conclusion
+        style_conclusion(style, 14)
+        style_conclusion(style, 14, 'SystemConclusion.TLabel')
         for name, padding in [('System.TButton', (12, 7)), ('SystemToolbar.TButton', (12, 8)),
                               ('SystemMini.TButton', (8, 4))]:
             style.configure(name, padding=padding, font=('Microsoft YaHei UI', -13),
@@ -117,11 +123,12 @@ class SystemWorkspace:
         bar.pack(fill='x')
         filebar = ttk.Frame(bar, style='System.TFrame')
         filebar.grid(row=0, column=0, sticky='w')
-        for i, (text, command) in enumerate([('新建工程', self.new), ('打开工程 / 原配置', self.open_file),
-                                             ('查看系统预算', self.show_checks)]):
+        for i, (text, command) in enumerate([('新建工程', self.new), ('打开工程或导入配置…', self.open_file),
+                                             ('查看系统检查', self.show_checks)]):
             ttk.Button(filebar, text=text, command=command, style='SystemToolbar.TButton').grid(
                 row=0, column=i, sticky='ew', padx=(0, 8))
-        self.metrics=tk.StringVar(value='本机工作区 · 架构编辑不触发电气求解')
+        self.metrics = tk.StringVar()
+        self.check_summary = tk.StringVar(value='正在检查供电预算与接口…')
         utilities = ttk.Frame(bar, style='System.TFrame')
         utilities.grid(row=0, column=1, sticky='e')
         self.title = tk.StringVar(value=self.project['title'])
@@ -153,6 +160,10 @@ class SystemWorkspace:
         board_title.pack(side='left', fill='x', expand=True)
         tk.Label(board_title, text='供电网络', bg='white', fg=INK, font=('Microsoft YaHei UI', -16, 'bold'),
                  anchor='w').pack(fill='x')
+        conclusion = tk.Label(board_title, textvariable=self.check_summary, bg='white', fg=INK,
+                              font=('Microsoft YaHei UI', -14, 'bold'), anchor='w', justify='left')
+        conclusion.pack(fill='x', pady=(2, 1))
+        board_title.bind('<Configure>', lambda event: conclusion.configure(wraplength=max(120, event.width)))
         tk.Label(board_title, textvariable=self.metrics, bg='white', fg=MUTED, font=('Microsoft YaHei UI', -12),
                  anchor='w').pack(fill='x')
         for text,command in [('适应画布',self.fit_canvas),('＋',lambda:self.set_zoom(self.zoom*1.2)),('－',lambda:self.set_zoom(self.zoom/1.2))]:
@@ -170,15 +181,15 @@ class SystemWorkspace:
         board.columnconfigure(0, weight=1)
         side = ttk.Frame(split, width=340,style='SystemCard.TFrame')
         split.add(side, weight=1)
-        tk.Label(side,text='属性检查器',bg='white',fg=INK,font=('Microsoft YaHei UI',-16,'bold'),anchor='w',padx=16,pady=12).pack(fill='x')
+        tk.Label(side,text='节点与支路',bg='white',fg=INK,font=('Microsoft YaHei UI',-16,'bold'),anchor='w',padx=16,pady=12).pack(fill='x')
         ttk.Separator(side).pack(fill='x')
         footer=ttk.Frame(side,style='SystemCard.TFrame',padding=12);footer.pack(side='bottom',fill='x')
-        self.edit_state=tk.StringVar(value='选择节点或支路后编辑')
+        self.edit_state=tk.StringVar(value='请先选择节点或支路')
         self.inspector_save=ttk.Button(footer,text='保存节点修改',style='SystemPrimary.TButton',command=self.save_inspector,state='disabled')
-        self.inspector_save.pack(fill='x')
         edit_hint = ttk.Label(footer, textvariable=self.edit_state, font=('Microsoft YaHei UI', -12),
                               background='white', foreground=MUTED)
-        edit_hint.pack(fill='x', pady=(8, 0))
+        edit_hint.pack(fill='x', pady=(0, 8))
+        self.inspector_save.pack(fill='x')
         footer.bind('<Configure>', lambda event: edit_hint.configure(wraplength=max(100, event.width-24)))
         scroll = tk.Canvas(side, highlightthickness=0, bg='white', width=320)
         self.inspector_scroll=scroll
@@ -207,7 +218,9 @@ class SystemWorkspace:
         self.canvas.bind('<ButtonRelease-2>',self.end_pan)
         self.canvas.bind('<Motion>',self.hover)
         self.status = tk.StringVar(value='正在准备架构…')
-        ttk.Label(self._architecture, textvariable=self.status, style='System.TLabel', padding=(24, 9)).pack(fill='x')
+        activity = ttk.Label(self._architecture, textvariable=self.status, style='System.TLabel', padding=(24, 9))
+        activity.pack(fill='x')
+        activity.bind('<Configure>', lambda event: activity.configure(wraplength=max(200, event.width - 48)))
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.bind('<Control-Return>', lambda _event: self.save_inspector() if not self.calculator else None)
         root.bind('<Control-s>', lambda _event: self.save())
@@ -308,13 +321,13 @@ class SystemWorkspace:
             if self.use_recovery and model.recovery_path().is_file():
                 self.project = model.load_project(model.recovery_path())
                 restored = True
-                self.status.set('已恢复上次系统工程。保存系统工程可生成独立 JSON 文件。')
+                self.status.set('已恢复上次工程。点击「保存工程」可保存为 JSON 文件。')
             else:
                 self.project = model.normalize_project(self.project)
-                self.status.set('先配置供电架构，再双击主电源进入完整计算。')
+                self.status.set('双击电源模块可进入设计计算。')
         except Exception as error:
             self.project = model.normalize_project(model.fresh_project())
-            self.status.set('上次工程未能恢复，已显示默认示例：' + str(error))
+            self.status.set('恢复工程失败，已打开默认架构。' + str(error))
         self.title.set(self.project['title'])
         self.render()
         from ui_preferences import apply_studio_fonts
@@ -323,17 +336,23 @@ class SystemWorkspace:
             self._project_baseline = copy.deepcopy(self.project)
         self.root.after_idle(self.fit_canvas)
 
-    def changed(self, note='架构已更新；各模块计算参数独立保存。'):
-        if self._opening_unit is None:
-            self._save_state.set('已应用到当前工程 · 待保存文件' if self.project != self._project_baseline
-                                 else '系统工程')
+    def changed(self, note='架构已更新。点击「保存工程」写入文件。'):
+        self._refresh_save_state()
         if self.use_recovery:
             try:
                 model.save_project(self.project, model.recovery_path())
             except Exception as error:
-                self.status.set('自动恢复文件写入失败，请手动保存：' + str(error))
+                self.status.set('自动恢复文件写入失败。请保存工程。' + str(error))
                 return
         self.status.set(note)
+
+    def _refresh_save_state(self):
+        if self._opening_unit is not None:
+            return
+        if self.project != self._project_baseline:
+            self._save_state.set('工程有未保存修改')
+        else:
+            self._save_state.set('已保存到工程文件' if self.path else '系统工程')
 
     def rename_project(self):
         title = self.title.get().strip()[:120]
@@ -357,7 +376,13 @@ class SystemWorkspace:
                         point['y']+=240
                     positions[key]=point
                 self.nodes[key] = (kind, item, positions[key])
-        self.metrics.set(f"{len(self.project['sources'])} 个输入源   /   {len(self.project['units'])} 个模块   /   {len(self.project['loads'])} 个负载")
+        self.metrics.set(f"{len(self.project['sources'])} 个输入源 · {len(self.project['units'])} 个模块 · "
+                         f"{len(self.project['loads'])} 个负载 · {len(self.project['connections'])} 条供电支路")
+        try:
+            self._review = model.checks(self.project)
+            self.check_summary.set(self._check_status(self._review))
+        except Exception as error:
+            self.check_summary.set('系统检查未完成。' + str(error))
         self.draw()
         self.show_inspector()
 
@@ -380,7 +405,7 @@ class SystemWorkspace:
             self._toolbar_layout_job=None
             self.layout_node_toolbar();self.layout_project_toolbar()
         self._toolbar_layout_job=self.root.after_idle(layout)
-        self.status.set(f'界面字号已设为 {value}px，下次启动保留；图内文字可用画布缩放调整。')
+        self.status.set(f'界面字号已设为 {value} px。图内文字随画布缩放。')
 
     def layout_node_toolbar(self,event=None):
         minimum=max(140,max(b.winfo_reqwidth() for b in self._node_buttons))
@@ -407,7 +432,7 @@ class SystemWorkspace:
     def mark_edit_dirty(self,*_):
         self._edit_dirty=True
         self.inspector_save.configure(state='normal')
-        self.edit_state.set('有未保存修改 · 点击上方按钮或按 Ctrl+Enter')
+        self.edit_state.set('有未应用修改。按 Ctrl+Enter 可应用。')
 
     def save_inspector(self):
         if not self._edit_dirty or self._commit_edit is None:return True
@@ -574,7 +599,7 @@ class SystemWorkspace:
     def show_inspector(self):
         self._edit_dirty=False;self._commit_edit=None;self._inspector_vars=[]
         self.inspector_save.configure(state='disabled',text='保存支路修改' if self.selected and self.selected[0]=='edge' else '保存节点修改')
-        self.edit_state.set('已应用到当前工程。使用顶部“保存工程”写入文件。' if self.selected else '选择节点或支路后编辑')
+        self.edit_state.set('当前设置已应用。保存工程后将写入文件。' if self.selected else '请先选择节点或支路')
         for w in self.inspector.winfo_children():
             w.destroy()
         def label(text, *, heading=False):
@@ -635,7 +660,7 @@ class SystemWorkspace:
                         item=next(e for e in candidate['connections'] if e['id']==identity)
                         item.update(mode='diode' if mode.get()!='直连' else 'direct',vf=float(vf.get()),enabled=enabled.get())
                         self.project=model.normalize_project(candidate)
-                        self.changed('支路设置已更新。多源竞争不假定均流。')
+                        self.changed('支路设置已更新。')
                         self.render()
                         return True
                     except Exception as error:
@@ -693,18 +718,18 @@ class SystemWorkspace:
                             if unit['id'] == identity:
                                 continue
                             for i, rail in enumerate(unit['rails'], 1):
-                                values.append(f"{unit['id']} · OUT{i} · {rail['V_out']:.4g}V")
+                                values.append(f"{unit['id']} · OUT{i} · {rail['V_out']:.4g} V")
                                 sources.append(dict(kind='unit', id=unit['id'], output=i))
                         for junction in self.project['junctions']:
                             if junction['id']!=identity:
-                                values.append(junction['id']+' · OR BUS')
+                                values.append(junction['id']+' · OR 母线')
                                 sources.append(dict(kind='junction',id=junction['id'],output=1))
                         box = ttk.Combobox(self.inspector, values=values, state='readonly', width=27)
                         box.current(0)
                         box.pack(fill='x', pady=(0, 10))
                         box.bind('<<ComboboxSelected>>', lambda e: self.choose_source(identity, sources[box.current()]) if box.current()>0 else None)
                         for edge in model.incoming(self.project,identity):
-                            text=f"{edge['source']['id']} · "+(f"D {edge['vf']:g}V" if edge['mode']=='diode' else '直连')+(' [停用]' if not edge['enabled'] else '')
+                            text=f"{edge['source']['id']} · "+(f"Vf {edge['vf']:g} V" if edge['mode']=='diode' else '直连')+(' · 已停用' if not edge['enabled'] else '')
                             def edit_branch(eid=edge['id']):
                                 self.selected=('edge',eid)
                                 self.render()
@@ -714,15 +739,6 @@ class SystemWorkspace:
                         ttk.Button(self.inspector, text='进入电源设计 →', style='SystemPrimary.TButton',
                                    command=lambda: self.schedule_open_unit(identity)).pack(fill='x', pady=6)
                     ttk.Button(self.inspector, text='删除节点', command=self.delete_selected).pack(fill='x', pady=6)
-        ttk.Separator(self.inspector).pack(fill='x',pady=15)
-        try:
-            if self._review is None:self._review=model.checks(self.project)
-            check = self._review
-            issues=sum(not r['ok'] for r in check['capacity'])+sum(not r['ok'] or bool(r['unavailable']) for r in check['interfaces'])
-            label(('⚠ '+str(issues)+' 项需核对' if issues else '✓ 当前预算与接口未发现超限')+'\n'+str(len(self.project['connections']))+' 条供电连接')
-        except Exception as error:
-            label('检查未完成：' + str(error))
-        ttk.Button(self.inspector,text='查看完整系统检查',command=self.show_checks,style='System.TButton').pack(fill='x',pady=6)
         for widget in self.inspector.winfo_children():
             if isinstance(widget,ttk.Button) and not widget.cget('style'):widget.configure(style='System.TButton')
             elif isinstance(widget,ttk.Combobox):widget.configure(style='System.TCombobox',font=('Microsoft YaHei UI',-14))
@@ -732,12 +748,24 @@ class SystemWorkspace:
         from ui_preferences import apply_studio_fonts,font_size
         apply_studio_fonts(self.inspector, font_size())
 
+    @staticmethod
+    def _check_status(check):
+        if not (check['capacity'] or check['interfaces']):
+            return '暂无可检查的供电端口或节点'
+        capacity = sum(not row['ok'] for row in check['capacity'])
+        interfaces = sum(not row['ok'] or bool(row['unavailable']) for row in check['interfaces'])
+        if capacity or interfaces:
+            return f'待复核 · 功率预算 {capacity} 项 · 电压与失电 {interfaces} 项'
+        return '已算稳态预算与电源接口满足当前配置'
+
     def show_checks(self):
         try:check=model.checks(self.project)
         except Exception as error:
             messagebox.showerror('系统检查',str(error),parent=self.root);return
         window=tk.Toplevel(self.root);window.title('系统供电预算与接口检查');window.geometry('1000x620')
-        book=ttk.Notebook(window);book.pack(fill='both',expand=True,padx=16,pady=16)
+        ttk.Label(window, text=self._check_status(check), style='SystemConclusion.TLabel').pack(
+            fill='x', padx=16, pady=(16, 5))
+        book=ttk.Notebook(window);book.pack(fill='both',expand=True,padx=16,pady=(0, 8))
         def page(title,headers,rows):
             frame=ttk.Frame(book);book.add(frame,text=title)
             tree=ttk.Treeview(frame,columns=tuple(range(len(headers))),show='headings',selectmode='browse')
@@ -746,11 +774,12 @@ class SystemWorkspace:
             for i,h in enumerate(headers):tree.heading(i,text=h);tree.column(i,width=145,anchor='w')
             tree.tag_configure('warn',background='#fff4e5',foreground='#976122')
             for values,ok in rows:tree.insert('', 'end', values=values,tags=() if ok else ('warn',))
-        page('功率预算',['端口','正常 / W','已评估最大 / W','配置容量 / W','状态'],[
-            ((r['port'],f"{r['normal']:.4g}",f"{r['allocated']:.4g}",f"{r['capacity']:.4g}",'未超容量' if r['ok'] else '需核对'),r['ok']) for r in check['capacity']])
+        page('功率预算',['端口','正常功率 / W','已算最大功率 / W','配置容量 / W','状态'],[
+            ((r['port'],f"{r['normal']:.4g}",f"{r['allocated']:.4g}",f"{r['capacity']:.4g}",'满足容量' if r['ok'] else '待复核'),r['ok']) for r in check['capacity']])
         page('电压与失电',['节点','可用电压 / V','允许范围 / V','状态'],[
             ((r['name'],'无供电' if r['source_min'] is None else f"{r['source_min']:.4g}–{r['source_max']:.4g}",f"{r['design_min']:.4g}–{r['design_max']:.4g}",r['note']),r['ok'] and not r['unavailable']) for r in check['interfaces']])
-        tk.Label(window,text='固定 Vf 稳态预算；OR 高压优先，同压不假定均流。完整参数与工况见报告。',anchor='w',padx=20,pady=10,fg=MUTED).pack(fill='x')
+        ttk.Label(window,text='预算按固定二极管压降计算。OR 支路优先使用高压源，同压时分别检查供电容量。',
+                  style='System.TLabel', padding=(16, 8)).pack(fill='x')
 
     def choose_source(self, identity, source):
         self.link = source
@@ -884,7 +913,7 @@ class SystemWorkspace:
             self.path = path if raw.get('schema_version') == model.SCHEMA else None
             self.title.set(self.project['title'])
             self.selected, self.removal = None, None
-            self.changed('工程已打开。原电源 JSON 作为一个独立电源模块导入。')
+            self.changed('已打开系统工程。' if self.path else '已将配置导入为单独的电源模块。')
             self.render()
             self._project_baseline = copy.deepcopy(self.project)
             self._save_state.set('已打开工程文件' if self.path else '已导入配置 · 待保存工程')
@@ -922,10 +951,13 @@ class SystemWorkspace:
         if not self.save_inspector():
             return
         project = self.project
+        cached = self._editors.get(identity)
+        if cached and cached['spec'] == model.unit_by_id(self.project, identity)['spec']:
+            self.open_unit(identity)
+            return
         self._save_state.set('正在打开电源设计…')
-        if self._editor is None or self._editor['id'] != identity:
-            self._opening_view.grid(row=0, column=0, sticky='nsew')
-            self._opening_view.tkraise()
+        self._opening_view.grid(row=0, column=0, sticky='nsew')
+        self._opening_view.tkraise()
 
         def open_after_redraw():
             self._opening_unit = None
@@ -950,17 +982,23 @@ class SystemWorkspace:
         self.root.configure(cursor='watch')
         container = None
         try:
+            original = model.unit_by_id(self.project, identity)
             unit = model.prepare_unit(self.project, identity)
             from ldo import is_ldo
             size = int(self._font_choice.get())
-            if self._editor and self._editor['id'] == identity and self._editor['spec'] == unit['spec']:
-                app = self._editor['app']
+            editor = self._editors.get(identity)
+            if editor and editor['spec'] == unit['spec']:
+                app = editor['app']
                 container = app.container
-                if self._editor['font_size'] != size:
+                if editor['font_size'] != size:
                     app.set_font_size(size)
-                    self._editor['font_size'] = size
+                    editor['font_size'] = size
+                self._editors.pop(identity)
+                self._editors[identity] = editor
             else:
-                self._release_editor()
+                self._release_editor(identity)
+                if len(self._editors) >= self._MAX_EDITORS:
+                    self._release_editor(next(iter(self._editors)))
                 container = ttk.Frame(self._views, style='System.TFrame')
                 if is_ldo(unit['spec']):
                     from ldo_ui import LdoDesigner as Designer
@@ -968,13 +1006,18 @@ class SystemWorkspace:
                     from main import PowerSupplyAnalyzer as Designer
                 app = Designer(self.root, initial_config=copy.deepcopy(unit['spec']), container=container,
                                on_return=self.back_to_architecture)
-                self._editor = {'id': identity, 'spec': copy.deepcopy(unit['spec']), 'app': app, 'font_size': size}
+                editor = {'id': identity, 'spec': copy.deepcopy(unit['spec']), 'app': app,
+                          'font_size': size, 'applied_config': None}
+                self._editors[identity] = editor
                 if hasattr(app, 'restore_result_page'):
                     app.restore_result_page(self._unit_page_states.get(identity))
+            self._editor = editor
             origin = getattr(self, '_geometry_origin', None)
             if origin and origin[0] is self.project and origin[1] == identity:
                 app._geometry_source = origin[2]
             self._canvas_view = (self.canvas.xview()[0], self.canvas.yview()[0])
+            self._unit_graph_changed = (unit is not original)
+            self._unit_active_changed = self.project.get('activeUnit') != identity
             self.project['activeUnit'] = identity
             self._unit_detached.clear()
             self.calculator = app
@@ -985,7 +1028,7 @@ class SystemWorkspace:
             container.focus_set()
             return app
         except Exception as error:
-            self._release_editor()
+            self._release_editor(identity)
             if container is not None and container.winfo_exists():
                 container.destroy()
             self.calculator = None
@@ -1010,6 +1053,7 @@ class SystemWorkspace:
         self._unit_report_button.configure(menu=menu)
         self._unit_report_button.grid(row=0, column=4, sticky='ew')
         if hasattr(app, '_open_simulation_center'):
+            self._simulation_button.configure(text='仿真配置中心')
             self._simulation_button.grid()
         else:
             self._simulation_button.grid_remove()
@@ -1026,14 +1070,20 @@ class SystemWorkspace:
             self._unit_report_button.configure(menu='')
             self.root.nametowidget(str(menu)).destroy()
         self.report_button.grid()
+        self._simulation_button.configure(text='仿真配置')
         self._simulation_button.grid()
         self.root.configure(menu=self._architecture_menu)
         self._layout_workbench_header()
 
     def _apply_unit_config(self, app):
-        identity = self._editor['id']
+        editor = self._editor
+        identity = editor['id']
         try:
-            detached = model.set_unit_config(self.project, identity, app._config_dict())
+            config = app._config_dict()
+            current = model.unit_by_id(self.project, identity)
+            if config == editor['applied_config'] and current['spec'] == editor['spec']:
+                return True
+            detached = model.set_unit_config(self.project, identity, config)
         except Exception as error:
             self._save_state.set('请修正单元参数')
             messagebox.showerror('单元参数', '参数未能应用到工程：\n' + str(error), parent=self.root)
@@ -1043,7 +1093,9 @@ class SystemWorkspace:
                 if isinstance(field, ttk.Entry):
                     field.selection_range(0, 'end')
             return False
-        self._editor['spec'] = copy.deepcopy(model.unit_by_id(self.project, identity)['spec'])
+        editor['spec'] = copy.deepcopy(model.unit_by_id(self.project, identity)['spec'])
+        editor['applied_config'] = copy.deepcopy(config)
+        self._unit_graph_changed = True
         if detached:
             self._unit_detached.update(detached)
             self._save_state.set('输出端口减少，已断开：' + '、'.join(detached))
@@ -1067,28 +1119,44 @@ class SystemWorkspace:
         if hasattr(app, 'selected_result_page'):
             self._unit_page_states[identity] = app.selected_result_page()
         self.calculator = None
+        self._editor = None
         app.container.grid_remove()
         self._architecture.grid()
         self._show_architecture_header()
+        previous_selection = self.selected
         self.selected = ('unit', identity)
         note = '单元设计已应用到当前工程。'
         if self._unit_detached:
             note += '输出端口减少，已断开：' + '、'.join(sorted(self._unit_detached))
-        self.changed(note)
-        self.render()
-        self.canvas.xview_moveto(self._canvas_view[0])
-        self.canvas.yview_moveto(self._canvas_view[1])
+        if self._unit_graph_changed or self._unit_active_changed:
+            self.changed(note)
+        else:
+            self._refresh_save_state()
+            self.status.set(note)
+        if self._unit_graph_changed:
+            self.render()
+        elif previous_selection != self.selected:
+            from system_canvas import update_selection
+            update_selection(self, previous_selection)
+            self.show_inspector()
+        for view, move, position in zip((self.canvas.xview, self.canvas.yview),
+                                        (self.canvas.xview_moveto, self.canvas.yview_moveto),
+                                        self._canvas_view):
+            if view()[0] != position:
+                move(position)
         self.canvas.focus_set()
         if self._system_simulation_return:
             restore, self._system_simulation_return = self._system_simulation_return, None
             self.root.after_idle(restore)
         return True
 
-    def _release_editor(self):
-        if self._editor is None:
+    def _release_editor(self, identity):
+        editor = self._editors.pop(identity, None)
+        if editor is None:
             return
-        app = self._editor['app']
-        self._editor = None
+        if editor is self._editor:
+            self._editor = None
+        app = editor['app']
         if hasattr(app, 'dispose'):
             app.dispose()
         menu = getattr(app, 'workspace_menu', None)
@@ -1101,7 +1169,8 @@ class SystemWorkspace:
             self.root.after_cancel(self._opening_unit)
             self._opening_unit = None
             self._opening_view.grid_remove()
-        self._release_editor()
+        for identity in tuple(self._editors):
+            self._release_editor(identity)
         self._unit_page_states.clear()
 
     def calculate_current(self):
@@ -1182,7 +1251,7 @@ class SystemWorkspace:
         self.report_process = ctx.Process(target=export_system_report, args=(copy.deepcopy(self.project), path, self.report_events, self.report_stop), daemon=True)
         self.report_process.start()
         self.report_button.configure(text='取消报告')
-        self.status.set('后台生成系统总览与各单元 Word / Excel；可继续查看架构。')
+        self.status.set('正在生成系统报告。可继续查看架构。')
         self.root.after(150, self.poll_report)
 
     def poll_report(self):
@@ -1194,7 +1263,9 @@ class SystemWorkspace:
                     self.status.set('报告生成：' + payload)
                 elif kind == 'done':
                     finished = True
-                    self.status.set(f"报告已导出：{payload['successful']}/{payload['total']} 个单元完整；{payload['path']}")
+                    successful, total = payload['successful'], payload['total']
+                    status = '已导出系统报告' if successful == total else '已导出部分系统报告'
+                    self.status.set(f"{status}。{successful}/{total} 个单元的报告完整。\n{payload['path']}")
                 elif kind in ('error', 'cancelled'):
                     finished = True
                     self.status.set('报告：' + str(payload))
@@ -1205,5 +1276,5 @@ class SystemWorkspace:
         else:
             if not finished:
                 self.status.set('报告进程已结束，请检查输出或重试。')
-            self.report_button.configure(text='生成系统报告包')
+            self.report_button.configure(text='导出系统报告')
             self.report_process.join(timeout=.1)

@@ -105,6 +105,12 @@ class Sheet:
     images: list = field(default_factory=list)
     breaks: list = field(default_factory=list)
     column_count: int = len(WIDTHS)
+    column_widths: tuple = ()
+    freeze_rows: int = 4
+    print_title_rows: int | None = None
+    orientation: str | None = None
+    tab_color: str | None = None
+    links: dict = field(default_factory=dict)
 
     def cell(self, row, col, value, style=0, fmt=None):
         self.cells[row, col] = (value, style, fmt)
@@ -193,7 +199,10 @@ def save_workbook(path, sheets):
         end = max(sheet.heights.keys() | {r for r, _ in sheet.cells}, default=4)
         last_col = col_name(sheet.column_count-1)
         node(definitions, 'definedName', name='_xlnm.Print_Area', localSheetId=index).text = quoted+f'$A$1:${last_col}${end}'
-        node(definitions, 'definedName', name='_xlnm.Print_Titles', localSheetId=index).text = quoted+'$1:$4'
+        title_rows = sheet.freeze_rows if sheet.print_title_rows is None else sheet.print_title_rows
+        if title_rows:
+            title_range = f'$1:${title_rows}'
+            node(definitions, 'definedName', name='_xlnm.Print_Titles', localSheetId=index).text = quoted+title_range
     node(root, 'calcPr', calcId=191029, fullCalcOnLoad=1)
     relationships = Element('Relationships', xmlns=P)
     for index in range(1, len(sheets)+1):
@@ -218,16 +227,20 @@ def save_workbook(path, sheets):
             for index, sheet in enumerate(sheets, 1):
                 ws = Element('{'+S+'}worksheet', {'xmlns:r':R})
                 from design_theme import is_pcs
-                props = node(ws, 'sheetPr'); node(props, 'tabColor', rgb='FF2376E5' if is_pcs() else 'FF2068A0')
+                props = node(ws, 'sheetPr')
+                node(props, 'tabColor', rgb='FF'+(sheet.tab_color or ('2376E5' if is_pcs() else '2068A0')))
                 node(props, 'pageSetUpPr', fitToPage=1)
                 end = max(sheet.heights.keys() | {r for r, _ in sheet.cells}, default=4)
                 node(ws, 'dimension', ref=f'A1:{col_name(sheet.column_count-1)}{end}')
                 sv = node(node(ws, 'sheetViews'), 'sheetView', workbookViewId=0, showGridLines=0, zoomScale=75)
-                node(sv, 'pane', ySplit=4, topLeftCell='A5', activePane='bottomLeft', state='frozen')
-                node(sv, 'selection', pane='bottomLeft', activeCell='A5', sqref='A5')
+                if sheet.freeze_rows:
+                    first = f'A{sheet.freeze_rows+1}'
+                    node(sv, 'pane', ySplit=sheet.freeze_rows, topLeftCell=first, activePane='bottomLeft', state='frozen')
+                    node(sv, 'selection', pane='bottomLeft', activeCell=first, sqref=first)
                 node(ws, 'sheetFormatPr', defaultRowHeight=24)
                 cols = node(ws, 'cols')
-                for c, width in enumerate(WIDTHS[:sheet.column_count], 1):
+                widths = sheet.column_widths or WIDTHS[:sheet.column_count]
+                for c, width in enumerate(widths, 1):
                     node(cols, 'col', min=c, max=c, width=width, customWidth=1)
                 data = node(ws, 'sheetData')
                 by_row = {}
@@ -246,11 +259,19 @@ def save_workbook(path, sheets):
                 if sheet.merges:
                     merges = node(ws, 'mergeCells', count=len(sheet.merges))
                     for ref in sheet.merges: node(merges, 'mergeCell', ref=ref)
+                if sheet.links:
+                    links = node(ws, 'hyperlinks')
+                    for (r,c), target_name in sorted(sheet.links.items()):
+                        if target_name not in names:
+                            raise ValueError('Excel 导航目标不存在：'+target_name)
+                        escaped = target_name.replace("'", "''")
+                        node(links, 'hyperlink', ref=address(r,c), location=f"'{escaped}'!A1")
                 node(ws, 'printOptions', horizontalCentered=1)
                 node(ws, 'pageMargins', left=.25, right=.25, top=.4, bottom=.4, header=.15, footer=.15)
                 single = sheet.column_count < len(WIDTHS)
-                node(ws, 'pageSetup', paperSize=1 if single else 8,
-                     orientation='portrait' if single else 'landscape', fitToWidth=1, fitToHeight=0)
+                paper_size = (9 if sheet.orientation else 1) if single else 8
+                node(ws, 'pageSetup', paperSize=paper_size,
+                     orientation=sheet.orientation or ('portrait' if single else 'landscape'), fitToWidth=1, fitToHeight=0)
                 hf = node(ws,'headerFooter'); node(hf,'oddFooter').text = '&L'+sheet.name+'&R&P / &N'
                 if sheet.breaks:
                     breaks = node(ws,'rowBreaks', count=len(sheet.breaks), manualBreakCount=len(sheet.breaks))

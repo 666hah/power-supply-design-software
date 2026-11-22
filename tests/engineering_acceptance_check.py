@@ -19,8 +19,14 @@ def fixture():
                   wf=dict(ripple_pp=.08), eta=.93,
                   loop=dict(fc=1000., min_pm=62., gm_db=None),
                   mag=dict(transformer=dict(dT=26.)))
-    cases = [dict(id=k, voltage=v, result=copy.deepcopy(result),
-                  checks=[dict(id='ripple', limit=.12), dict(id='phase_margin', limit=59.)])
+    checks = [dict(id='ripple', limit=.12), dict(id='phase_margin', limit=59.),
+              dict(id='B_sat', value=.21, limit=.3), dict(id='temp_rise', value=26., limit=40.),
+              dict(id='bom_Q1_voltage', value=70., limit=85.),
+              dict(id='bom_D1_voltage', value=58., limit=90.),
+              dict(id='bom_R_S1_power', value=.13, limit=.5),
+              dict(id='bom_C_O1_ripple', value=.91, limit=1.2),
+              dict(id='bom_C_O1_voltage', value=13., limit=20.)]
+    cases = [dict(id=k, voltage=v, result=copy.deepcopy(result), checks=copy.deepcopy(checks))
              for k, v in (('Vinmin', 20.), ('Vinmax', 30.))]
     return p, dict(base_spec=copy.deepcopy(p), cases=cases)
 
@@ -60,68 +66,115 @@ class AcceptanceChecks(unittest.TestCase):
         with patch('loss_model.compute_design', side_effect=AssertionError('projection must not solve')):
             snap = report_snapshot(p, bundle)
         rows = {r['id']: r for r in snap['rows']}
-        self.assertEqual(rows['primary_rms']['cases']['Vinmax']['calculation'], 1.2)
-        self.assertEqual(rows['temperature_rise']['cases']['Vinmin']['calculation'], 26.)
+        self.assertEqual([group['id'] for group in snap['groups']], ['components', 'performance'])
+        self.assertEqual({key for key, row in rows.items() if row['group']=='performance'},
+                         {'eta', 'phase_margin', 'out1_ripple'})
+        self.assertEqual(rows['bom_C_O1_ripple']['cases']['Vinmax']['calculation'], .91)
+        self.assertEqual(rows['bom_R_S1_power']['cases']['Vinmin']['calculation'], .13)
+        self.assertEqual(rows['bom_D1_voltage']['cases']['Vinmin']['calculation'], 58.)
+        self.assertEqual(rows['temp_rise']['cases']['Vinmin']['calculation'], 26.)
+        self.assertEqual(rows['B_sat']['cases']['Vinmin']['calculation'], .21)
         self.assertEqual(rows['out1_ripple']['limit'], .12)
-        self.assertEqual(rows['phase_margin']['limit'], 59.)
-        self.assertIsNone(rows['gain_margin']['cases']['Vinmin']['calculation'])
-        self.assertEqual(snap['summary']['state'], 'undefined')
+        self.assertEqual((rows['phase_margin']['comparison'], rows['phase_margin']['limit']), ('>', 45.))
+        self.assertNotIn('gain_margin', rows)
+        self.assertNotIn('fc', rows)
+        self.assertEqual(snap['groups'][1]['summary']['state'], 'pass')
         self.assertEqual(bundle, original)
         json.dumps(snap, allow_nan=False)
 
-    def test_threshold_edit_does_not_rebind_measurement(self):
+    def test_valid_measurement_can_fail_and_stale_measurement_does_not_rebind(self):
         p, bundle = fixture()
-        m = manual_measurement(p, 'out1_voltage', 'Vinmin', 12.1, source='DMM-1, CSV1', conditions='20V 2A 25C')
-        p['engineering_acceptance'] = dict(criteria=[dict(id='out1_voltage', metric='out1_voltage', comparison='range',
-            lower=11.5, upper=12.5, required_sources=['calculation', 'measurement'])], measurements=[m])
+        m = manual_measurement(p, 'out1_ripple', 'Vinmin', .1, source='DMM-1, CSV1', conditions='20V 2A 25C')
+        p['engineering_acceptance'] = dict(measurements=[m])
         snap = report_snapshot(p, bundle)
-        row = next(r for r in snap['rows'] if r['id'] == 'out1_voltage')
+        row = next(r for r in snap['rows'] if r['id'] == 'out1_ripple')
         self.assertEqual(row['unit'], 'V')
-        self.assertIn('端口平均电压', row['name'])
         self.assertEqual(row['cases']['Vinmin']['status'], 'pass')
-        self.assertAlmostEqual(row['cases']['Vinmin']['margin'], .4)
-        self.assertEqual(row['cases']['Vinmax']['status'], 'undefined')
-        p['engineering_acceptance']['criteria'][0]['upper'] = 12.05
-        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'out1_voltage')
+        self.assertAlmostEqual(row['cases']['Vinmin']['margin'], .02)
+        self.assertEqual(row['cases']['Vinmax']['status'], 'pass')
+        m['value'] = .13
+        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'out1_ripple')
         self.assertEqual(row['cases']['Vinmin']['status'], 'review')
         self.assertEqual(row['cases']['Vinmin']['measurement_record']['origin'], 'manual-entry')
         changed = dict(p, L=31e-6)
-        row = next(r for r in report_snapshot(changed, bundle)['rows'] if r['id'] == 'out1_voltage')
+        row = next(r for r in report_snapshot(changed, bundle)['rows'] if r['id'] == 'out1_ripple')
         self.assertEqual(row['cases']['Vinmin']['states']['measurement'], 'stale')
         self.assertIsNone(row['cases']['Vinmin']['delta_measurement'])
 
     def test_missing_measurement_conditions_is_unknown(self):
         p, bundle = fixture()
-        p['engineering_acceptance'] = dict(criteria=[dict(id='primary_peak', limit=5., required_sources=['measurement'])],
-            measurements=[manual_measurement(p, 'primary_peak', 'Vinmin', 3., source='', conditions='')])
-        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'primary_peak')
+        p['engineering_acceptance'] = dict(
+            measurements=[manual_measurement(p, 'phase_margin', 'Vinmin', 90., source='', conditions='')])
+        row = next(r for r in report_snapshot(p)['rows'] if r['id'] == 'phase_margin')
         self.assertEqual(row['cases']['Vinmin']['status'], 'undefined')
+        self.assertEqual(row['cases']['Vinmin']['pending_reason'], '缺结果')
 
-    def test_strict_boundary_range_and_zero_delta(self):
+    def test_acceptance_requires_phase_margin_strictly_above_45(self):
         p, bundle = fixture()
-        p['engineering_acceptance'] = dict(criteria=[dict(id='primary_peak', comparison='<', limit=3.5, required_sources=['calculation'])])
-        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'primary_peak')
+        p['pm_target'] = 80.
+        bundle['base_spec'] = copy.deepcopy(p)
+        for margin, expected in ((44.99, 'review'), (45., 'review'), (45.01, 'pass'), (None, 'undefined')):
+            with self.subTest(margin=margin):
+                bundle['cases'][0]['result']['loop']['min_pm'] = margin
+                row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'phase_margin')
+                case = row['cases']['Vinmin']
+                self.assertEqual((case['calculation'], case['limit'], case['status']), (margin, 45., expected))
+
+    def test_pending_reason_distinguishes_absent_limits_from_invalid_results(self):
+        p, bundle = fixture()
+        for check in bundle['cases'][0]['checks']:
+            if check['id'] == 'bom_C_O1_ripple':
+                check['limit'] = None
+            if check['id'] == 'bom_D1_voltage':
+                check['limit'] = check['value'] = None
+        bundle['cases'][0]['result']['loop'] = None
+        rows = {row['id']: row['cases']['Vinmin'] for row in report_snapshot(p, bundle)['rows']}
+        self.assertEqual(rows['bom_C_O1_ripple']['pending_reason'], '缺限值')
+        self.assertEqual(rows['phase_margin']['pending_reason'], '缺结果')
+        self.assertEqual(rows['bom_D1_voltage']['pending_reason'], '缺限值和结果')
+        self.assertIsNone(rows['eta']['pending_reason'])
+
+    def test_strict_boundary_and_endpoint_specific_limits(self):
+        p, bundle = fixture()
+        for check in bundle['cases'][0]['checks']:
+            if check['id'] == 'B_sat':
+                check['value'] = .3
+        bundle['cases'][1]['checks'][0]['limit'] = .07
+        rows = {row['id']: row for row in report_snapshot(p, bundle)['rows']}
+        row = rows['B_sat']
         self.assertEqual(row['cases']['Vinmin']['status'], 'review')
         self.assertEqual(row['cases']['Vinmin']['margin'], 0.)
+        self.assertTrue(rows['out1_ripple']['limits_vary'])
+        self.assertIsNone(rows['out1_ripple']['limit'])
+        self.assertEqual(rows['out1_ripple']['cases']['Vinmax']['limit'], .07)
+        self.assertEqual(rows['out1_ripple']['cases']['Vinmax']['status'], 'review')
         with self.assertRaises(ValueError):
             normalize(dict(criteria=[dict(id='a', comparison='range', lower=2., upper=1.)]))
 
     @staticmethod
     def spice(p, stable=True):
         case = dict(id='Vinmin_标称负载', voltage=20., complete=True, nominal_comparable=True,
-            periodicity=dict(stable=stable), measurements=dict(primary_peak=3.6, vds_peak=71., out1_before=12.05),
-            qr_startup=dict(vds_peak_full_v=1335.25),
-            loop=dict(available=True, simulation=dict(loop=dict(fc=1048., pm=57.74, gm_db=None))))
+            periodicity=dict(stable=stable), measurements=dict(out1_pre_ripple=.91),
+            white_box=dict(available=True, rows=[dict(ref='Q1', metric='Q1 |Vds| 峰值', simulation=71.)]),
+            loop=dict(available=True, simulation=dict(loop=dict(fc=1048., pm=67.74,
+                 crossings=[dict(pm=67.74), dict(pm=57.74)]))))
         return dict(input_fingerprint=input_fingerprint(p), source='本轮真实运行绑定', evidence=dict(cases=[case]))
 
     def test_bound_simulation_fra_and_full_startup_extrema(self):
         p, bundle = fixture()
         envelope = self.spice(p)
+        envelope['evidence']['cases'][0]['white_box_startup'] = dict(
+            complete_window=True, rows=[dict(ref='Q1', kind='mos', channel='voltage', simulation=1335.25)])
         rows = {r['id']: r for r in report_snapshot(p, bundle, spice_evidence=envelope)['rows']}
-        self.assertEqual(rows['startup_vds_peak']['cases']['Vinmin']['simulation'], 1335.25)
+        self.assertEqual(rows['bom_Q1_voltage']['cases']['Vinmin']['simulation'], 1335.25)
+        self.assertEqual(rows['bom_Q1_voltage']['cases']['Vinmin']['status'], 'review')
         self.assertEqual(rows['phase_margin']['cases']['Vinmin']['simulation'], 57.74)
-        self.assertEqual(rows['phase_margin']['cases']['Vinmin']['states']['simulation'], 'review')
-        self.assertIsNone(rows['startup_vds_peak']['cases']['Vinmax']['simulation'])
+        self.assertEqual(rows['phase_margin']['cases']['Vinmin']['states']['simulation'], 'pass')
+        envelope['evidence']['cases'][0]['loop']['simulation']['loop']['crossings'][1]['pm'] = 45.
+        row = next(r for r in report_snapshot(p, bundle, spice_evidence=envelope)['rows'] if r['id'] == 'phase_margin')
+        self.assertEqual(row['cases']['Vinmin']['states']['simulation'], 'review')
+        self.assertIsNone(rows['bom_Q1_voltage']['cases']['Vinmax']['simulation'])
+        self.assertIsNone(rows['out1_ripple']['cases']['Vinmin']['simulation'])
         unbound = report_snapshot(p, bundle, spice_evidence=envelope['evidence'])
         self.assertFalse(unbound['simulation_matched'])
         self.assertTrue(any('未与当前' in n for n in unbound['evidence_notes']))
@@ -142,12 +195,12 @@ class AcceptanceChecks(unittest.TestCase):
                                    max=dict(on=dict(Vgp=5., Qgs=6e-9), off=dict(Vgp=5.2, Qgs=7e-9))))
         bundle['base_spec'] = copy.deepcopy(p)
         snap = report_snapshot(p, bundle, spice_evidence=self.spice(p))
-        row = next(r for r in snap['rows'] if r['id'] == 'vds_peak')
+        row = next(r for r in snap['rows'] if r['id'] == 'bom_Q1_voltage')
         self.assertIsNone(row['cases']['Vinmax']['simulation'])
         p['mos_manual_events'] = {}
         bundle['base_spec'] = copy.deepcopy(p)
         snap = report_snapshot(p, bundle, spice_evidence=self.spice(p))
-        row = next(r for r in snap['rows'] if r['id'] == 'vds_peak')
+        row = next(r for r in snap['rows'] if r['id'] == 'bom_Q1_voltage')
         self.assertEqual(row['cases']['Vinmax']['simulation'], 71.)
 
     def test_joint_adopted_hardware_match_and_issue_closure(self):
@@ -163,19 +216,26 @@ class AcceptanceChecks(unittest.TestCase):
     def test_failed_or_selected_only_calculation_does_not_fill_both_ends(self):
         p, bundle = fixture()
         selected = dict(base_spec=p, res=bundle['cases'][0]['result'], checks=bundle['cases'][0]['checks'])
-        row = next(r for r in report_snapshot(p, selected)['rows'] if r['id'] == 'primary_peak')
-        self.assertEqual(row['cases']['Vinmin']['calculation'], 3.5)
+        row = next(r for r in report_snapshot(p, selected)['rows'] if r['id'] == 'bom_Q1_voltage')
+        self.assertEqual(row['cases']['Vinmin']['calculation'], 70.)
         self.assertIsNone(row['cases']['Vinmax']['calculation'])
         bundle['cases'][1]['error'] = '没有收敛'
-        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'primary_peak')
+        row = next(r for r in report_snapshot(p, bundle)['rows'] if r['id'] == 'bom_Q1_voltage')
         self.assertIsNone(row['cases']['Vinmax']['calculation'])
         self.assertEqual(row['cases']['Vinmax']['calculation_error'], '没有收敛')
 
-    def test_disabling_every_check_is_not_a_pass(self):
+    def test_archived_criteria_and_issues_do_not_change_grading(self):
         p, bundle = fixture()
-        rows = report_snapshot(p, bundle)['criteria']
-        p['engineering_acceptance'] = dict(criteria=[dict(row, enabled=False) for row in rows])
-        self.assertEqual(report_snapshot(p, bundle)['summary']['state'], 'undefined')
+        before = report_snapshot(p, bundle)
+        p['engineering_acceptance'] = dict(
+            criteria=[dict(id='phase_margin', enabled=False, limit=0.), dict(id='out1_voltage', limit=1.)],
+            issues=[dict(id='I1', title='历史整改')])
+        after = report_snapshot(p, bundle)
+        self.assertEqual(before['rows'], after['rows'])
+        self.assertEqual(before['groups'], after['groups'])
+        self.assertEqual(before['summary']['state'], after['summary']['state'])
+        self.assertEqual(after['summary']['unresolved_issues'], 1)
+        self.assertEqual(len(after['config']['criteria']), 2)
 
     def test_active_ownership_keeps_all_branches_and_real_matrix(self):
         from design_engine.specification import load_spec

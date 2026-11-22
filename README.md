@@ -15,21 +15,22 @@
 | 供电架构 | 拖动输入源、电源模块、LDO、负载和二极管 OR 汇流；编辑连接、支路压降及启用状态，进行级联电压与功率预算 |
 | 电源树联合启停（桌面） | 集中配置源多次上电/掉电、可选恒流/折返/打嗝、输入UVLO、EN/多轨就绪、软启动和分阶段负载；连接现有通用开关级模型实际运行LTspice，观察浪涌、CS、OR切换、负载复位重启与关机残压，导出Word/HTML/CSV及原始证据。[说明与完整示例](docs/SYSTEM_STARTUP_SHUTDOWN.md) |
 | 按规格生成初版 | 异步 Buck、LM5022 Boost 和 MP6005 定频 SSR 反激。反激可选满载 CCM / DCM，自动选磁芯、整数匝、励磁电感、各路电容、采样电阻并整定补偿。载入多路工程后沿用反馈路及各副边匝数比例，计算不同负载组合的端口电压和器件应力 |
-| 功率级 | Buck、Boost、CCM/DCM 反激、准谐振反激、有源钳位正激；分别计算 Vinmin/Vinmax 工作点及关键波形 |
+| 功率级 | Buck、Boost、CCM/DCM 反激、准谐振反激、有源钳位正激、LLC；分别计算 Vinmin/Vinmax 工作点及关键波形 |
 | COT 同步 Buck | 1–16相共享单输出；总电流反馈、逐相均流/失配、限流保护、动态容量、源阻抗及系统启停。实际器件四相例程用同一硬件完成两端动态和开关FRA对比。[工程配置](docs/COT_ENGINEERING.md) · [模型与操作](docs/COT_BUCK.md) |
+| LLC 谐振变换器（桌面与 Python 内核） | 半桥／全桥原边，电压变频／混合滞环（HHC）控制。支持按规格初选、周期波形、磁件、损耗、ZVS、PI 环路、双向负载阶跃、容差和独立 LTspice 报告。[模型、操作和 300 W 例程](docs/LLC_DESIGN.md) |
 | 多路输出 | 隔离拓扑最多 6 路输出；选择主反馈路，按实际匝数派生其他路参考；独立配置整流器、电容与绕组。定频反激、QR反激和有源钳位正激可启用非理想耦合矩阵，独立求解各路电流与负载角点电压 |
 | 半导体损耗 | 固定值快速估算或导入曲线计算；MOS 转移特性、栅电荷、米勒平台与 t1–t8 分段；二极管 If–Vf 导通损耗 |
 | 电容组 | 可增删的并联电容列表，每颗独立配置 C、ESR、ESL，计算分流、纹波和损耗 |
 | 磁件 | 标准及自定义磁芯、匝数、磁密、Steinmetz 损耗、DCR、电流密度、热阻温升；窗口、利兹线、交错绕制及[三维绕组建模数据导出](docs/TRANSFORMER_GEOMETRY_EXPORT.md) |
 | 三维结构预览（桌面） | 半透明磁芯、深色螺旋绕组，旋转/缩放、逐层隐藏、上下半芯、正交三视图、分解装配与 PNG 导出；67 个型号的网格随软件内置，保留原厂三视图来源和参考版本。[操作说明](docs/TRANSFORMER_3D_PREVIEW.md) |
 | 变压器场仿真（桌面） | 从画布单元的磁件页调用本机提取器与 Elmer。查看端口电感和耦合矩阵、漏感及采用场解参数前后的电源端点对比，再决定是否写回单元。[首次配置与操作](docs/TRANSFORMER_GEOMETRY_EXPORT.md#从磁件页生成仿真与闭环报告) |
-| 联合仿真报告（桌面） | 内置变压器提取内核，集中配置本机Elmer、磁芯CAD与LTspice；从当前绕制自动生成提取设置，支持模型配置包跨电脑导入/导出，串联场解、裕量、设计复算和真实电路对比Word。[使用范围](docs/JOINT_SIMULATION.md) · [换电脑配置](docs/PORTABLE_SIMULATION.md) |
+| 联合仿真报告（桌面） | 内置变压器提取内核，集中配置本机 Elmer、磁芯 CAD 与 LTspice。从当前绕制自动生成提取设置，支持跨电脑导入和导出磁芯配置包。串联场解、裕量、设计复算和电路对比，同一批证据输出 Word 与 Excel。[使用范围](docs/JOINT_SIMULATION.md) · [换电脑配置](docs/PORTABLE_SIMULATION.md) |
 | 环路与补偿 | 功率级及补偿器 Bode 图、相位/增益裕度、二型/三型补偿、K 因子整定与补偿电路阻容反推、COT 频率 PI 整定 |
 | BOM 与降额 | 厂家、型号、封装、额定值及降额对照；缺失额定值和未覆盖应力明确标注待复核 |
-| 工程验证与验收（桌面） | 两端目标、计算、仿真、手录实测、余量与整改统一管理；证据绑定当前硬件，缺失或过期不判通过。[使用说明](docs/ENGINEERING_ACCEPTANCE.md) |
-| 最坏工况与容差（桌面） | 固定硬件，扫描声明的输入、负载和器件容差边界。可用已声明分布做蒙特卡洛，显示每项最不利工况及 4σ 统计口径。[配置与解读](docs/TOLERANCE_ANALYSIS.md) |
-| 工程报告 | Word、Excel、JSON；参数表与图像结合；Excel 按模块分 Sheet，Vinmin/Vinmax 左右对照；汇总系统与各单元报告 |
-| LTspice 联动 | 通用可配置行为控制器、可读 ASC 工程、仿真运行与计算对比；支持已实现的反激、QR、有源钳位正激及 Buck/Boost 模式 |
+| 硬件容差边界与分布评估（桌面） | 固定选型后先推导适用的理论边界，再按指标复算少量候选工况。发现超限时按器件分布估计两类失效概率。[配置与解读](docs/TOLERANCE_ANALYSIS.md) |
+| 工程验证与验收（桌面） | 两端核对器件规格和电源外特性，限值来自器件与设计参数。支持匹配仿真、实测和裕量追溯。[使用说明](docs/ENGINEERING_ACCEPTANCE.md) |
+| 工程报告 | 设计计算、电路对比、联合仿真均有 Excel 版。首页突出结论，证据按模块和工况展开，支持同输入端点合并和图表追溯。[Excel 导出说明](docs/EXCEL_REPORT.md) |
+| LTspice 联动 | 通用可配置行为控制器、可读 ASC 工程、仿真运行与计算对比；支持已接入的反激、QR、有源钳位正激、Buck/Boost 和 LLC 模式 |
 | 自动化接口 | 无 GUI 的计算服务、Python API、CLI 和 MCP 入口，便于与其他工程工具联动 |
 
 ### 计算图示例
@@ -40,7 +41,7 @@
 
 ## 使用流程
 
-桌面版顶部「功能架构」可在独立窗口打开三张图解。沿流程查看场解矩阵、裕量、计算输入、设计快照和电路仿真之间的关系。点击功能卡片可直接打开对应的离线图文教程，教程目录提供完整 Word。[软件操作教程](resources/help/operations/index.html)
+桌面版顶部「功能架构」可在独立窗口打开三张图解。沿流程查看场解矩阵、裕量、计算输入、设计快照和电路仿真之间的关系。点击功能卡片可直接打开对应的离线图文教程。[软件操作教程](resources/help/operations/index.html)
 
 辅源画布顶部「架构示例」可载入分阶段电源树联合启停或[双源二极管 OR 汇流](examples/SYSTEM_AUX_ORING.json)。双击电源模块或 LDO，在同一窗口进入单元设计。
 
@@ -57,7 +58,9 @@
 
 QR 多路 SSR 的交叉调整率：在左侧设置各路实际最大/最小功率，启用“绕组两两耦合”并填入正定 kij 矩阵。桌面版在与“环路”并列的“交叉调整率”页选择“扫描负载角点”。Word/Excel及联合仿真报告显示同一硬件在 Vinmin/Vinmax 下的电压包络、负载组合与实际开关频率。参考点由Kc选RCD一次，角点固定同一阻容联立平均钳位功耗，不重新选择R/C。没有负载差就不代表已覆盖轻重载；真空载或无自洽单周期谷底的角点明确留为未完成。QR直流跨调采用矩阵换流/退磁/恒定电容谷底时序，低频环路仍是约化模型，不能代替完整换流线性化或实测。详见 [模型与边界](docs/CROSS_REGULATION.md)，计算说明第20章。此功能覆盖桌面与本地Python网页/API，独立TypeScript浏览器内核暂未移植。
 
-桌面“工程评审 → 工程验证与验收”可设置目标、导入带参数指纹的仿真 JSON/ZIP、记录两端实测和整改依据。应用记录后保存工程；刷新两端计算是显式后台操作。设计 Word 与联合报告按“评审结论 → 需求与共同硬件 → 分模块双端对照 → 模型边界与整改 → 证据追溯”组织，Vinmin/Vinmax 固定左右顺序。联合报告在设计章节前串联磁件场解与参数回填，后接电路对比；缺失证据单独标注。Excel 每个模块一张表，两端左右对比，并新增验收页。本轮新验收编辑界面覆盖桌面，Python 网页/API 保留共享数据与报告；独立 TypeScript 路径尚未移植该界面。
+在桌面电源单元打开「⑪ 硬件容差边界与分布评估」，核对各路输出范围、纹波、动态峰峰值和相位裕度验收线（严格大于 45°），再点击「计算极限容差」。结果列出理论边界、已算候选中最不利的工况和选择依据。发现超限后，可点击「运行蒙特卡洛」，沿用本轮固定的硬件和补偿估计失效概率。结果可随 Word 或 Excel 设计报告保存。[容差评估说明](docs/TOLERANCE_ANALYSIS.md)
+
+直接打开「⑫ 工程验证与验收」，可刷新两端计算、导入带参数指纹的仿真 JSON/ZIP 并记录实测。验收按器件规格和电源外特性分组，使用器件 BOM、磁件参数、需求和环路中的限值。设计及联合 Word 和 Excel 在验收明细中列出各端点、来源和判定。联合报告同时保存场解、参数回填、电路试验及流程状态。Python 网页和 API 共用验收数据与报告内核。[验收说明](docs/ENGINEERING_ACCEPTANCE.md)
 
 ## 快速开始
 
@@ -118,7 +121,10 @@ print(report["ok"])
 
 ```powershell
 .\.venv-web\Scripts\python.exe cli.py design --spec examples/40W_CCM_3OUT_FLYBACK.json --out output/design.json
+.\.venv-web\Scripts\python.exe cli.py review --spec examples/40W_CCM_3OUT_FLYBACK.json --output-dir output/review-01 --report xlsx
 ```
+
+`review` 使用同一套硬件的双端点计算结果，生成验收 JSON、计算快照和可选 Word 或 Excel 设计报告。结果目录须为新目录。退出码与响应中的 `ok` 表示计算和导出状态，工程判定见 `acceptance.json`。本机 Codex 可用 `$power-design-review` 调用该入口。
 
 ## 随附算例
 
@@ -176,7 +182,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build_release.ps1 -Tar
 ## 文档
 
 - [开始使用](开始使用.md)、[中文手册](docs/MANUAL_ZH.md)、[项目结构与发布](docs/PROJECT_STRUCTURE.md)
-- [计算方法与公式说明（Word）](docs/reference/计算方法与公式说明.docx)、[多路反激入门教程（Word）](docs/tutorials/多路反激电源设计入门教程.docx)、[自动计算参数依据（Word）](docs/reference/自动计算参数依据.docx)
+- [计算方法与公式说明（Word）](docs/reference/计算方法与公式说明.docx)、[开关电源介绍与计算方法（Word）](docs/reference/开关电源介绍与计算方法.docx)、[多路反激入门教程（Word）](docs/tutorials/多路反激电源设计入门教程.docx)、[自动计算参数依据（Word）](docs/reference/自动计算参数依据.docx)
 - [项目文档写作与排版规范](docs/DOCUMENT_STYLE.md)
 - [系统架构](docs/SYSTEM_WORKSPACE.md)、[LDO](docs/LDO_DESIGN.md)、[BOM 与降额](docs/COMPONENT_BOM_DERATING.md)
 - [并联 ESR 环路模型](docs/PARALLEL_ESR_LOOP.md)、[寄生参数模型](docs/PARASITIC_MODELS.md)、[仿真对比](docs/SPICE_COMPREHENSIVE_COMPARISON.md)

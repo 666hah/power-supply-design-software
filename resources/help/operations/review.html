@@ -3,36 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>工程评审与验收 · 开关电源设计软件操作教程</title>
+  <title>工程验证与验收 · 开关电源设计软件操作教程</title>
   <link rel="stylesheet" href="book.css">
 </head>
 <body>
-  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a></nav>
-  <main><h1>13  工程评审与验收</h1>
-<p>用双端点表核对设计目标、仿真与实测。先为指标定义阈值与所需证据，再记录每个工况的判定、待补资料和整改。</p>
-<p class='entry'>电源单元 → 工程评审 → 工程验证与验收</p>
+  <nav aria-label="教程导航"><a href="index.html">操作教程目录</a><a href="开关电源设计软件操作教程.docx" download>下载完整 Word 手册</a></nav>
+  <main><h1>13  工程验证与验收</h1>
+<p>用双端点表核对器件规格和电源外特性，查看各端点判定所依据的计算、仿真和实测。</p>
+<p class='entry'>电源单元 → ⑫ 工程验证与验收</p>
 <h2>操作步骤</h2><ol>
-<li><strong>刷新两端计算</strong> 点击“刷新 Vinmin / Vinmax 计算”，查看已有的双端计算。该按钮只启动设计计算，仿真资料从独立运行结果导入。</li>
-<li><strong>定义当前指标目标</strong> 在上表选择一项，填写目标关系、阈值和依据，勾选判定所需来源及“启用指标”，点击“应用目标到当前工程”。</li>
+<li><strong>刷新两端计算</strong> 点击“刷新 Vinmin / Vinmax”，按当前硬件更新两端计算。仿真资料从独立运行结果导入。</li>
+<li><strong>核对限值和来源</strong> 先读器件规格和电源外特性两组结论。选中一行后点击“查看所选证据…”，在对应端点核对限值、来源和裕量。</li>
 <li><strong>导入仿真</strong> 点击“导入仿真证据…”，选择当前硬件对应的 comparison.json 或包含该文件的对比 ZIP。联合报告使用的仿真电路以回填后的硬件作为匹配依据。</li>
-<li><strong>录入实测</strong> 分别填写 Vinmin 和 Vinmax 的实测值、仪器或台账号及测试条件。核对对应硬件与工况后勾选“确认本次录入”，点击“保存两端实测录入到当前工程”。</li>
-<li><strong>登记整改并保存</strong> 填写现象、原因、负责人、措施及证据。选择相应状态并点击“应用整改记录到当前工程”。最后保存设计 JSON 或系统工程。</li>
+<li><strong>录入并保存实测</strong> 在对应端点填写实测值、仪器或台账号及测试条件。勾选“确认对应当前硬件与本工况”，点击“应用本工况实测”，再保存设计 JSON 或系统工程。</li>
 </ol>
-<figure><a href="screens/review.jpg" target="_blank" aria-label="查看原图 工程验证与验收的双端点对照"><img src="screens/review.jpg" alt="工程验证与验收的双端点对照"></a><figcaption>图 13-1　工程验证与验收的双端点对照</figcaption><p>先读上部工况表，再点选具体指标填写目标和判定来源。实测与整改区域位于页面下方。</p></figure>
+<figure><a href="screens/review.jpg" target="_blank" aria-label="查看原图 工程验证与验收的双端点对照"><img src="screens/review.jpg" alt="工程验证与验收的双端点对照"></a><figcaption>图 13-1　工程验证与验收的双端点对照</figcaption><p>先读两组和各输入端点，再点选指标查看依据与实测。截图来自旧版，当前相位裕度验收线为严格大于 45°。</p></figure>
+<figure><a href="screens/tolerance.jpg" target="_blank" aria-label="查看原图 极限容差与蒙特卡洛的操作入口"><img src="screens/tolerance.jpg" alt="极限容差与蒙特卡洛的操作入口"></a><figcaption>图 13-2　极限容差与蒙特卡洛的操作入口</figcaption><p>极限容差发现超限后，「运行蒙特卡洛」可用。</p></figure>
 <h2>输入字段</h2><div class="table"><table><caption>表 13-1　主要字段与使用位置</caption><thead><tr>
 <th scope="col">字段或选项</th>
 <th scope="col">单位或取值</th>
 <th scope="col">输入的含义及用途</th>
 </tr></thead><tbody>
-<tr><th scope="row">目标关系与阈值</th><td>&lt;= / &gt;= / &lt; / &gt; / range，按表列单位</td><td>单侧关系使用一个阈值，range 用允许上下限表示闭区间。留空表示目标待定义。</td></tr>
-<tr><th scope="row">判定必需来源</th><td>计算 / 仿真 / 实测录入</td><td>每个启用的指标选定必须具备的证据。只要求计算时，满足状态仅对应计算口径。</td></tr>
-<tr><th scope="row">依据与说明</th><td>文本</td><td>可写产品需求、公差或降额依据，便于他人解释限值。</td></tr>
+<tr><th scope="row">器件规格限值</th><td>按表列单位</td><td>从器件 BOM 与规格、磁件参数读取电容、半导体、电阻及磁件的限值。</td></tr>
+<tr><th scope="row">电源外特性目标</th><td>Vpp、°、效率比例</td><td>纹波和效率读取需求目标。最小相位裕度须严格大于 45°。</td></tr>
 <tr><th scope="row">实测值、来源与测试条件</th><td>按表列单位；文本</td><td>记录输入端点、负载、温度、接法、带宽及仪器。效率按表中定义用比例，例如 93% 写为 0.93。</td></tr>
-<tr><th scope="row">测量证据与整改关闭依据</th><td>文件 / 编号、文本</td><td>保留实测记录的标识。关闭整改时填写当前输入对应的验证依据并确认。</td></tr>
+<tr><th scope="row">证据引用</th><td>文件 / 编号、文本</td><td>保留实测记录的文件或报告标识，便于按工况查阅。</td></tr>
 </tbody></table></div><h2>结果核对</h2>
-<p>数值列的“计、仿、录”表示计算、仿真、手工实测。选择一项，读选中指标的来源、偏差及阈值余量，并核对各端点是否齐备。</p>
+<p>比较同一指标及同一端点的计算、仿真和实测。任一匹配来源超限即列为超限。待补会指明缺限值、缺结果，或两者都缺。</p>
+<p>要评估元件偏差，打开「⑪ 硬件容差边界与分布评估」，核对四项输出规格、器件分布和负载，点击「计算极限容差」。发现超限后可点击「运行蒙特卡洛」，按所设样本数估计器件超规格和外特性不达标的概率。</p>
 <p>设计输入修改后，旧仿真与测量可能显示失效。移动工程时重新导入正确路径的证据，供程序检查配置匹配和证据完整性。</p>
-<p>指标判定代表配置下的证据覆盖。检查仍未闭环的整改，以及有状态但缺具体证据的条目。</p>
+<p>读报告时从两组结论定位超限指标，再到验收明细核对各端点的数值和限值。</p>
 <div class="paging"><a href="joint.html">上一章　电磁场解回填与联合验证</a> <a href="report.html">下一章　导出设计与系统报告</a></div></main>
 </body>
 </html>

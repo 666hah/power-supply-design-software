@@ -1,13 +1,17 @@
 """Validate actual-evidence parsing and cancellation without launching user apps."""
+import os
 import sys
 from pathlib import Path
 import tempfile
+from threading import Barrier
+import time
 import unittest
 from unittest.mock import patch,MagicMock
 import numpy as np
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from spice_runtime import TransientRaw,read_log,_run,compare_design,_comparison_rows,partial_transient_time
+from spice_runtime import (TransientRaw,read_log,_run,compare_design,_comparison_rows,partial_transient_time,
+                           endpoint_workers,run_endpoint_cases)
 from calculation_scheduler import CalculationCancelled
 
 
@@ -80,9 +84,45 @@ class RuntimeChecks(unittest.TestCase):
     def test_cancel_terminates_only_owned_process(self):
         process=MagicMock();process.poll.return_value=None
         with patch('spice_runtime.subprocess.Popen',return_value=process) as launch:
-            with self.assertRaises(CalculationCancelled):_run('LTspice.exe',Path('.'),180,lambda:True)
+            with self.assertRaises(CalculationCancelled):
+                _run('LTspice.exe',Path('.'),180,MagicMock(side_effect=[False,True]))
         process.terminate.assert_called_once();process.wait.assert_called_once()
         self.assertEqual(launch.call_args.args[0][1],'-b')
+
+    def test_cancelled_job_never_launches_another_simulator(self):
+        with patch('spice_runtime.subprocess.Popen') as launch:
+            with self.assertRaises(CalculationCancelled):
+                _run('LTspice.exe',Path('.'),180,lambda:True)
+            launch.assert_not_called()
+
+    def test_endpoint_budget_leaves_capacity_and_uses_affinity(self):
+        counter = 'process_cpu_count' if hasattr(os,'process_cpu_count') else 'cpu_count'
+        with patch('spice_runtime.os.'+counter, return_value=16):
+            self.assertEqual(endpoint_workers(2, 2), 2)
+            self.assertEqual(endpoint_workers(2, 8), 1)
+            self.assertEqual(endpoint_workers(1, 2), 1)
+            self.assertEqual(endpoint_workers(2, 2, parallel=False), 1)
+        with patch('spice_runtime.os.'+counter, return_value=4):
+            self.assertEqual(endpoint_workers(2, 1), 1)
+
+    def test_endpoint_error_cancels_other_worker_before_cleanup(self):
+        started = Barrier(2, timeout=3)
+        exits = []
+
+        def solve(case, stopped, notify):
+            started.wait()
+            if case == 'low':
+                raise ValueError('low endpoint failed before launch')
+            limit = time.monotonic() + 3
+            while not stopped() and time.monotonic() < limit:
+                time.sleep(.01)
+            exits.append(stopped())
+            raise CalculationCancelled()
+
+        with self.assertRaisesRegex(ValueError, 'low endpoint failed'):
+            run_endpoint_cases(['low', 'high'], solve, workers=2, cancelled=lambda:False,
+                               progress=None, stages_per_case=1, total=2)
+        self.assertEqual(exits, [True])
 
     def test_no_simulator_never_writes_or_fakes_results(self):
         with tempfile.TemporaryDirectory() as td,patch('spice_runtime.find_ltspice',return_value=None):

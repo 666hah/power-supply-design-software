@@ -33,9 +33,15 @@ def validate_inputs(p):
         raise ValueError('mu_r 是相对磁导率，手动值必须 ≥1；真空磁导率 μ0 由程序提供')
 
 
+def target_inductance(p):
+    """Return the topology's primary magnetising inductance in henries."""
+    key = {'ACF-FORWARD': 'Lm_forward', 'LLC': 'llc_lm'}.get(p['topology'], 'L')
+    return float(p[key])
+
+
 def estimate(p, core, turns):
     validate_inputs(p)
-    inductance = float(p['Lm_forward'] if p['topology'] == 'ACF-FORWARD' else p['L'])
+    inductance = target_inductance(p)
     if not math.isfinite(inductance) or inductance <= 0:
         raise ValueError('变压器目标励磁电感必须为有限正数')
     ae = float(core['Ae'])

@@ -271,7 +271,7 @@ class JointDesktopChecks(unittest.TestCase):
         dialog.apply_result()
         self.assertFalse(self.applied)
 
-    def test_real_canvas_magnetic_and_menu_entries_share_centre_and_history(self):
+    def test_real_unit_banner_opens_single_center_and_restores_history(self):
         from main import PowerSupplyAnalyzer
         import system_workspace as model
         from system_workspace_ui import SystemWorkspace
@@ -280,36 +280,48 @@ class JointDesktopChecks(unittest.TestCase):
         shell.initialize()
         original = json.loads((ROOT/'examples/90W_QR_L6565_300V.json').read_text(encoding='utf-8'))
         model.set_unit_config(shell.project,'PSU-01',original)
+
+        def descendants(parent):
+            for child in parent.winfo_children():
+                yield child
+                yield from descendants(child)
+
         shell.open_unit('PSU-01')
         app = shell.calculator
         try:
-            win = app._export_joint_ui()
-            self.assertEqual(win.title(),'仿真配置中心')
-            dialog = app._joint_simulation_dialog
+            buttons = [widget for widget in descendants(self.root)
+                       if isinstance(widget, ttk.Button)
+                       and widget.cget('text').startswith('仿真配置')]
+            banner_button = shell._simulation_button
+            self.assertEqual(buttons, [banner_button])
+            self.assertEqual(banner_button.cget('text'), '仿真配置中心')
+            self.assertEqual(banner_button.winfo_manager(), 'grid')
+            self.assertIs(banner_button.master, shell._header_actions)
+            file_menu_name = app.workspace_menu.entrycget('文件', 'menu')
+            file_menu = self.root.nametowidget(file_menu_name)
+            file_commands = [file_menu.entrycget(index, 'label')
+                             for index in range(file_menu.index('end') + 1)
+                             if file_menu.type(index) == 'command']
+            self.assertFalse(any(label.startswith('仿真配置中心') for label in file_commands))
+            self.assertIn('导出设计报告…', file_commands)
+
+            banner_button.invoke()
             center = app._simulation_center
-            self.assertEqual(center.tabs.select(), str(center.pages['joint']))
-            app.mag_simulation_button.invoke()
-            self.assertIs(app._joint_simulation_dialog,dialog)
-            self.assertEqual(center.tabs.select(), str(center.pages['field']))
-            def menu_with_label(widget,caption):
-                for child in widget.winfo_children():
-                    if isinstance(child,tk.Menu):
-                        for i in range((child.index('end') or 0)+1):
-                            try:
-                                if child.entrycget(i,'label') == caption:
-                                    return child,i
-                            except tk.TclError:
-                                pass
-                    found = menu_with_label(child,caption)
-                    if found:
-                        return found
-                return None
-            item = menu_with_label(app.root,'仿真配置中心…')
-            self.assertIsNotNone(item)
-            item[0].invoke(item[1])
-            self.assertIs(app._joint_simulation_dialog,dialog)
+            win = center.window
+            self.assertEqual(win.title(), '仿真配置中心')
             self.assertEqual(center.tabs.select(), str(center.pages['circuit']))
-            self.assertIs(center.window, win)
+            center.tabs.select(center.pages['field'])
+            self.root.update()
+            self.assertIs(center.panels['field'], app._transformer_simulation_dialog)
+            center.tabs.select(center.pages['joint'])
+            self.root.update()
+            dialog = center.panels['joint']
+            self.assertIs(dialog, app._joint_simulation_dialog)
+            banner_button.invoke()
+            self.assertIs(app._simulation_center, center)
+            self.assertIs(app._joint_simulation_dialog, dialog)
+            self.assertEqual(center.tabs.select(), str(center.pages['circuit']))
+
             record = dict(directory=str(self.directory),report_path=str(self.directory/'结果.docx'),
                           manifest_path=str(self.directory/'manifest.json'),status='partial',
                           input_id='fixed',summary='单元历史')
@@ -319,12 +331,23 @@ class JointDesktopChecks(unittest.TestCase):
             self.assertEqual(app._config_dict()['__joint_simulation'],record)
             win.destroy()
             app.on_close()
+            self.assertEqual(banner_button.cget('text'), '仿真配置')
+            self.assertEqual(banner_button.winfo_manager(), 'grid')
+            banner_button.invoke()
+            system_center = shell._simulation_center
+            self.assertEqual(system_center.tabs.select(), str(system_center.pages['sequence']))
+            system_center.close()
+
             saved = self.directory/'系统工程.json'
             model.save_project(shell.project,saved)
             shell.project = model.load_project(saved)
             shell.open_unit('PSU-01')
             app = shell.calculator
-            app._export_joint_ui()
+            self.assertEqual(banner_button.cget('text'), '仿真配置中心')
+            banner_button.invoke()
+            center = app._simulation_center
+            center.tabs.select(center.pages['joint'])
+            self.root.update()
             history = app._joint_simulation_dialog
             self.assertEqual(history.result,record)
             self.assertFalse(history.open_report.instate(['disabled']))

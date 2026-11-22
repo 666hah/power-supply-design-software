@@ -42,24 +42,23 @@ class EnvironmentPanel(ttk.Frame):
         self._source = {}
         self.field_enabled = field_enabled
         self.columnconfigure(0, weight=1)
-        title = ttk.Label(self, text='本机求解软件与磁芯来源' if field_enabled else '本机求解软件',
+        title = ttk.Label(self, text='设备与模型' if field_enabled else '仿真设备',
                           font='TkHeadingFont', wraplength=800, justify='left')
         title.grid(row=0, column=0, sticky='ew', padx=10, pady=(10, 3))
         self._labels.append(title)
-        note = ttk.Label(self, text=('已检测到的 Elmer 和 LTspice 自动带入。电磁仿真先用当前工程与磁芯库，'
-                         '需要指定实物 CAD 时再登记磁芯模型。' if field_enabled
-                         else '单元电路仿真和系统启停沿用这里的 LTspice 路径。'),
-                         wraplength=800, justify='left')
-        note.grid(row=1, column=0, sticky='ew', padx=10, pady=(0, 10))
-        self._labels.append(note)
+        self.status = tk.StringVar(self, '未检查 · 确认程序路径后，点击「检查运行环境」。')
+        self.status_label = ttk.Label(self, textvariable=self.status, style='ResultConclusion.TLabel',
+                                      wraplength=800, justify='left')
+        self.status_label.grid(row=1, column=0, sticky='ew', padx=10, pady=(0, 10))
+        self._labels.append(self.status_label)
 
         machine = self._section(2, '本机求解软件')
         if field_enabled:
             self._path_row(machine, 0, 'Elmer 安装目录', 'elmer_home', self.pick_elmer)
         self._path_row(machine, 1, 'LTspice 可执行程序', 'ltspice', self.pick_spice)
         self.executable = self._values['ltspice']
-        self._hint(machine, 2, ('检测不到时选择安装目录。Elmer 使用完整安装包，包含 Solver、Grid 与运行库。'
-                                if field_enabled else '浏览选择本机 LTspice.exe 或 XVIIx64.exe。'))
+        self._hint(machine, 2, ('自动带入已检测到的路径。Elmer 安装目录应包含 Solver、Grid 和运行库。'
+                                if field_enabled else '单元电路仿真与系统启停共用此路径。可选择 LTspice.exe 或 XVIIx64.exe。'))
 
         model = self._section(3, '磁芯模型来源')
         self.model_label = ttk.Label(model, font='TkHeadingFont', wraplength=700)
@@ -88,8 +87,8 @@ class EnvironmentPanel(ttk.Frame):
         self._choice_row(geometry, 4, '网格档位', 'mesh_profile', MESH_PROFILES.values())
         self._number_row(geometry, 5, '空气域半径 / mm', 'air_radius_m')
         self._number_row(geometry, 6, '单次求解超时 / s', 'timeout_s')
-        self._hint(geometry, 7, 'r0、z0 优先来自当前变压器建模设置；缺失时需按骨架与 CAD 坐标补齐。'
-                   '总气隙与磁导率采用当前设计。网格档位不是收敛验证结论。')
+        self._hint(geometry, 7, '总气隙、磁导率和绕组坐标优先取当前设计。缺少 r0、z0 时，按骨架尺寸与 CAD 坐标补齐。'
+                   '网格收敛需通过不同网格档位的求解结果核对。')
 
         actions = ttk.Frame(self)
         actions.grid(row=5, column=0, sticky='ew', padx=10, pady=(5, 7))
@@ -102,10 +101,6 @@ class EnvironmentPanel(ttk.Frame):
             self._button(actions, '导入旧提取设置…', self.import_legacy)
         else:
             model.grid_remove()
-        self.status = tk.StringVar(self, '可直接使用已检测到的程序路径。')
-        self.status_label = ttk.Label(self, textvariable=self.status, wraplength=800, justify='left')
-        self.status_label.grid(row=6, column=0, sticky='ew', padx=10, pady=(0, 8))
-        self._labels.append(self.status_label)
         self._actions = actions
         default = environment.load_environment(config) if field_enabled else {'ltspice': environment.load_spice_path()}
         self._set_values(initial if initial is not None else default)
@@ -225,8 +220,7 @@ class EnvironmentPanel(ttk.Frame):
                 variable.set(str(vector[i]) if i < len(vector) else '')
         import simulation_environment as environment
         name = environment.core_name(self._config)
-        source = ('已登记 CAD，可按当前绕组自动准备' if values.get('core_path')
-                  else '自动检查磁芯库、绕组路径和工程几何')
+        source = ('已登记磁芯 CAD' if values.get('core_path') else '使用磁芯库与当前工程几何')
         self.model_label.configure(text=f'{name or "当前设计"} · {source}')
 
     def set_config(self, config):
@@ -240,7 +234,7 @@ class EnvironmentPanel(ttk.Frame):
             self._set_values(environment.load_environment(config))
             for key, value in machine.items():
                 self._values[key].set(value)
-            self.status.set('当前磁芯已切换，请检查对应 CAD 模型和装配设置。')
+            self.status.set('待检查 · 磁芯已切换，请核对 CAD 模型与装配设置。')
         elif self.field_enabled:
             for target, origin in (('r0_m','r0_m_if_circular'), ('z0_m','z0_m')):
                 if prior_frame.get(origin) != frame.get(origin):
@@ -354,18 +348,18 @@ class EnvironmentPanel(ttk.Frame):
             return
         if not self.field_enabled:
             try:
-                self.status.set('已找到 LTspice · ' + self.spice_path())
+                self.status.set('检查通过 · 已找到 LTspice\n' + self.spice_path())
             except ValueError as exc:
-                self.status.set(str(exc))
+                self.status.set('检查未通过 · ' + str(exc))
             return
         try:
             values = self.snapshot(require_spice=require_spice)
         except (ValueError, tk.TclError) as exc:
-            self.status.set('尚未检查：' + str(exc))
+            self.status.set('未检查 · ' + str(exc))
             return
         self._checking = True
         self.check_button.state(['disabled'])
-        self.status.set('正在检查本机求解软件与内置运行库…')
+        self.status.set('检查中 · 正在检查求解软件与运行库。')
         mailbox = self._mailbox
         config = copy.deepcopy(self._config)
         def work():
@@ -396,13 +390,12 @@ class EnvironmentPanel(ttk.Frame):
         self._checking = False
         self.check_button.state(['!disabled'])
         if kind == 'error':
-            self.status.set('环境检查未通过：' + value)
+            self.status.set('检查未通过 · ' + value)
             return
-        lines = ['环境检查通过，可开始输入校验与仿真。' if value.get('ok') else '环境检查未通过，请处理以下项目。']
+        lines = ['检查通过 · 可继续核对模型并运行仿真。' if value.get('ok') else '检查未通过 · 请按下列提示处理。']
         for check in value.get('checks', []):
-            lines.append(('✓ ' if check.get('ok') else '需处理 · ') + str(check.get('name', '')) +
-                         '：' + str(check.get('message', '')))
-        lines.append('环境检查不替代 CAD 尺寸/绕组空间检查或仿真收敛验证。')
+            lines.append(('通过' if check.get('ok') else '待处理') + ' · ' + str(check.get('name', '')) +
+                         ' · ' + str(check.get('message', '')))
         self.status.set('\n'.join(lines))
 
     def import_model(self):

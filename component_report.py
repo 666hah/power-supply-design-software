@@ -3,8 +3,8 @@ from component_management import SOURCE, STATUS, evaluate_components, stress_gro
 
 
 _GROUP_NOTES = {
-    'mos': 'Vds 核查覆盖阻断电压及已计算的尖峰。其余尖峰和脉宽待实测。',
-    'diode': '反向电压对比 Vrrm。补测寄生尖峰及外部反接、回灌电压。',
+    'mos': 'Vds 核查覆盖阻断电压及已计算的尖峰。电流按有效值或已配置的峰值额定条件核对。',
+    'diode': '反向电压对比 Vrrm，正向电流按平均值或已配置的重复峰值额定条件核对。',
     'capacitor': '电压采用电容端电压包络。纹波按单颗 RMS 电流核查，额定值按实际频率和温度修正。',
     'resistor': '平均功耗对比允许值。脉冲功耗查器件手册。',
 }
@@ -14,7 +14,7 @@ def _stress_label(check, kind):
     from report_architecture import component_check_label
 
     ref = check['ref']
-    if kind == 'diode':
+    if kind == 'diode' and check['metric'] in ('voltage', 'peak'):
         if check['value'] is None:
             return ref + ' 反向电压'
         detail = next((text for text in ('含局部换流峰值', '周期模型峰值', '未考虑寄生尖峰')

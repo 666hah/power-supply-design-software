@@ -10,6 +10,7 @@ _SPEC_KEYS = sorted(set(DEFAULT_PARAMS) | {'V_in_min', 'V_in_max', 'input_voltag
 _TOPO_ALIAS = {k.upper(): k for k in TOPOLOGIES}
 _CTRL_ALIAS = {'VM': 'Voltage Mode', 'PCM': 'Peak Current Mode',
                'COT': 'Constant On-Time', 'CONSTANT ON-TIME': 'Constant On-Time',
+               'HHC': 'Hybrid Hysteretic', 'HYBRID HYSTERETIC': 'Hybrid Hysteretic',
                'VOLTAGE MODE': 'Voltage Mode',
                'PEAK CURRENT MODE': 'Peak Current Mode'}
 
@@ -116,6 +117,12 @@ def load_spec(spec):
             p[k] = float(spec[k]['v']) if isinstance(spec[k], dict) else float(spec[k])
     from capacitor_banks import normalize
     p=normalize(p)
+    if p['topology'] == 'LLC':
+        from llc_settings import validate
+        for key in ('Np','Ns'):
+            if key not in spec:
+                p[key]=0
+        p = validate(p)
     from isolated_outputs import output_specs
     if p.get('outputs'):
         p['outputs'] = [{k:v for k,v in r.items() if k!='id'} for r in output_specs(p)]

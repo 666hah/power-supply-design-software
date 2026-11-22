@@ -29,6 +29,16 @@ def recommend_settings(parameters, settings, scope=None):
     from isolated_outputs import output_specs
     from plants import resolve_controller_type
     s = normalize_settings(settings)
+    if parameters.get('topology')=='LLC':
+        start = (parameters.get('llc_soft_start',.008)+.005)*1000+s['enable_delay_ms']
+        s['step_ms']=max(s['step_ms'],math.ceil(start))
+        s['stop_ms']=max(s['stop_ms'],s['step_ms']+10.)
+        s.update(cross_enabled=0.,line_load_enabled=0.,short_test=0.)
+        if scope in ('quick','full'):
+            s['fra_enabled']=float(scope=='full')
+        elif scope is not None:
+            raise ValueError('未知仿真任务范围')
+        return normalize_settings(s)
     fs = s['frequency_hz'] or float(parameters['f_sw'])
     zeros = [s['fz1'] or float(parameters.get('fz1', 0))]
     if resolve_controller_type(parameters.get('controller_type','auto'),parameters.get('control_mode')) == 'type3':
@@ -67,6 +77,34 @@ def execution_plan(parameters, settings):
     from spice_studies import corner_plan
     from spice_export import normalize_settings
     s = normalize_settings(settings)
+    if parameters.get('topology')=='LLC':
+        from llc_spice import _time_schedule
+        from llc_spice_comparison import _fra_grid
+        from spice_boundary import voltages as input_boundaries
+        voltages=input_boundaries(parameters)
+        p=dict(parameters,spice_config=s)
+        nominal=_time_schedule(p,None,False,None)
+        step=_time_schedule(p,None,True,None)
+        grid=_fra_grid(s,p['llc_fmin']/5) if s['fra_enabled'] else []
+        stages=[]
+        for voltage in voltages:
+            stages.extend([
+                dict(vin=voltage,kind='transient',name='满载从零启动与稳态',
+                     duration_s=nominal['stop_s'],timeout_s=s['simulation_timeout_s']),
+                dict(vin=voltage,kind='load_step',name='10% ↔ 90% 双向负载阶跃',
+                     duration_s=step['stop_s'],timeout_s=s['simulation_timeout_s']),
+            ])
+            if grid:
+                stages.append(dict(vin=voltage,kind='fra',name='两档幅值的开关 FRA',
+                                   points=len(grid),timeout_s=2*len(grid)*s['fra_timeout_s']))
+        return dict(topology='LLC',voltages=voltages,output_count=1,stages=stages,
+                    cross_count=0,cross_enabled=False,cross_requested=False,cross_skip_reason='',
+                    cross_coverage='单路',fra_enabled=bool(grid),fra_points_approx=len(grid),
+                    skipped=[] if grid else ['开关 FRA'],reuse=False,qr_charge_observation=[],
+                    timeout_budget_s=sum(stage['timeout_s'] for stage in stages),
+                    transient_duration_s=sum(stage.get('duration_s',0) for stage in stages),
+                    step_ms=step['step_up_s']*1000,stop_ms=step['stop_s']*1000,
+                    max_load_step=dict(feedback_output=1,low_fraction=.1,high_fraction=.9,stop_s=step['stop_s']))
     from spice_boundary import load_definition, voltages as input_boundaries
     voltages = input_boundaries(parameters)
     maximum_step = load_definition(parameters, s)
@@ -111,6 +149,10 @@ def execution_plan(parameters, settings):
 
 
 def plan_text(plan):
+    if plan.get('topology')=='LLC':
+        text=f"{len(plan['voltages'])} 个输入端点，分别执行满载启动、满载稳态和 10% ↔ 90% 双向负载阶跃。"
+        return text+(f"每端开关 FRA 约 {plan['fra_points_approx']} 点，并以半幅复核。"
+                     if plan['fra_enabled'] else '快速预检仅运行时域。')
     dynamic = plan['max_load_step']
     text = (f"{len(plan['voltages'])} 个输入边界 · 各路满载开机与稳态 · OUT{dynamic['feedback_output']} "
             f"{dynamic['low_fraction']:.0%} ↔ {dynamic['high_fraction']:.0%} 独立双向阶跃，结束 {dynamic['stop_s']*1000:g} ms")
@@ -124,3 +166,17 @@ def plan_text(plan):
             for r in plan['qr_charge_observation'])+'（两倍负载RC时间尺度，完成后仍须逐路电荷平衡）'
     text += '。建议先快速预检。FRA 和交叉调整率需要通过额定稳态检查。'
     return text
+
+
+def resource_text(parameters, settings):
+    from spice_boundary import voltages
+    from spice_runtime import endpoint_workers
+
+    threads = int(settings['simulation_threads'])
+    endpoints = len(voltages(parameters))
+    workers = endpoint_workers(endpoints, threads)
+    if workers == 2:
+        schedule = '高低压端点并行'
+    else:
+        schedule = '单输入端点' if endpoints == 1 else '端点依次运行'
+    return f'CPU 分配　{schedule}，单个 LTspice 工况最多 {threads} 线程。'

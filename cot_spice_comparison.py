@@ -147,7 +147,7 @@ def _write_report(path, evidence):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.text import Text
     from report_architecture import available_width, module_section, conclusion_line
-    from spice_black_box import black_box_sections
+    from spice_black_box import PHASE_MARGIN_RULE, black_box_sections
     from spice_box_figures import (STARTUP_HEADERS, STARTUP_WIDTHS, draw_load_step, draw_line_load,
                                   white_sections, white_startup_sections)
 
@@ -193,11 +193,14 @@ def _write_report(path, evidence):
     paragraph(doc,('白盒测量：已取得 '+str(len(white_rows)-white_missing)+'/'+str(len(white_rows))+' 项器件统计，'
                    +str(white_deviations)+' 项偏差需复核。') if white_rows else '白盒测量：未取得逐器件证据。')
     if fra_requested:
+        pm_qualified=sum(any(r['id']=='pm' and r['status']=='pass' for r in c['acceptance']['fra']['rows'])
+                         for c in cases)
         qualified=sum(all(r['status']=='pass' for r in c['acceptance']['fra']['rows'] if r['id']!='gm')
                       and bool(c['loop'].get('available')) for c in cases)
         gm_uncovered=sum(any(r['id']=='gm' and r['status']=='not_covered' for r in c['acceptance']['fra']['rows']) for c in cases)
-        conclusion_line(doc, f'开关 FRA 半幅复核 {fra_complete}/{len(cases)} 端点有效；'
-                        f'{qualified}/{len(cases)} 端点的相位裕度及计算偏差满足门限。',
+        conclusion_line(doc, f'开关 FRA 半幅复核 {fra_complete}/{len(cases)} 个端点有效，'
+                        f'{pm_qualified}/{len(cases)} 个端点通过相位裕度验收，'
+                        f'{qualified}/{len(cases)} 个端点同时满足所列偏差门限。',
                         'pass' if qualified==len(cases) else 'review')
         if gm_uncovered:
             paragraph(doc,f'{gm_uncovered} 个端点未测到 −180° 相位交越，增益裕度保留为未覆盖。')
@@ -379,7 +382,7 @@ def _write_report(path, evidence):
         paragraph(doc,'T 为无量纲环路增益。V₁ 和 V₂ 分别为反馈电容节点 cap1 与控制器反馈输入节点 sense 在注入频率处的复数电压分量，单位为 V。')
         measures = [
             ('0 dB 穿越频率', 'fc', 'Hz'),
-            ('相位裕度', 'pm', '°'),
+            ('所选穿越相位裕度', 'pm', '°'),
             ('增益裕度', 'gm_db', 'dB'),
         ]
         headlines = ['指标', '单位']
@@ -403,7 +406,8 @@ def _write_report(path, evidence):
             table(doc,['指标','单位',fmt(cases[0]['voltage'])+' V 计算 / 仿真',fmt(cases[1]['voltage'])+' V 计算 / 仿真','低端 / 高端偏差'],compact,[1.2,.45,1.65,1.65,1.4])
         else:
             table(doc, headlines, comparison, [1.6,.6]+[1.05,1.05,.95]*len(cases))
-        paragraph(doc,'解析与 FRA 裕度按同一离散频点插值。未扫到 −180° 相位交越时，增益裕度留空。')
+        paragraph(doc, PHASE_MARGIN_RULE+'下方验收表采用全部测得交越的最小相位裕度。'
+                  '解析与 FRA 裕度按同一离散频点插值。未扫到 −180° 相位交越时，增益裕度留空。')
         for c in cases:
             probe = c['loop']
             module_section(doc, fmt(c['voltage'])+' V · '+('半幅复核有效' if probe['available'] else 'FRA 待复核'),
@@ -451,13 +455,14 @@ def _write_report(path, evidence):
     doc.save(path)
 
 
-def compare_design(bundle, destination, *, executable, cancelled, progress):
+def compare_design(bundle, destination, *, executable, cancelled, progress, parallel=True):
     from calculation_scheduler import CalculationCancelled
     from engineering_acceptance import input_fingerprint
-    from spice_runtime import _run, read_log, TransientRaw
+    from spice_runtime import _run, read_log, TransientRaw, endpoint_workers, run_endpoint_cases
     from cot_spice_fra import run_fra
     from spice_boundary import endpoint_cases, run_load_transient
     from cot_acceptance import apply_boundary_step
+    from spice_white_box import prepare
 
     start = time.monotonic()
     base = bundle['base_spec']
@@ -467,16 +472,20 @@ def compare_design(bundle, destination, *, executable, cancelled, progress):
     destination=Path(destination).resolve()
     destination.parent.mkdir(parents=True,exist_ok=True)
     report_path, zip_path = destination.with_suffix('.docx'), destination.with_suffix('.zip')
+    xlsx_path = destination.with_suffix('.xlsx')
     evidence = dict(schema='powerdesign-spice-comparison-2', model=MODEL_VERSION, topology='BUCK',
                     cot=True, cases=[], input_fingerprint=input_fingerprint(base), settings=settings,
                     parameters={'V_out':base['V_out'],'cot_config':base.get('cot_config') or {}},
                     input_range_V=[c['voltage'] for c in cases])
-    distinct = cases
+    workers = endpoint_workers(len(cases), settings['simulation_threads'], parallel=parallel)
+    evidence['execution'] = dict(endpoint_workers=workers, threads_per_case=int(settings['simulation_threads']))
     fra_requested = bool(settings['fra_enabled'])
-    tasks = len(distinct)*(4 if fra_requested else 2)+int(bool(settings.get('line_load_enabled')))
+    stages_per_case = 4 if fra_requested else 2
+    tasks = len(cases)*stages_per_case+int(bool(settings.get('line_load_enabled')))
     with tempfile.TemporaryDirectory(prefix='cot-spice-',dir=destination.parent) as temporary:
         root=Path(temporary)
-        for i,case in enumerate(distinct,1):
+
+        def solve(case, cancelled, notify):
             if cancelled():
                 raise CalculationCancelled()
             label=case['id']+'_COT'
@@ -484,23 +493,26 @@ def compare_design(bundle, destination, *, executable, cancelled, progress):
             folder.mkdir()
             generated=project_files(dict(base,spice_config=dict(settings,load_after=1.)),bundle=bundle,case=case)
             generated_meta=json.loads(generated['manifest.json'])
-            from spice_white_box import prepare
             white_box_probes=prepare(generated,case)
-            evidence['model']=generated_meta.get('model_version',MODEL_VERSION)
-            evidence['approximation_notes']=generated_meta.get('approximation_notes',list(_SCOPE))
             for name,payload in generated.items():
                 (folder/name).write_bytes(payload)
             record=dict(id=label,voltage=case['voltage'],fault_test=False,complete=False,
                         nominal_comparable=False,measurements={},rows=[],feedback_output=1,
                         loop=dict(available=False,error='未启用 COT FRA'),
                         approximation_notes=generated_meta.get('approximation_notes',list(_SCOPE)))
-            first = (i-1)*(4 if fra_requested else 2)+1
+
+            def phase(stage, text):
+                notify(stage, label+' · '+text)
+
+            def execute(folder, timeout, stage, end=None):
+                if cancelled():
+                    raise CalculationCancelled()
+                return _run(executable,folder,timeout,cancelled,simulation_end=end,
+                            progress=(lambda note:phase(stage,note)) if progress else None)
+
             try:
-                if progress:
-                    progress(first,tasks,label+' · LTspice 运行')
-                record['elapsed_s']=_run(executable,folder,settings['simulation_timeout_s'],cancelled,
-                    simulation_end=settings['stop_ms']*1e-3,
-                    progress=lambda text:progress(first,tasks,label+' · '+text) if progress else None)
+                phase(1,'LTspice 运行')
+                record['elapsed_s']=execute(folder,settings['simulation_timeout_s'],1,settings['stop_ms']*1e-3)
                 _, _, errors, warnings = read_log(folder/'Flyback.log')
                 record['warnings']=warnings
                 if errors:
@@ -515,34 +527,37 @@ def compare_design(bundle, destination, *, executable, cancelled, progress):
             except (ValueError,RuntimeError,OSError,TimeoutError) as exc:
                 record['error']=str(exc)
             if record['nominal_comparable']:
-                if progress:progress(first+1,tasks,label+' · 反馈路 10% ↔ 90% 双向阶跃')
-                def execute_step(study, timeout):
-                    return _run(executable,study,timeout,cancelled,
-                        progress=lambda note: progress(first+1,tasks,label+' · '+note) if progress else None)
-                record['load_transient']=run_load_transient(generated,case,settings,folder/'load_step',execute_step,
+                phase(2,'反馈路 10% ↔ 90% 双向阶跃')
+                record['load_transient']=run_load_transient(generated,case,settings,folder/'load_step',
+                    lambda study,timeout:execute(study,timeout,2),
                     cot=True,frequency_hz=record['measurements']['frequency_actual'])
             else:
                 record['load_transient']=dict(available=False,complete=False,error='满载基础工况未通过，跳过双向阶跃')
             apply_boundary_step(record,case['p'])
             if fra_requested:
                 if record['nominal_comparable']:
-                    stage = [first+1]
+                    stage = 2
 
                     def next_stage(note):
-                        stage[0] += 1
-                        if progress:
-                            progress(stage[0],tasks,label+' · '+note)
-
-                    def execute_sweep(sweep, timeout):
-                        return _run(executable,sweep,timeout,cancelled,
-                                    progress=lambda note: progress(stage[0],tasks,label+' · '+note) if progress else None)
+                        nonlocal stage
+                        stage += 1
+                        phase(stage,note)
 
                     record['loop']=run_fra(generated,case,settings,record['measurements']['frequency_actual'],
-                                           folder/'fra',execute_sweep,progress=next_stage)
+                                           folder/'fra',lambda sweep,timeout:execute(sweep,timeout,stage),
+                                           progress=next_stage)
                 else:
                     record['loop']['error']='标称工况未通过稳态或脉宽检查，跳过 FRA'
             record['acceptance']=assess_case(record,base,fra_requested=fra_requested)
-            evidence['cases'].append(record)
+            return record, generated, generated_meta.get('model_version',MODEL_VERSION)
+
+        results=run_endpoint_cases(cases,solve,workers=workers,cancelled=cancelled,progress=progress,
+                                   stages_per_case=stages_per_case,total=tasks)
+        evidence['cases']=[record for record,_,_ in results]
+        last_record, generated, model = results[-1]
+        evidence.update(model=model, approximation_notes=last_record['approximation_notes'])
+        if cancelled():
+            raise CalculationCancelled()
         if settings.get('line_load_enabled'):
             if all(case.get('nominal_comparable') for case in evidence['cases']):
                 from cot_line_load import prepare_cot_line_load
@@ -551,8 +566,8 @@ def compare_design(bundle, destination, *, executable, cancelled, progress):
                     progress(tasks,tasks,'COT 线载联合动态稳定度')
                 def execute_line(study,timeout):
                     return _run(executable,study,timeout,cancelled,simulation_end=settings['step_ms']*.001+1.05,
-                                progress=lambda note:progress(tasks,tasks,'COT 线载联合 · '+note) if progress else None)
-                evidence['line_load_stability']=run_line_load(generated,[base],[case['voltage'] for case in distinct],
+                                progress=(lambda note:progress(tasks,tasks,'COT 线载联合 · '+note)) if progress else None)
+                evidence['line_load_stability']=run_line_load(generated,[base],[case['voltage'] for case in cases],
                     settings,base['f_sw'],root/'line_load',execute_line,prepare=prepare_cot_line_load)
             else:
                 evidence['line_load_stability']=dict(complete=False,error='满载边界未通过，未运行 COT 线载联合')
@@ -560,31 +575,36 @@ def compare_design(bundle, destination, *, executable, cancelled, progress):
             raise CalculationCancelled()
         if progress:
             progress(tasks,tasks,'整理 COT 对比报告与工程包')
-        pending_report, pending_zip = root/'comparison.docx',root/'comparison.zip'
+        pending_report, pending_xlsx, pending_zip = root/'comparison.docx',root/'comparison.xlsx',root/'comparison.zip'
         evidence['simulation_wall_s']=time.monotonic()-start
         evidence_json=json.dumps(evidence,ensure_ascii=False,allow_nan=False,indent=2).encode('utf-8')
         with ZipFile(pending_zip,'w',ZIP_DEFLATED) as archive:
             archive.writestr('comparison.json',evidence_json)
-            for folder in root.iterdir():
+            for folder in sorted(root.iterdir()):
                 if folder.is_dir():
-                    for item in folder.rglob('*'):
+                    for item in sorted(folder.rglob('*')):
                         if item.is_file() and (item.suffix.lower()!='.raw' or '.fra_' in item.name):
                             archive.write(item,item.relative_to(root).as_posix())
             try:
                 _write_report(pending_report,evidence)
+                from spice_comparison_xlsx import write_spice_xlsx
+                write_spice_xlsx(pending_xlsx,evidence)
             except Exception as exc:
                 recovery=destination.with_name(destination.stem+f'-evidence-{time.time_ns()}.zip')
                 archive.close()
                 os.replace(pending_zip,recovery)
                 raise RuntimeError('报告排版未完成，实际仿真证据已保留：'+str(recovery)) from exc
             archive.write(pending_report,report_path.name)
+            archive.write(pending_xlsx,xlsx_path.name)
         if cancelled():
             raise CalculationCancelled()
+        os.replace(pending_xlsx,xlsx_path)
         os.replace(pending_report,report_path)
         os.replace(pending_zip,zip_path)
-    return dict(path=str(zip_path),report_path=str(report_path),successful=sum(c['complete'] for c in evidence['cases']),
-                total=len(distinct),fra_successful=sum(c['loop']['available'] for c in evidence['cases']),
-                fra_total=len(distinct) if fra_requested else 0,cross_successful=0,cross_total=0,
+    return dict(path=str(zip_path),report_path=str(report_path),xlsx_path=str(xlsx_path),
+                successful=sum(c['complete'] for c in evidence['cases']),
+                total=len(cases),fra_successful=sum(c['loop']['available'] for c in evidence['cases']),
+                fra_total=len(cases) if fra_requested else 0,cross_successful=0,cross_total=0,
                 incomplete=any(not c['acceptance']['passed'] or any(r['status']=='偏差需复核' for r in c['rows'])
                                for c in evidence['cases']) or bool(settings.get('line_load_enabled') and
                                (not evidence['line_load_stability']['complete'] or evidence['line_load_stability'].get('protection'))),

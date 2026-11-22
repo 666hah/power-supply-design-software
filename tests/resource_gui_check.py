@@ -72,7 +72,7 @@ class ResourceGUIChecks(unittest.TestCase):
             self.assertEqual(analyze.call_count, 2)
             self.assertIsNot(app._loop_result, first)
 
-    def test_review_completes_current_loop_checks_after_hidden_design_change(self):
+    def test_acceptance_reads_current_loop_evidence_after_hidden_design_change(self):
         from loop_tuning import analyze_loop
         app = self.app
         app._update_loop(app._last['p'], draw=False)
@@ -87,11 +87,14 @@ class ResourceGUIChecks(unittest.TestCase):
         self.assertEqual(main.parameter_signature(app._last['p']), app._loop_signature)
         self.assertIn('phase_margin', {c['id'] for c in app._last['checks']})
         self.assertIs(app._last['res']['loop'], app._loop_result)
+        phase_margin = app.acceptance_panel.rows['phase_margin']['cases']['Vinmin']['calculation']
+        self.assertEqual(phase_margin, app._loop_result['min_pm'])
 
     def test_failed_control_import_stops_polling_and_reports_error(self):
         import builtins
         real_import = builtins.__import__
         app = self.app
+        self.root.update()  # Settle pending layout before timing the dependency poll.
         app._control_ready = False
 
         def fail_control(name, *args, **kwargs):

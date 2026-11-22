@@ -5,6 +5,10 @@ from pathlib import Path
 import math
 import numpy as np
 
+from loop_acceptance import MIN_PHASE_MARGIN_DEG, phase_margin_passes
+from spice_analysis import minimum_phase_margin
+from spice_black_box import PHASE_MARGIN_RULE, fra_phase_margin, phase_margin_conclusion
+
 
 def _endpoint(case):
     """Use the stored endpoint identity, never infer it from voltage ordering."""
@@ -112,8 +116,14 @@ def simulation_summary(evidence):
         events = case.get('fault_events_s') or ()
         if events:
             findings.append((label+' · 保护动作', '首次发生于 '+_format(events[0]*1000, 'ms')))
-        if settings.get('fra_enabled') and not (case.get('loop') or {}).get('available'):
-            pending.append((label+' · 环路 FRA', (case.get('loop') or {}).get('error') or '待补结果'))
+        if settings.get('fra_enabled'):
+            loop = case.get('loop') or {}
+            margin = fra_phase_margin(loop)
+            if margin is None:
+                pending.append((label+' · 环路 FRA', loop.get('error') or '待补有效相位裕度'))
+            elif not phase_margin_passes(margin):
+                findings.append((label+' · FRA 最小相位裕度',
+                                 f'{_format(margin, "°")} 未达标，要求 > {MIN_PHASE_MARGIN_DEG:g}°。'))
         if (settings.get('cross_enabled') and not plan.get('cross_skip_reason') and
                 evidence.get('topology') not in ('BUCK', 'BOOST') and
                 not (case.get('cross') or {}).get('complete')):
@@ -1002,9 +1012,16 @@ def write_report(path,evidence,*,chart_images=None,document=None,save=True,
             paragraph(loop['definition']['method']+'。频带 '+fmt(loop['definition']['start_hz'],'Hz')+' 至 '+fmt(loop['definition']['stop_hz'],'Hz')+'。'+('半幅关键点复核通过。' if loop.get('available') else 'FRA 待复核。'+str(loop.get('error') or '')))
             if loop.get('diagnosis'):
                 paragraph(loop['diagnosis'])
+            def metric(data, key):
+                if not data:
+                    return '未取得'
+                return entry(minimum_phase_margin(data) if key == 'min_pm' else data.get(key))
             table(['指标','原始计算环路','按导出参数重建','LTspice FRA'],[
-                (label,entry(original.get(key)) if original else '未取得',entry(design['loop'].get(key)),entry(sim['loop'].get(key)))
-                for label,key in [('穿越频率 / Hz','fc'),('相位裕度 / deg','pm'),('增益裕度 / dB','gm_db')]],[6.6,6.4,6.4,6.4])
+                (label,*(metric(data,key) for data in (original,design['loop'],sim['loop'])))
+                for label,key in [('穿越频率 / Hz','fc'),('所选穿越相位裕度 / °','pm'),
+                                  ('最小相位裕度 / °','min_pm'),('增益裕度 / dB','gm_db')]]+
+                [('FRA 相位裕度验收','—','—',phase_margin_conclusion(fra_phase_margin(loop)))],
+                [6.6,6.4,6.4,6.4])
             if reconstructed:
                 pt=reconstructed['point']
                 paragraph('仿真工作点复核。Ipk '+fmt(pt['ipk'],'A')+'、频率 '+fmt(1/pt['period'],'Hz')+
@@ -1019,7 +1036,7 @@ def write_report(path,evidence,*,chart_images=None,document=None,save=True,
                 axes[0].axhline(0,c='gray',lw=.7);axes[1].axhline(-180,c='gray',lw=.7)
                 axes[0].set(title='开环增益幅值',xlabel='Hz',ylabel='dB');axes[1].set(title='开环增益相位',xlabel='Hz',ylabel='deg');axes_format(axes)
             chart(bode,2.7)
-            paragraph('多个 0 dB 交越取较小相位裕度。频带内未测得相位交越时，增益裕度记为待测。')
+            paragraph(PHASE_MARGIN_RULE+'多个 0 dB 交越取最小相位裕度。频带内未测得相位交越时，增益裕度记为待测。')
             page(title+' 功率级与补偿器频率响应')
             def components(fig):
                 axes=fig.subplots(2,2)

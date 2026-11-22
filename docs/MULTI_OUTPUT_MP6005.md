@@ -8,7 +8,7 @@
 
 SSR 的“主反馈 OUT”指定唯一主反馈；PSR 的同一选择指定辅助绕组分压的标称输出基准，不表示有次级闭环。N 始终指 OUT1 的 Np/Ns。波形、器件、电容页显示所选路，①页输出结果与 Word 报告显示全部输出。总输出功率由各路功率之和决定，左栏单路 Vout/Pout 不覆盖输出表。
 
-“反馈”选择 PSR-MP6005 后，固定频率反激采用 250kHz PWM、PCM 采样增益 11。点击“MP6005 参数”配置 Na（0 自动）、RfbH/L（下电阻 0 自动）、Rreg、Rcomp/Ccomp/Cpole 和 VCC。MOS Vgs 应与 VCC 匹配；内置 VCC 典型 8.5V。MODE 悬空。⑤页自动整定仅写回 PSR 物理 COMP 网络；⑨页原 SSR 阻容正反算不用于 PSR。
+“反馈”选择 PSR-MP6005 后，固定频率反激采用 250kHz PWM、PCM 采样增益 11。点击“MP6005 参数”配置 Na（0 自动）、RfbH/L（下电阻 0 自动）、Rreg、Rcomp/Ccomp/Cpole 和 VCC。MOS Vgs 应与 VCC 匹配；内置 VCC 典型 8.5V。MODE 悬空。「⑥ 环路」自动整定仅写回 PSR 物理 COMP 网络。「⑩ 补偿参数」中的原 SSR 阻容正反算用于 SSR。
 
 内置示例：`examples/6_OUTPUT_FLYBACK_SSR.json`、`examples/MP6005_PSR_FLYBACK.json`。文件菜单“打开配置”可载入，保存 JSON 保留全部输出及 PSR 参数。配置窗口修正版 EXE 位于 `dist/Multi_output_MP6005_UI_fix/SwitchingPowerSupplyDesign_V0/`，保留 `_internal` 文件夹。
 
@@ -19,7 +19,7 @@ SSR 的“主反馈 OUT”指定唯一主反馈；PSR 的同一选择指定辅�
 - 正激采用折算等效 L 汇总原边电流，各路输出电感独立计算；任一路 DCM 明确拒绝，不能在同一 PWM 下按独立稳压计算。
 - 共享原边、磁芯、输入电容、采样和钳位只计一次；各路整流、电容、防反与副边铜损累计。辅助采样绕组加入窗口/分压负载铜损，不默认给完整 VCC 供电。
 - 非反馈匝比电压不是独立目标，不把派生值再作取整误差通过项；耦合实际电压另列，不承诺稳压精度。每路器件参数在报告保留。
-- 角点扫描同比例改变全部输出功率，固定所有绕组/磁芯；不是任意独立负载组合。方案对比检查全部输出的需求是否一致。
+- 固定硬件角点 API 同比改变全部输出功率，沿用同一套绕组及磁芯。桌面「⑪ 硬件容差边界与分布评估」还可声明各路独立取值的负载组合。[容差评估说明](TOLERANCE_ANALYSIS.md)
 
 ## MP6005 的独立边界
 

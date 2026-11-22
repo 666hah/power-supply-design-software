@@ -4,6 +4,10 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, ttk
 from capacitor_banks import output_ref, validate
 from capacitor_impedance import CURVE_FIELD, MODE_FIELD, THERMAL_FIELD, active_curve
+from numeric_input import limit_numeric_input
+
+
+MAX_NEW_BANK_SIZE = 1000
 
 
 def _frequency_label(value):
@@ -18,12 +22,15 @@ class BankEditor(ttk.Frame):
         super().__init__(parent)
         self.changed=changed;self.index=0;self.busy=False
         self.rail=rail
+        self.on_selection = None
         self.values=validate(values)
         self.columnconfigure(0,weight=1)
         top=ttk.Frame(self);top.grid(row=0,column=0,sticky='ew')
         ttk.Label(top,text='电容数量').pack(side='left')
         self.count=tk.StringVar(value=str(len(self.values)))
-        ttk.Spinbox(top,from_=1,to=1000,textvariable=self.count,width=5).pack(side='left',padx=4)
+        count = ttk.Spinbox(top,from_=1,to=MAX_NEW_BANK_SIZE,textvariable=self.count,width=5)
+        limit_numeric_input(count, integer=True, max_digits=len(str(MAX_NEW_BANK_SIZE)))
+        count.pack(side='left',padx=4)
         ttk.Button(top,text='设置数量',command=self.resize).pack(side='left')
         self.tree=ttk.Treeview(self,columns=('C','ESR','ESL'),show='tree headings',height=4,selectmode='browse')
         self.tree.heading('#0',text='序号');self.tree.column('#0',width=37,stretch=False)
@@ -34,10 +41,14 @@ class BankEditor(ttk.Frame):
         self.tree.configure(yscrollcommand=bar.set)
         form=ttk.Frame(self);form.grid(row=2,column=0,sticky='ew')
         self.variables={k:tk.StringVar() for k in ('C','ESR','ESL')}
+        self.fields = {}
         for j,(key,unit) in enumerate((('C','µF'),('ESR','mΩ'),('ESL','nH'))):
-            ttk.Label(form,text=key+' / '+unit).grid(row=0,column=j)
+            label=ttk.Label(form,text=key+' / '+unit)
+            label.grid(row=0,column=j)
             entry=ttk.Entry(form,textvariable=self.variables[key],width=9)
+            limit_numeric_input(entry)
             entry.grid(row=1,column=j,sticky='ew',padx=2);form.columnconfigure(j,weight=1)
+            self.fields[key] = (label, entry)
             entry.bind('<KeyRelease>',lambda _e:self.changed())
             entry.bind('<FocusOut>',lambda _e:self.commit())
         actions=ttk.Frame(self);actions.grid(row=3,column=0,sticky='ew',pady=3)
@@ -46,7 +57,7 @@ class BankEditor(ttk.Frame):
         ttk.Button(actions,text='删除选中',command=self.remove).grid(row=0,column=1,sticky='ew',padx=(4,0))
         self.data_button = ttk.Button(self, text='选中电容的阻抗曲线与热阻…', command=self.open_curve_data)
         self.data_button.grid(row=4,column=0,sticky='ew',pady=(1,3))
-        self._hint = '选中行修改。同一端口的电容全部并联。'
+        self._hint = '同一端口的电容全部并联。选中一行可编辑参数。'
         self.note=tk.StringVar(value=self._hint)
         hint = ttk.Label(self,textvariable=self.note,wraplength=300)
         hint.grid(row=5,column=0,sticky='ew')
@@ -89,11 +100,32 @@ class BankEditor(ttk.Frame):
 
     def select(self,_event=None):
         if self.busy or not self.tree.selection():return
-        new=int(self.tree.selection()[0])
-        if new==self.index:return
-        if not self.commit():
-            self.tree.selection_set(str(self.index));return
-        self.index=new;self.populate()
+        self.select_index(int(self.tree.selection()[0]), notify=True)
+
+    def select_index(self, index, *, notify=False):
+        """Select a row by index after validating the old row's draft."""
+        if not 0 <= index < len(self.values):
+            return False
+        item = str(index)
+        if index == self.index:
+            if self.tree.selection() != (item,):
+                self.tree.selection_set(item)
+            self.tree.see(item)
+            return True
+        allowed = self.commit()
+        if allowed and notify and self.on_selection is not None:
+            allowed = self.on_selection(index) is not False
+        if not allowed:
+            if self.tree.selection() != (str(self.index),):
+                self.tree.selection_set(str(self.index))
+            return False
+        self.index = index
+        if self.tree.selection() != (item,):
+            self.tree.selection_set(item)
+        self.tree.focus(item)
+        self.tree.see(item)
+        self.populate()
+        return True
 
     def get(self):
         self.commit(True)
@@ -103,6 +135,8 @@ class BankEditor(ttk.Frame):
         try:
             count=int(self.count.get())
             if count<1:raise ValueError('至少保留一颗电容')
+            if count > max(MAX_NEW_BANK_SIZE, len(self.values)):
+                raise ValueError(f'每组可设置 1 至 {MAX_NEW_BANK_SIZE} 颗电容')
             rows=self.get();rows=(rows+[copy.deepcopy(rows[-1]) for _ in range(max(0,count-len(rows)))])[:count]
             self.load(rows);self.changed()
         except ValueError as exc:self.note.set(str(exc))
@@ -236,16 +270,17 @@ class ImpedanceDialog(tk.Toplevel):
         height = min(606, self.winfo_screenheight()-116)
         self.geometry(f'{width}x{height}')
         self.minsize(min(width, 540), min(height, 500))
-        mode = '阻抗曲线。移除前请在「器件模型精度选择」切换为固定参数。' if self.curve_in_use else '固定参数。曲线在「器件模型精度选择」启用。'
-        ttk.Label(content,text=f'当前模型 · {mode}',wraplength=width-38).grid(row=0,column=0,sticky='ew')
+        mode = '阻抗曲线' if self.curve_in_use else '固定参数 RLC'
+        ttk.Label(content, text=f'当前模型 · {mode}', style='ResultConclusion.TLabel').grid(
+            row=0, column=0, sticky='ew')
+        summary = ttk.Label(content, textvariable=self.status, wraplength=width-38, justify='left')
+        summary.grid(row=1, column=0, sticky='ew', pady=(3, 0))
+        summary.bind('<Configure>', lambda event: summary.configure(wraplength=max(275, event.width-5)))
         toolbar = ttk.Frame(content)
-        toolbar.grid(row=2,column=0,sticky='ew',pady=(8,4))
-        ttk.Button(toolbar,text='导入 / 替换曲线…',command=self.import_curve).pack(side='left')
+        toolbar.grid(row=3,column=0,sticky='ew',pady=(8,4))
+        ttk.Button(toolbar,text='导入阻抗曲线…',command=self.import_curve).pack(side='left')
         self.clear_button = ttk.Button(toolbar,text='移除曲线',command=self.clear_curve)
         self.clear_button.pack(side='left',padx=(8,0))
-        summary = ttk.Label(content, textvariable=self.status, wraplength=width-38, justify='left')
-        summary.grid(row=3,column=0,sticky='ew',pady=(0,5))
-        summary.bind('<Configure>', lambda e:summary.configure(wraplength=max(275,e.width-5)))
 
         from matplotlib.figure import Figure
         from resource_canvas import EfficientFigureCanvasTkAgg
@@ -258,8 +293,10 @@ class ImpedanceDialog(tk.Toplevel):
         thermal_row = ttk.Frame(content)
         thermal_row.grid(row=5,column=0,sticky='ew',pady=(9,0))
         ttk.Label(thermal_row,text='热阻 Rθ / K/W').pack(side='left')
-        ttk.Entry(thermal_row,textvariable=self.thermal,width=10).pack(side='left',padx=7)
-        ttk.Label(thermal_row,text='选填。留空只算耗散，填写后估算相对环境温升。',wraplength=325).pack(side='left')
+        thermal = ttk.Entry(thermal_row,textvariable=self.thermal,width=10)
+        limit_numeric_input(thermal)
+        thermal.pack(side='left',padx=7)
+        ttk.Label(thermal_row,text='选填。填写后估算相对环境的温升。',wraplength=325).pack(side='left')
         ttk.Label(content,textvariable=self.error,wraplength=width-38,foreground='#a42b2b').grid(
             row=6,column=0,sticky='ew',pady=(4,0))
         footer = ttk.Frame(content)
@@ -300,7 +337,7 @@ class ImpedanceDialog(tk.Toplevel):
             axis.clear()
         font = {'fontfamily':'Microsoft YaHei', 'fontsize':9}
         if self.curve is None:
-            self.status.set('导入频率、阻抗幅值与相位后可启用曲线计算。')
+            self.status.set('待导入曲线。数据包含频率、阻抗幅值和相位。')
             for axis in self.axes:
                 axis.set_axis_off()
             magnitude.text(.5,.31,'导入后预览阻抗幅值和相位',ha='center',va='center',transform=magnitude.transAxes,**font)
@@ -311,9 +348,10 @@ class ImpedanceDialog(tk.Toplevel):
             source = self.curve.get('source') or '导入曲线'
             if len(source) > 46:
                 source = source[:43] + '…'
-            details = '扫频带外用固定 RLC' if self.curve_in_use else '固定模型暂不使用曲线'
-            self.status.set(f'{source} · {len(points)} 点\n'
-                            f'{_frequency_label(f[0])} 至 {_frequency_label(f[-1])} · {details}')
+            details = ('频段外使用固定 RLC。移除曲线前，请先切换模型。' if self.curve_in_use
+                       else '可在「器件模型精度选择」中启用曲线。')
+            self.status.set(f'{source} · {len(points)} 点 · '
+                            f'{_frequency_label(f[0])} 至 {_frequency_label(f[-1])}\n{details}')
             self.clear_button.state(['disabled'] if self.curve_in_use else ['!disabled'])
             magnitude.loglog(f,z,color='#226de0',marker='.' if len(f)<100 else None)
             phase.semilogx(f,theta,color='#119c83',marker='.' if len(f)<100 else None)
@@ -361,7 +399,7 @@ class CapacitorResultsTable(ttk.LabelFrame):
         xscroll = ttk.Scrollbar(self, orient='horizontal', command=self.tree.xview)
         xscroll.grid(row=1, column=0, sticky='ew')
         self.tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        self.note = ttk.Label(self, text='曲线覆盖为导入频段内纹波电流均方值占比，带外用标称 RLC。温升按耗散与热阻估算，未配置热阻显示 —。',
+        self.note = ttk.Label(self, text='曲线覆盖率按导入频段内的纹波电流均方值占比计算。频段外使用固定 RLC。温升按耗散与热阻估算，缺少热阻时显示「—」。',
                               wraplength=720)
         self.note.grid(row=2, column=0, sticky='ew', pady=(5, 0))
         self.note.bind('<Configure>', lambda event: self.note.configure(wraplength=max(140, event.width - 8)))

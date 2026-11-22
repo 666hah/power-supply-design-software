@@ -4,7 +4,7 @@
   "buck_phases": 4,
   "cot_ton_s": 0.0,
   "cot_min_off_s": 1.2e-07,
-  "fc_target": 20000.0,
+  "fc_target": 16000.0,
   "pm_target": 80.0,
   "V_in": 10.0,
   "V_in_min": 10.0,
@@ -39,22 +39,22 @@
   "input_capacitors": [
     {
       "C": 0.00033,
-      "ESR": 0.014,
+      "ESR": 0.015,
       "ESL": 2e-09
     },
     {
       "C": 0.00033,
-      "ESR": 0.014,
+      "ESR": 0.015,
       "ESL": 2e-09
     },
     {
       "C": 0.00033,
-      "ESR": 0.014,
+      "ESR": 0.015,
       "ESL": 2e-09
     },
     {
       "C": 0.00033,
-      "ESR": 0.014,
+      "ESR": 0.015,
       "ESL": 2e-09
     }
   ],
@@ -144,8 +144,8 @@
   "gfs": 76.0,
   "mos_miller_mode": "gfs",
   "mos_charge_mode": "manual",
-  "cot_kp_hz": 2450332.0777366706,
-  "cot_ki_hz_per_s": 93670158021.42029,
+  "cot_kp_hz": 2153906.6556584374,
+  "cot_ki_hz_per_s": 66289977908.3486,
   "cot_config": {
     "model": "current_feedback",
     "controller_reference": "ti_dcap_plus",
@@ -270,36 +270,44 @@
         "conditions": "每相。Document863-1：0.30µH±20%，DCR典型1.75mΩ/最大1.92mΩ；Isat41A对应L下降30%；Irms27.6A对应40K温升。"
       },
       "C_IN1": {
-        "manufacturer": "Panasonic",
-        "model": "25SVPF330M",
-        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "manufacturer": "Nichicon",
+        "model": "GWC1V331MCO1GS",
+        "conditions": "330 µF ±20%，35 V。ESR 最大 15 mΩ（20 °C、100 kHz）。额定纹波 5.3 Arms（125 °C、100 kHz）或 3.6 Arms（135 °C、100 kHz）。",
         "capacitor_type": "other",
-        "voltage_V": 25.0,
-        "ripple_A": 5.0
+        "voltage_V": 35.0,
+        "ripple_A": 5.3,
+        "package": "SMD Ø10×12.5 mm",
+        "note": "沿用聚合物电容 0.8 项目降额，纹波采用 125 °C 额定。ESL 2 nH 为工程占位。原厂资料：https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/"
       },
       "C_IN2": {
-        "manufacturer": "Panasonic",
-        "model": "25SVPF330M",
-        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "manufacturer": "Nichicon",
+        "model": "GWC1V331MCO1GS",
+        "conditions": "330 µF ±20%，35 V。ESR 最大 15 mΩ（20 °C、100 kHz）。额定纹波 5.3 Arms（125 °C、100 kHz）或 3.6 Arms（135 °C、100 kHz）。",
         "capacitor_type": "other",
-        "voltage_V": 25.0,
-        "ripple_A": 5.0
+        "voltage_V": 35.0,
+        "ripple_A": 5.3,
+        "package": "SMD Ø10×12.5 mm",
+        "note": "沿用聚合物电容 0.8 项目降额，纹波采用 125 °C 额定。ESL 2 nH 为工程占位。原厂资料：https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/"
       },
       "C_IN3": {
-        "manufacturer": "Panasonic",
-        "model": "25SVPF330M",
-        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "manufacturer": "Nichicon",
+        "model": "GWC1V331MCO1GS",
+        "conditions": "330 µF ±20%，35 V。ESR 最大 15 mΩ（20 °C、100 kHz）。额定纹波 5.3 Arms（125 °C、100 kHz）或 3.6 Arms（135 °C、100 kHz）。",
         "capacitor_type": "other",
-        "voltage_V": 25.0,
-        "ripple_A": 5.0
+        "voltage_V": 35.0,
+        "ripple_A": 5.3,
+        "package": "SMD Ø10×12.5 mm",
+        "note": "沿用聚合物电容 0.8 项目降额，纹波采用 125 °C 额定。ESL 2 nH 为工程占位。原厂资料：https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/"
       },
       "C_IN4": {
-        "manufacturer": "Panasonic",
-        "model": "25SVPF330M",
-        "conditions": "330µF±20%，100kHz ESR上限14mΩ，纹波5A；ESL2nH为项目几何假设。",
+        "manufacturer": "Nichicon",
+        "model": "GWC1V331MCO1GS",
+        "conditions": "330 µF ±20%，35 V。ESR 最大 15 mΩ（20 °C、100 kHz）。额定纹波 5.3 Arms（125 °C、100 kHz）或 3.6 Arms（135 °C、100 kHz）。",
         "capacitor_type": "other",
-        "voltage_V": 25.0,
-        "ripple_A": 5.0
+        "voltage_V": 35.0,
+        "ripple_A": 5.3,
+        "package": "SMD Ø10×12.5 mm",
+        "note": "沿用聚合物电容 0.8 项目降额，纹波采用 125 °C 额定。ESL 2 nH 为工程占位。原厂资料：https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/"
       },
       "C_O1": {
         "manufacturer": "Panasonic",
@@ -441,7 +449,7 @@
     "high_mos": "https://www.ti.com/lit/ds/symlink/csd17577q3a.pdf",
     "low_mos": "https://www.ti.com/lit/ds/symlink/csd17576q5b.pdf",
     "inductor": "https://www.coilcraft.com/getmedia/0d05a05e-d55d-4a0c-911d-46bd73686633/xal7030.pdf",
-    "input_cap": "https://na.industrial.panasonic.com/products/capacitors/polymer-capacitors/series/91057/model/91095",
+    "input_cap": "https://www.nichicon.co.jp/products/electronics/aec/solid2/gwc/",
     "output_cap": "https://util01.industrial.panasonic.com/ww/utilities/ds/chr-vw/2R5TPE330M9",
     "assumptions": "每颗ESL2nH、电感附加损耗0.15W、源R/L、采样误差、死区及所有控制增益/保护/验收阈值为工程配置；Coss按15V单点，未拟合非线性曲线。"
   }

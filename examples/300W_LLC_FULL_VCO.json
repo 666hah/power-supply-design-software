@@ -1,0 +1,575 @@
+{
+  "topology": "LLC",
+  "control_mode": "Voltage Mode",
+  "llc_bridge": "full",
+  "V_in": 360,
+  "V_in_min": 360,
+  "V_in_max": 420,
+  "V_out": 48,
+  "P_out": 300,
+  "P_out_min": 30,
+  "f_sw": 100000,
+  "fc_target": 700,
+  "pm_target": 65,
+  "N": 8,
+  "Np": 48,
+  "Ns": 6,
+  "llc_lr": 0.0002,
+  "llc_cr": 1.2665e-08,
+  "llc_lm": 0.001,
+  "llc_fmin": 60000.0,
+  "llc_fmax": 210000.0,
+  "llc_dead_time": 5e-07,
+  "llc_tank_r": 0.6,
+  "llc_rect_r": 0.016,
+  "llc_qoss": 1.7e-07,
+  "llc_diode_cj": 7e-11,
+  "llc_hhc_sense": 0.008,
+  "llc_hhc_ramp": 400000,
+  "llc_kp": 743.5644288611707,
+  "llc_ki": 10429081.45200622,
+  "llc_ocp": 8,
+  "llc_ovp": 58,
+  "llc_uvlo": 300,
+  "llc_soft_start": 0.008,
+  "Rds_on": 0.19,
+  "Coss": 4.24e-10,
+  "Qg": 2.3e-08,
+  "Vgs": 10,
+  "Vf_diode": 0.405,
+  "Qrr": 0,
+  "d_in_enable": false,
+  "d_out_enable": false,
+  "ring_margin": 0.18,
+  "ripple_target": 0.005,
+  "eta_guess": 0.96,
+  "target_eta": 0.94,
+  "Bmax": 0.21,
+  "Bsat": 0.3,
+  "core_choice": "CUSTOM",
+  "core_choice_L": "CUSTOM",
+  "core_material": "DMR44",
+  "mu_r": 2400,
+  "Rth_transformer": 12.0,
+  "n_strand_p": 28.0,
+  "n_strand_s": 160.0,
+  "d_wire_p": 0.00013,
+  "d_wire_s": 0.00013,
+  "input_capacitors": [
+    {
+      "C": 0.00015,
+      "ESR": 0.19,
+      "ESL": 1.5e-08
+    },
+    {
+      "C": 0.00015,
+      "ESR": 0.19,
+      "ESL": 1.5e-08
+    },
+    {
+      "C": 1e-06,
+      "ESR": 0.024,
+      "ESL": 1.6e-08
+    }
+  ],
+  "output_capacitors": [
+    {
+      "C": 0.00047,
+      "ESR": 0.044,
+      "ESL": 3.8e-08
+    },
+    {
+      "C": 0.00047,
+      "ESR": 0.044,
+      "ESL": 3.8e-08
+    },
+    {
+      "C": 0.00047,
+      "ESR": 0.044,
+      "ESL": 3.8e-08
+    },
+    {
+      "C": 4.7e-06,
+      "ESR": 0.0075,
+      "ESL": 2.4e-08
+    }
+  ],
+  "spice_config": {
+    "enable_delay_ms": 0.12,
+    "step_ms": 18,
+    "stop_ms": 42,
+    "fra_start_hz": 350,
+    "fra_stop_hz": 1400,
+    "fra_oct": 1,
+    "fra_enabled": 1,
+    "simulation_threads": 2,
+    "include_cap_esl": 0
+  },
+  "component_management": {
+    "items": {
+      "Q1": {
+        "manufacturer": "Infineon",
+        "model": "IPP65R190CFD7",
+        "conditions": "190 mΩ 最大（25 °C、Vgs 10 V），Qg 典型 23 nC；启动尖峰按 SOA 复核。",
+        "note": "https://www.infineon.com/assets/row/public/documents/24/49/infineon-ipp65r190cfd7-datasheet-en.pdf",
+        "voltage_V": 650,
+        "package": "TO-220"
+      },
+      "Q2": {
+        "manufacturer": "Infineon",
+        "model": "IPP65R190CFD7",
+        "conditions": "190 mΩ 最大（25 °C、Vgs 10 V），Qg 典型 23 nC；启动尖峰按 SOA 复核。",
+        "note": "https://www.infineon.com/assets/row/public/documents/24/49/infineon-ipp65r190cfd7-datasheet-en.pdf",
+        "voltage_V": 650,
+        "package": "TO-220"
+      },
+      "D1": {
+        "manufacturer": "STMicroelectronics",
+        "model": "STPST10H100",
+        "conditions": "VRRM 100 V、IF(AV) 10 A；0.405 V + 16 mΩ 为软件典型拟合；启动按脉宽与热阻复核。",
+        "note": "https://www.st.com/resource/en/datasheet/stpst10h100.pdf",
+        "voltage_V": 100,
+        "package": "TO-220AC"
+      },
+      "D2": {
+        "manufacturer": "STMicroelectronics",
+        "model": "STPST10H100",
+        "conditions": "VRRM 100 V、IF(AV) 10 A；0.405 V + 16 mΩ 为软件典型拟合；启动按脉宽与热阻复核。",
+        "note": "https://www.st.com/resource/en/datasheet/stpst10h100.pdf",
+        "voltage_V": 100,
+        "package": "TO-220AC"
+      },
+      "D3": {
+        "manufacturer": "STMicroelectronics",
+        "model": "STPST10H100",
+        "conditions": "VRRM 100 V、IF(AV) 10 A；0.405 V + 16 mΩ 为软件典型拟合；启动按脉宽与热阻复核。",
+        "note": "https://www.st.com/resource/en/datasheet/stpst10h100.pdf",
+        "voltage_V": 100,
+        "package": "TO-220AC"
+      },
+      "D4": {
+        "manufacturer": "STMicroelectronics",
+        "model": "STPST10H100",
+        "conditions": "VRRM 100 V、IF(AV) 10 A；0.405 V + 16 mΩ 为软件典型拟合；启动按脉宽与热阻复核。",
+        "note": "https://www.st.com/resource/en/datasheet/stpst10h100.pdf",
+        "voltage_V": 100,
+        "package": "TO-220AC"
+      },
+      "C_R": {
+        "manufacturer": "KEMET",
+        "model": "R76QI2270〔15 mm / 7.5 mm 厚〕 ×2 串联选配",
+        "conditions": "每颗标称 27 nF、选配约 25.33 nF。本条使用保守的单颗耐压和 100 kHz、85 °C 电流限值。按容差、漏电与脉冲分压校核。",
+        "note": "https://content.kemet.com/datasheets/KEM_F3034_R76.pdf",
+        "capacitor_type": "film",
+        "voltage_V": 1000,
+        "ripple_A": 4.1,
+        "package": "脉冲聚丙烯薄膜，15 mm"
+      },
+      "Q3": {
+        "manufacturer": "Infineon",
+        "model": "IPP65R190CFD7",
+        "conditions": "190 mΩ 最大（25 °C、Vgs 10 V），Qg 典型 23 nC；启动尖峰按 SOA 复核。",
+        "note": "https://www.infineon.com/assets/row/public/documents/24/49/infineon-ipp65r190cfd7-datasheet-en.pdf",
+        "voltage_V": 650,
+        "package": "TO-220"
+      },
+      "Q4": {
+        "manufacturer": "Infineon",
+        "model": "IPP65R190CFD7",
+        "conditions": "190 mΩ 最大（25 °C、Vgs 10 V），Qg 典型 23 nC；启动尖峰按 SOA 复核。",
+        "note": "https://www.infineon.com/assets/row/public/documents/24/49/infineon-ipp65r190cfd7-datasheet-en.pdf",
+        "voltage_V": 650,
+        "package": "TO-220"
+      },
+      "C_IN1": {
+        "manufacturer": "TDK",
+        "model": "B43544C7157M060",
+        "conditions": "150 µF ±20%，550 V。85 °C、100 Hz 最大允许纹波 2.37 Arms，105 °C 对应额定纹波 1.21 Arms。",
+        "note": "使用与原例相同的 85 °C 纹波比较条件。工作 ESR 以 300 Hz、60 °C 典型 190 mΩ 作代理，15 nH ESL 为工程占位。原厂资料：https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/snap_multi_large/info?part_no=B43544C7157M060 https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/snap-in/data_sheet/20/30/db/aec/b43544.pdf",
+        "capacitor_type": "electrolytic",
+        "voltage_V": 550,
+        "ripple_A": 2.37,
+        "package": "Snap-in Ø35×35 mm"
+      },
+      "C_IN2": {
+        "manufacturer": "TDK",
+        "model": "B43544C7157M060",
+        "conditions": "150 µF ±20%，550 V。85 °C、100 Hz 最大允许纹波 2.37 Arms，105 °C 对应额定纹波 1.21 Arms。",
+        "note": "使用与原例相同的 85 °C 纹波比较条件。工作 ESR 以 300 Hz、60 °C 典型 190 mΩ 作代理，15 nH ESL 为工程占位。原厂资料：https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/snap_multi_large/info?part_no=B43544C7157M060 https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/snap-in/data_sheet/20/30/db/aec/b43544.pdf",
+        "capacitor_type": "electrolytic",
+        "voltage_V": 550,
+        "ripple_A": 2.37,
+        "package": "Snap-in Ø35×35 mm"
+      },
+      "C_IN3": {
+        "manufacturer": "TDK",
+        "model": "B32674D6105K000",
+        "conditions": "1 µF ±10%；4.0 Arms（10 kHz、70 °C、温升 20 K）；ESR 模型值 24 mΩ、ESL 16 nH。",
+        "note": "https://product.tdk.com/system/files/dam/doc/product/capacitor/film/mkp_mfp/data_sheet/20/20/db/fc_2009/mkp_b32674_678.pdf",
+        "capacitor_type": "film",
+        "voltage_V": 630,
+        "package": "薄膜，27.5 mm",
+        "ripple_A": 4
+      },
+      "C_O1": {
+        "manufacturer": "TDK",
+        "model": "B41693D0477Q001",
+        "conditions": "470 µF +30%/−10%，75 V。10 kHz、125 °C 额定纹波 4.4 Arms。10 kHz、20 °C 最大 ESR 45 mΩ；ESL 38 nH。",
+        "note": "用 100 kHz、20 °C 阻抗上限 44 mΩ 作为开关频段 ESR 代理。原厂资料：https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/axial-lead/info?part_no=B41693D0477Q001 https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/axial-lead/data_sheet/20/30/db/aec/b41693_b41793.pdf",
+        "capacitor_type": "electrolytic",
+        "voltage_V": 75,
+        "ripple_A": 4.4,
+        "package": "轴向 Ø20×29 mm"
+      },
+      "C_O2": {
+        "manufacturer": "TDK",
+        "model": "B41693D0477Q001",
+        "conditions": "470 µF +30%/−10%，75 V。10 kHz、125 °C 额定纹波 4.4 Arms。10 kHz、20 °C 最大 ESR 45 mΩ；ESL 38 nH。",
+        "note": "用 100 kHz、20 °C 阻抗上限 44 mΩ 作为开关频段 ESR 代理。原厂资料：https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/axial-lead/info?part_no=B41693D0477Q001 https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/axial-lead/data_sheet/20/30/db/aec/b41693_b41793.pdf",
+        "capacitor_type": "electrolytic",
+        "voltage_V": 75,
+        "ripple_A": 4.4,
+        "package": "轴向 Ø20×29 mm"
+      },
+      "C_O3": {
+        "manufacturer": "TDK",
+        "model": "B41693D0477Q001",
+        "conditions": "470 µF +30%/−10%，75 V。10 kHz、125 °C 额定纹波 4.4 Arms。10 kHz、20 °C 最大 ESR 45 mΩ；ESL 38 nH。",
+        "note": "用 100 kHz、20 °C 阻抗上限 44 mΩ 作为开关频段 ESR 代理。原厂资料：https://product.tdk.com/en/search/capacitor/aluminum-electrolytic/axial-lead/info?part_no=B41693D0477Q001 https://product.tdk.com/system/files/dam/doc/product/capacitor/aluminum-electrolytic/axial-lead/data_sheet/20/30/db/aec/b41693_b41793.pdf",
+        "capacitor_type": "electrolytic",
+        "voltage_V": 75,
+        "ripple_A": 4.4,
+        "package": "轴向 Ø20×29 mm"
+      },
+      "C_O4": {
+        "manufacturer": "TDK",
+        "model": "B32674D4475K000",
+        "conditions": "4.7 µF ±10%；10.5 Arms（10 kHz、70 °C、温升 20 K）；环境及频率变化按曲线复核。",
+        "note": "https://product.tdk.com/system/files/dam/doc/product/capacitor/film/mkp_mfp/data_sheet/20/20/db/fc_2009/mkp_b32674_678.pdf",
+        "capacitor_type": "film",
+        "voltage_V": 450,
+        "ripple_A": 10.5,
+        "package": "薄膜，27.5 mm"
+      },
+      "U_CTRL": {
+        "manufacturer": "Texas Instruments",
+        "model": "UCC25600D",
+        "conditions": "变频控制参考，双桥臂驱动可用两只 UCC21520，需核对互锁/偏置。软件 PI 以端口伏特为输入，芯片增益按实物换算。",
+        "note": "https://www.ti.com/lit/ds/symlink/ucc25600.pdf"
+      },
+      "L_R": {
+        "manufacturer": "DMEGC 磁芯",
+        "model": "DMR44 / PQ35/35 · 自绕",
+        "package": "气隙铁氧体 / 利兹线",
+        "note": "https://chinadmegc.com/uploads/20221201/fe020bcb334e1d066a8a944b1a1102a2.pdf",
+        "conditions": "按启动/OCP 峰值和额定 RMS 分别定磁密与温升。T1 原边折算漏感测得后，从总 Lr 中扣除并调整实物 AL。"
+      },
+      "U_FB": {
+        "manufacturer": "TI / Vishay",
+        "model": "TL431B + VO617A-3（参考）",
+        "conditions": "输出电容端取样；36.4 kΩ / 2 kΩ 分压初值；TL431/LED 需由限压偏置供电并核对 CTR 与实际 PI 增益。",
+        "note": "https://www.ti.com/lit/ds/symlink/tl431.pdf · https://www.vishay.com/docs/83430/vo617a.pdf"
+      },
+      "J1": {
+        "manufacturer": "Phoenix Contact",
+        "model": "GMKDS 3/2-7,62 · 1731721",
+        "package": "7.62 mm PCB 端子",
+        "voltage_V": 630,
+        "conditions": "IEC III/2 630 V / 24 A；整机适用等级按环境与布局核对。",
+        "note": "https://www.phoenixcontact.com/en-pc/products/pcb-terminal-block-gmkds-3-2-762-1731721"
+      },
+      "J2": {
+        "manufacturer": "Phoenix Contact",
+        "model": "MKDS 1,5/2-5,08 · 1715721",
+        "package": "5.08 mm PCB 端子",
+        "voltage_V": 400,
+        "conditions": "IEC III/2 400 V / 17.5 A；48 V / 6.25 A 单路输出。",
+        "note": "https://www.phoenixcontact.com/en-mx/products/pcb-terminal-block-mkds-15-2-508-1715721"
+      },
+      "T1": {
+        "manufacturer": "DMEGC 磁芯",
+        "model": "DMR44 / PQ35/35 · 48:6 自绕",
+        "package": "PQ35/35 参考骨架",
+        "conditions": "初始 μr=2400；等效气隙约 0.465 mm，按成品 AL 校准。12 K/W 是安装散热目标，按磁芯固定与气流实测。",
+        "note": "https://chinadmegc.com/uploads/20221201/fe020bcb334e1d066a8a944b1a1102a2.pdf"
+      }
+    }
+  },
+  "feedback_mode": "SSR",
+  "feedback_output": 1,
+  "custom_core_L": {
+    "name": "DMEGC PQ35/35 · DMR44",
+    "Ae": 0.0001722,
+    "Ve": 1.3776e-05,
+    "Wa": 0.0001
+  },
+  "llc_lr_min_ae": 0.0001647,
+  "llc_lr_window_width": 0.02,
+  "llc_lr_window_height": 0.006,
+  "llc_lr_bobbin_radius": 0.0083,
+  "llc_lr_turns": 50,
+  "llc_lr_strands": 40,
+  "llc_lr_wire_diameter": 0.0001,
+  "llc_lr_design_peak": 8,
+  "custom_core": {
+    "name": "DMEGC PQ35/35 · DMR44",
+    "Ae": 0.0001722,
+    "Ve": 1.3776e-05,
+    "Wa": 0.0001524
+  },
+  "parallel_wires_p": 1.0,
+  "parallel_wires_s": 1.0,
+  "winding_config": {
+    "window_width": 0.024,
+    "window_height": 0.00635,
+    "margin_x": 0.003,
+    "margin_y": 0.00015,
+    "diameter_allowance": 3e-05,
+    "layer_insulation": 7e-05,
+    "interwinding_insulation": 0.0003,
+    "wire_gap": 7.5e-05,
+    "order": [
+      "P",
+      "OUT1"
+    ],
+    "overrides": {
+      "P": {
+        "outer_diameter": 0.00015,
+        "wire_type": "litz",
+        "packing_factor": 0.72,
+        "flatten_ratio": 1.3
+      },
+      "OUT1": {
+        "outer_diameter": 0.00015,
+        "bundle_diameter": 0.0024,
+        "wire_type": "litz",
+        "packing_factor": 0.75,
+        "flatten_ratio": 1.15
+      }
+    },
+    "layer_plan": [
+      {
+        "section_id": "P_A",
+        "winding_id": "P",
+        "turns": 12,
+        "winding_style": "sparse"
+      },
+      {
+        "section_id": "P_B",
+        "winding_id": "P",
+        "turns": 12,
+        "winding_style": "sparse"
+      },
+      {
+        "section_id": "OUT1_A",
+        "winding_id": "OUT1",
+        "turns": 6,
+        "winding_style": "sparse"
+      },
+      {
+        "section_id": "P_C",
+        "winding_id": "P",
+        "turns": 12,
+        "winding_style": "sparse"
+      },
+      {
+        "section_id": "P_D",
+        "winding_id": "P",
+        "turns": 12,
+        "winding_style": "sparse"
+      }
+    ],
+    "turn_positions": {},
+    "preview_core_reference": "PQ35-35",
+    "model_3d": {
+      "schema": "power-transformer.model-input.v1",
+      "frame": {
+        "z0_m": -0.012,
+        "r0_m_if_circular": 0.00845
+      },
+      "bobbin": {
+        "winding_route_type": "circular",
+        "part_number": "TDK B65882B0012T001（参考）",
+        "status": "assumed",
+        "source": "TDK PQ35/35 骨架尺寸图。使用保守窗口，东磁磁芯的实际骨架配合待查。",
+        "wall_thickness_m": 0.0011,
+        "geometry_reference": "https://product.tdk.com/system/files/dam/doc/product/ferrite/ferrite/ferrite-core/data_sheet/80/db/fer/pq_35_35.pdf#page=4"
+      },
+      "core": {
+        "manufacturer": "DMEGC 东磁",
+        "part_number": "PQ35/35 · DMR44",
+        "geometry_reference": "https://chinadmegc.com/uploads/20221201/fe020bcb334e1d066a8a944b1a1102a2.pdf",
+        "geometry_sha256": null,
+        "material_reference": "https://www.dmegc.de/uploads/20230401/DMR44%20Material%20Characteristics.pdf",
+        "gap_geometry": {
+          "type": "center_leg_ground",
+          "length_m": 0.000465236,
+          "source": "等效气隙加工初值，以绕制后实测 AL 为准"
+        }
+      },
+      "sections": {
+        "P_A": {
+          "winding_id": "P",
+          "turns": 12,
+          "start_node": "P_DOT",
+          "end_node": "P_J1",
+          "dot_node": "P_DOT",
+          "direction": "ccw",
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        },
+        "P_B": {
+          "winding_id": "P",
+          "turns": 12,
+          "start_node": "P_J1",
+          "end_node": "P_J2",
+          "dot_node": "P_J1",
+          "direction": "ccw",
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        },
+        "OUT1_A": {
+          "winding_id": "OUT1",
+          "turns": 6,
+          "start_node": "OUT1_DOT",
+          "end_node": "OUT1_RET",
+          "dot_node": "OUT1_DOT",
+          "direction": "ccw",
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        },
+        "P_C": {
+          "winding_id": "P",
+          "turns": 12,
+          "start_node": "P_J2",
+          "end_node": "P_J3",
+          "dot_node": "P_J2",
+          "direction": "ccw",
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        },
+        "P_D": {
+          "winding_id": "P",
+          "turns": 12,
+          "start_node": "P_J3",
+          "end_node": "P_RET",
+          "dot_node": "P_J3",
+          "direction": "ccw",
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        }
+      },
+      "ports": {
+        "P": {
+          "dot_node": "P_DOT",
+          "other_node": "P_RET",
+          "connection": "series",
+          "section_order": [
+            "P_A",
+            "P_B",
+            "P_C",
+            "P_D"
+          ],
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        },
+        "OUT1": {
+          "dot_node": "OUT1_DOT",
+          "other_node": "OUT1_RET",
+          "connection": "series",
+          "section_order": [
+            "OUT1_A"
+          ],
+          "status": "assumed",
+          "source": "绕组结构草案，标注同名端及不外接的层间连续过渡"
+        }
+      },
+      "terminals": [
+        {
+          "node": "P_DOT",
+          "pin": "P_DOT",
+          "position_xyz_m": null,
+          "external_connection": "net",
+          "net": "P_DOT",
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "P_J1",
+          "pin": "P_J1",
+          "position_xyz_m": null,
+          "external_connection": "none",
+          "net": null,
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "P_J2",
+          "pin": "P_J2",
+          "position_xyz_m": null,
+          "external_connection": "none",
+          "net": null,
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "P_J3",
+          "pin": "P_J3",
+          "position_xyz_m": null,
+          "external_connection": "none",
+          "net": null,
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "P_RET",
+          "pin": "P_RET",
+          "position_xyz_m": null,
+          "external_connection": "net",
+          "net": "P_RET",
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "OUT1_DOT",
+          "pin": "OUT1_DOT",
+          "position_xyz_m": null,
+          "external_connection": "net",
+          "net": "OUT1_DOT",
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        },
+        {
+          "node": "OUT1_RET",
+          "pin": "OUT1_RET",
+          "position_xyz_m": null,
+          "external_connection": "net",
+          "net": "OUT1_RET",
+          "status": "assumed",
+          "source": "逻辑端点，骨架实际针号与引出路径待核实"
+        }
+      ],
+      "leads": [],
+      "wire_evidence": {
+        "P": {
+          "source": "0.13 mm 裸股、0.15 mm 含漆股，线束包络按工程初选。来料后以实测复核。",
+          "basis": "estimated",
+          "width_tolerance_m": null,
+          "height_tolerance_m": null
+        },
+        "OUT1": {
+          "source": "0.13 mm 裸股、0.15 mm 含漆股，线束包络按工程初选。来料后以实测复核。",
+          "basis": "estimated",
+          "width_tolerance_m": null,
+          "height_tolerance_m": null
+        }
+      },
+      "assumptions": [
+        "窗口和外形采用 TDK PQ35/35 骨架尺寸作参考，Ae 与 Ve 使用东磁 PQ35/35。",
+        "匝长取名义螺旋匝本体，未增加尚未布置的引线、层间转接和端子长度。",
+        "0.30 mm 层间隔离和 3.0 mm 挡墙仅用于窗口初选，绝缘等级与爬电距离需按终端规范复核。"
+      ]
+    }
+  },
+  "llc_lr_leakage_H": 0.0
+}
